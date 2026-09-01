@@ -1,0 +1,93 @@
+[workspace]
+members = [
+    "crates/weaver-core",
+    "crates/weaver-app",
+    "crates/weaver-render",
+    "crates/weaver-render-wgpu",
+    "crates/weaver-signalweave",
+    "crates/weaver-worldline",
+    "examples/render-lab",
+    "examples/space-lab",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/jdharrison/weaver"
+
+[workspace.dependencies]
+# Internal crates
+weaver-core = { path = "crates/weaver-core" }
+weaver-app = { path = "crates/weaver-app" }
+weaver-render = { path = "crates/weaver-render" }
+weaver-render-wgpu = { path = "crates/weaver-render-wgpu" }
+weaver-signalweave = { path = "crates/weaver-signalweave" }
+weaver-worldline = { path = "crates/weaver-worldline" }
+
+# External references (pinned for reproducibility)
+simengine = { git = "https://github.com/jdharrison/worldline.git", rev = "21ace68928345f8581f660bffd0e50f181348199" }
+signalweave-core = { git = "https://github.com/jdharrison/signalweave.git", rev = "a2fc2d3bab7884969d22e14e039070fcfd93e2bb" }
+
+# Math and data
+bytemuck = { version = "1.22", features = ["derive"] }
+glam = "0.30"
+
+# Async / runtime
+tokio = { version = "1.53", features = ["rt-multi-thread", "sync", "time", "macros"] }
+pollster = "0.4"
+
+# Graphics and windowing
+wgpu = "25"
+winit = "0.30"
+raw-window-handle = "0.6"
+
+# Text rendering
+glyphon = "0.9"
+
+# Image loading
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date / time
+chrono = "0.4"
+
+# Diagnostics and errors
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+anyhow = "1"
+
+# System information (memory, CPU)
+sysinfo = { version = "0.35", default-features = false, features = ["system"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+float_cmp = "allow"
+let_underscore_untyped = "allow"
+manual_let_else = "allow"
+match_wildcard_for_single_variants = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+unnecessary_wraps = "allow"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
