@@ -23,7 +23,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
-          path: ../woven
+          path: woven-dep
+
+      - name: Link woven as a sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -62,7 +65,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
-          path: ../woven
+          path: woven-dep
+
+      - name: Link woven as a sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -112,7 +118,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
-          path: ../woven
+          path: woven-dep
+
+      - name: Link woven as a sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
