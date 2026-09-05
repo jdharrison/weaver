@@ -1,5 +1,5 @@
 [package]
-name = "weaver-signalweave"
+name = "weaver-woven"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,9 @@ repository.workspace = true
 
 [dependencies]
 weaver-core.workspace = true
-signalweave-core.workspace = true
+woven-client.workspace = true
+woven-protocol.workspace = true
+woven-server.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

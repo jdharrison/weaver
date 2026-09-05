@@ -1,8 +1,8 @@
-//! Typed payload envelope used to move application state through Signalweave.
+//! Typed payload envelope used to move application state through Woven.
 
 use serde::{Deserialize, Serialize};
 
-/// Delivery class mirrored from Signalweave semantics.
+/// Delivery class mirrored from Woven semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DeliveryClass {
     /// Reliable ordered delivery.
@@ -17,7 +17,7 @@ pub enum DeliveryClass {
     BestEffortEvent,
 }
 
-/// Persistence class mirrored from Signalweave semantics.
+/// Persistence class mirrored from Woven semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum PersistenceClass {
     /// Ephemeral; not retained.
@@ -39,7 +39,7 @@ pub struct Payload<T> {
     pub revision: u64,
 }
 
-/// A type-erased payload envelope suitable for transit through Signalweave.
+/// A type-erased payload envelope suitable for transit through Woven.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PayloadEnvelope {
     /// JSON-encoded payload body.

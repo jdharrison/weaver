@@ -1,4 +1,4 @@
-//! Application world that composes simulation, Signalweave, and render state.
+//! Application world that composes simulation, Woven, and render state.
 
 use crate::error::AppError;
 use crate::event::InputEvent;
@@ -10,13 +10,12 @@ use weaver_core::{EntityId, Revision};
 use weaver_render::{
     Camera, MeshInstance, Particle, ParticleEmitter, SceneSnapshot, SpriteInstance,
 };
-use weaver_signalweave::{
-    ConnectivityMode, DeliveryClass, Payload, PayloadEnvelope, PersistenceClass,
-    SignalweaveAdapter, SignalweaveConfig,
-};
 use weaver_worldline::FrameId as WlFrameId;
 use weaver_worldline::{
     FrameRegistry, SimulationClockConfig, SimulationControl, SimulationRuntime, TrajectorySample,
+};
+use weaver_woven::{
+    DeliveryClass, Payload, PayloadEnvelope, PersistenceClass, WovenAdapter, WovenConfig,
 };
 
 /// Application world configuration.
@@ -24,8 +23,8 @@ use weaver_worldline::{
 pub struct WorldConfig {
     /// Simulation clock configuration.
     pub clock: SimulationClockConfig,
-    /// Signalweave configuration.
-    pub signalweave: SignalweaveConfig,
+    /// Woven connection configuration.
+    pub woven: WovenConfig,
     /// Whether rendering coordinate frames is enabled.
     pub show_coordinate_frames: bool,
     /// Whether trajectory history is enabled.
@@ -51,18 +50,18 @@ pub struct Renderable {
     pub frame: WlFrameId,
 }
 
-/// The runtime world that owns simulation state, entity registry, and
-/// Signalweave connectivity.
+/// The runtime world that owns simulation state, entity registry, and Woven connectivity.
 pub struct WeaverWorld {
     config: WorldConfig,
     runtime: SimulationRuntime,
-    signalweave: Option<SignalweaveAdapter>,
+    woven: Option<WovenAdapter>,
     entities: HashMap<EntityId, Renderable>,
     revision: Revision,
     paused: bool,
     time_multiplier: f64,
     camera: Camera,
     replicated_payloads: Vec<PayloadEnvelope>,
+    departed_woven_entities: Vec<u64>,
 }
 
 impl WeaverWorld {
@@ -70,26 +69,23 @@ impl WeaverWorld {
     ///
     /// # Errors
     ///
-    /// Returns an error if the Signalweave adapter cannot be created.
+    /// Returns an error if the Woven adapter cannot be created.
     pub fn new(config: WorldConfig) -> Result<Self, AppError> {
         let runtime = SimulationRuntime::new(config.clock);
-        let signalweave = if config.signalweave.mode == ConnectivityMode::OfflineEmbedded {
-            let mut adapter = SignalweaveAdapter::new(config.signalweave.clone())?;
-            adapter.start()?;
-            Some(adapter)
-        } else {
-            None
-        };
+        let mut adapter = WovenAdapter::new(config.woven.clone())?;
+        adapter.start()?;
+        let woven = Some(adapter);
         Ok(Self {
             config,
             runtime,
-            signalweave,
+            woven,
             entities: HashMap::new(),
             revision: Revision::ZERO,
             paused: false,
             time_multiplier: 1.0,
             camera: Camera::default(),
             replicated_payloads: Vec::new(),
+            departed_woven_entities: Vec::new(),
         })
     }
 
@@ -155,7 +151,7 @@ impl WeaverWorld {
         let delta = self.runtime.step();
         self.revision = self.revision.next();
         self.record_samples();
-        self.process_signalweave()?;
+        self.process_woven()?;
         Ok(delta)
     }
 
@@ -182,6 +178,7 @@ impl WeaverWorld {
         self.runtime.reset();
         self.revision = Revision::ZERO;
         self.replicated_payloads.clear();
+        self.departed_woven_entities.clear();
     }
 
     /// Current world revision.
@@ -259,19 +256,30 @@ impl WeaverWorld {
         self.runtime.frames_mut()
     }
 
-    /// Access the Signalweave adapter, if any.
+    /// Access the Woven adapter, if any.
     #[must_use]
-    pub fn signalweave(&self) -> Option<&SignalweaveAdapter> {
-        self.signalweave.as_ref()
+    pub fn woven(&self) -> Option<&WovenAdapter> {
+        self.woven.as_ref()
     }
 
-    /// Mutable access to the Signalweave adapter, if any.
+    /// Mutable access to the Woven adapter, if any.
     #[must_use]
-    pub fn signalweave_mut(&mut self) -> Option<&mut SignalweaveAdapter> {
-        self.signalweave.as_mut()
+    pub fn woven_mut(&mut self) -> Option<&mut WovenAdapter> {
+        self.woven.as_mut()
     }
 
-    /// Publish a typed payload to Signalweave.
+    /// Last application payload received for each Woven channel.
+    #[must_use]
+    pub fn replicated_payloads(&self) -> &[PayloadEnvelope] {
+        &self.replicated_payloads
+    }
+
+    /// Drain Woven entity IDs that left since the previous call.
+    pub fn drain_departed_woven_entities(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.departed_woven_entities)
+    }
+
+    /// Publish a typed payload to Woven.
     ///
     /// # Errors
     ///
@@ -287,7 +295,7 @@ impl WeaverWorld {
     where
         T: serde::Serialize,
     {
-        if let Some(adapter) = self.signalweave.as_mut() {
+        if let Some(adapter) = self.woven.as_mut() {
             adapter.publish(channel, entity, payload, delivery, persistence)?;
         }
         Ok(())
@@ -315,36 +323,30 @@ impl WeaverWorld {
         }
     }
 
-    fn process_signalweave(&mut self) -> Result<(), AppError> {
-        let Some(adapter) = self.signalweave.as_mut() else {
+    fn process_woven(&mut self) -> Result<(), AppError> {
+        let Some(adapter) = self.woven.as_mut() else {
             return Ok(());
         };
-        let envelopes: Vec<PayloadEnvelope> = adapter
-            .drain::<serde_json::Value>()?
-            .into_iter()
-            .map(|p| PayloadEnvelope {
-                body_json: serde_json::to_string(&p.body).unwrap_or_default(),
-                sequence: p.sequence,
-                revision: p.revision,
-                channel: 0,
-                entity: None,
-                delivery: DeliveryClass::ReliableOrdered,
-                persistence: PersistenceClass::Stateful,
-            })
-            .collect();
+        let envelopes = adapter.drain_envelopes()?;
+        let departed_entities = adapter.drain_entity_leaves();
+        for entity in departed_entities {
+            self.replicated_payloads
+                .retain(|payload| payload.entity != Some(entity));
+            self.departed_woven_entities.push(entity);
+        }
         for envelope in envelopes {
-            // Keep only newer sequences per channel.
+            // Keep only newer sequences per channel and Woven entity.
             if let Some(existing) = self
                 .replicated_payloads
                 .iter()
-                .find(|p| p.channel == envelope.channel)
+                .find(|p| p.channel == envelope.channel && p.entity == envelope.entity)
             {
                 if envelope.sequence <= existing.sequence {
                     continue;
                 }
             }
             self.replicated_payloads
-                .retain(|p| p.channel != envelope.channel);
+                .retain(|p| p.channel != envelope.channel || p.entity != envelope.entity);
             self.replicated_payloads.push(envelope);
         }
         Ok(())

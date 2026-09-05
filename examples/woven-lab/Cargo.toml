@@ -1,5 +1,5 @@
 [package]
-name = "render-lab"
+name = "woven-lab"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,19 +7,22 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "render-lab"
+name = "woven-lab"
 path = "src/main.rs"
 
 [dependencies]
-weaver-core.workspace = true
 weaver-app.workspace = true
+weaver-core.workspace = true
 weaver-render.workspace = true
 weaver-render-wgpu.workspace = true
-weaver-worldline.workspace = true
 weaver-woven.workspace = true
+weaver-worldline.workspace = true
 wgpu.workspace = true
 glam.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]

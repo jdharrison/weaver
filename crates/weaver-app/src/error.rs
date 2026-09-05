@@ -11,9 +11,9 @@ pub enum AppError {
     /// The world simulation failed.
     #[error("world error: {0}")]
     World(String),
-    /// The Signalweave adapter failed.
-    #[error("signalweave error: {0}")]
-    Signalweave(String),
+    /// The Woven adapter failed.
+    #[error("woven error: {0}")]
+    Woven(String),
     /// Window or event loop failure.
     #[error("window error: {0}")]
     Window(String),
@@ -34,8 +34,8 @@ impl From<weaver_worldline::WorldlineError> for AppError {
     }
 }
 
-impl From<weaver_signalweave::SignalweaveAdapterError> for AppError {
-    fn from(err: weaver_signalweave::SignalweaveAdapterError) -> Self {
-        Self::Signalweave(err.to_string())
+impl From<weaver_woven::WovenAdapterError> for AppError {
+    fn from(err: weaver_woven::WovenAdapterError) -> Self {
+        Self::Woven(err.to_string())
     }
 }

@@ -34,6 +34,7 @@ fn main() -> anyhow::Result<()> {
         update: None,
         tooltip: None,
         format_time: None,
+        title_status: None,
         side_menu: None,
         present_mode: wgpu::PresentMode::AutoVsync,
     };

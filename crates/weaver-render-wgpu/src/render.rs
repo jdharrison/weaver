@@ -394,9 +394,12 @@ impl WgpuRenderer {
     }
 
     /// Submit a rendered frame.
-    pub fn present(&self, frame: RenderFrame) {
+    pub fn present(&mut self, frame: RenderFrame) {
         self.context.queue.submit([frame.command_buffer]);
         frame.surface_texture.present();
+        // Dynamic debug and tooltip text can otherwise retain glyph atlas work
+        // indefinitely across frames.
+        self.text_pipeline.trim_atlas();
     }
 
     /// Mutable access to the WGPU context.

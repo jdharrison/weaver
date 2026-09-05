@@ -210,6 +210,7 @@ fn main() -> anyhow::Result<()> {
         format_time: Some(Box::new(move |time| {
             format_simulation_time(time + epoch_offset)
         })),
+        title_status: None,
         side_menu: Some(Box::new(move |world| {
             build_side_menu(world, &state_side_menu)
         })),

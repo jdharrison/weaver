@@ -2,8 +2,8 @@
 
 use crate::world::WeaverWorld;
 use glam::Vec2;
-use std::time::Instant;
-use sysinfo::{MemoryRefreshKind, System};
+use std::time::{Duration, Instant};
+use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 use weaver_render::{SceneSnapshot, TextAnchor, TextRun, UiElement, UiRect};
 
 /// Action triggered by a side-menu button.
@@ -27,6 +27,8 @@ pub struct DebugOverlay {
     frame_times: Vec<f64>,
     last_frame: Option<Instant>,
     sys: System,
+    last_memory_refresh: Option<Instant>,
+    cached_memory_mb: u64,
 }
 
 impl Default for DebugOverlay {
@@ -42,6 +44,8 @@ impl DebugOverlay {
             frame_times: Vec::with_capacity(128),
             last_frame: None,
             sys: System::new(),
+            last_memory_refresh: None,
+            cached_memory_mb: 0,
         }
     }
 
@@ -77,12 +81,27 @@ impl DebugOverlay {
         1.0 / avg
     }
 
-    /// Current system memory usage in megabytes.
+    /// Resident memory used by this Weaver process in mebibytes.
     #[must_use]
     pub fn memory_mb(&mut self) -> u64 {
+        let now = Instant::now();
+        if self
+            .last_memory_refresh
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
+        {
+            return self.cached_memory_mb;
+        }
+        let Ok(pid) = get_current_pid() else {
+            return self.cached_memory_mb;
+        };
         self.sys
-            .refresh_memory_specifics(MemoryRefreshKind::nothing());
-        self.sys.used_memory() / 1024
+            .refresh_processes(ProcessesToUpdate::Some(&[pid]), false);
+        self.cached_memory_mb = self
+            .sys
+            .process(pid)
+            .map_or(0, |process| process.memory() / (1024 * 1024));
+        self.last_memory_refresh = Some(now);
+        self.cached_memory_mb
     }
 
     /// Estimated end-to-end latency for the last frame, in milliseconds.
@@ -140,6 +159,16 @@ impl DebugMenu {
         self.overlay.mark_frame();
     }
 
+    /// Compact, low-frequency status suitable for a window title.
+    #[must_use]
+    pub fn title_status(&mut self) -> String {
+        format!(
+            "{:.0} FPS | {} MB",
+            self.overlay.fps(),
+            self.overlay.memory_mb()
+        )
+    }
+
     /// Always-visible top-right overlay showing time coordinate and performance.
     pub fn push_overlay(
         &mut self,
@@ -186,9 +215,9 @@ impl DebugMenu {
         }));
 
         let services = format!(
-            "Worldline: {} | Signalweave: {} | Entities: {} | Revision: {}",
+            "Worldline: {} | Woven: {} | Entities: {} | Revision: {}",
             worldline_status(world),
-            signalweave_status(world),
+            woven_status(world),
             world.entity_count(),
             world.revision().get()
         );
@@ -346,9 +375,9 @@ fn worldline_status(world: &WeaverWorld) -> &'static str {
     }
 }
 
-fn signalweave_status(world: &WeaverWorld) -> String {
+fn woven_status(world: &WeaverWorld) -> String {
     world
-        .signalweave()
+        .woven()
         .map_or_else(|| "disabled".to_string(), |a| format!("{:?}", a.status()))
 }
 

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A Weaver entity identifier.
 ///
-/// This is intentionally separate from any backing runtime (Signalweave,
-/// renderer, physics, etc.) so that Weaver can map between them without
+/// This is intentionally separate from any backing runtime (Woven, renderer,
+/// physics, etc.) so that Weaver can map between them without
 /// leaking internal IDs across crate boundaries.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);

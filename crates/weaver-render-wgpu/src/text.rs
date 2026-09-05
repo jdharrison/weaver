@@ -5,7 +5,6 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
-use std::collections::HashMap;
 
 /// Text rendering subsystem.
 pub struct TextPipeline {
@@ -15,7 +14,13 @@ pub struct TextPipeline {
     viewport: Viewport,
     atlas: TextAtlas,
     renderer: TextRenderer,
-    buffers: HashMap<String, Buffer>,
+    buffers: Vec<CachedBuffer>,
+}
+
+struct CachedBuffer {
+    text: String,
+    size_bits: u32,
+    buffer: Buffer,
 }
 
 impl TextPipeline {
@@ -52,13 +57,16 @@ impl TextPipeline {
             viewport,
             atlas,
             renderer,
-            buffers: HashMap::new(),
+            buffers: Vec::new(),
         })
     }
 
     /// Update screen size for screen-space text layout.
     pub fn resize(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
         self.viewport.update(queue, Resolution { width, height });
+        // Layout width changes with the viewport, so retained buffers are no
+        // longer valid after a resize.
+        self.buffers.clear();
     }
 
     /// Prepare text for rendering.
@@ -72,8 +80,14 @@ impl TextPipeline {
         queue: &wgpu::Queue,
         runs: &[weaver_render::TextRun],
     ) -> Result<(), WgpuRenderError> {
-        self.buffers.clear();
-        for run in runs {
+        self.buffers.truncate(runs.len());
+        for (index, run) in runs.iter().enumerate() {
+            let changed = self.buffers.get(index).is_none_or(|cached| {
+                cached.text != run.text || cached.size_bits != run.size.to_bits()
+            });
+            if !changed {
+                continue;
+            }
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(run.size, run.size));
             buffer.set_size(
                 &mut self.font_system,
@@ -87,12 +101,21 @@ impl TextPipeline {
                 &attrs,
                 glyphon::Shaping::Advanced,
             );
-            self.buffers.insert(run.text.clone(), buffer);
+            let cached = CachedBuffer {
+                text: run.text.clone(),
+                size_bits: run.size.to_bits(),
+                buffer,
+            };
+            if index == self.buffers.len() {
+                self.buffers.push(cached);
+            } else {
+                self.buffers[index] = cached;
+            }
         }
 
         let mut areas = Vec::with_capacity(runs.len());
-        for run in runs {
-            let buffer = self.buffers.get(&run.text).expect("buffer inserted above");
+        for (index, run) in runs.iter().enumerate() {
+            let buffer = &self.buffers[index].buffer;
             let (width, height) = measure(buffer);
             let anchor_offset = run.anchor.offset();
             let x = run.position.x - width * anchor_offset.x;

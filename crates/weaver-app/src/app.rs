@@ -28,8 +28,15 @@ pub type TooltipFn = Box<dyn Fn(&WeaverWorld, weaver_core::EntityId, f64) -> Str
 /// Callback signature for formatting the simulation time shown in the top bar.
 pub type TimeFormatterFn = Box<dyn Fn(f64) -> String>;
 
+/// Callback for an application-specific, low-frequency window-title status.
+pub type TitleStatusFn = Box<dyn Fn() -> String>;
+
 /// Callback signature for building the right-side focus menu after setup.
 pub type SideMenuFn = Box<dyn FnOnce(&WeaverWorld) -> Vec<MenuItem>>;
+
+/// Prevent an unexpectedly long stall from monopolizing the event loop while
+/// fixed-rate simulation time catches up to elapsed wall time.
+const MAX_SIMULATION_CATCH_UP_STEPS: u32 = 8;
 
 /// Configuration for the windowed application.
 pub struct ApplicationConfig {
@@ -50,6 +57,9 @@ pub struct ApplicationConfig {
     pub tooltip: Option<TooltipFn>,
     /// Optional formatter for the simulation time displayed in the debug top bar.
     pub format_time: Option<TimeFormatterFn>,
+    /// Optional application-specific status appended to the window title at a
+    /// low (once per second) cadence.
+    pub title_status: Option<TitleStatusFn>,
     /// Optional right-side focus menu builder, invoked after setup so it can
     /// reference spawned entity ids.
     pub side_menu: Option<SideMenuFn>,
@@ -68,6 +78,7 @@ impl std::fmt::Debug for ApplicationConfig {
             .field("update", &self.update.is_some())
             .field("tooltip", &self.tooltip.is_some())
             .field("format_time", &self.format_time.is_some())
+            .field("title_status", &self.title_status.is_some())
             .field("side_menu", &self.side_menu.is_some())
             .field("present_mode", &self.present_mode)
             .finish()
@@ -85,6 +96,7 @@ impl Default for ApplicationConfig {
             update: None,
             tooltip: None,
             format_time: None,
+            title_status: None,
             side_menu: None,
             present_mode: wgpu::PresentMode::AutoVsync,
         }
@@ -99,14 +111,14 @@ pub struct Application {
     world: Option<WeaverWorld>,
     debug_menu: DebugMenu,
     update: Option<UpdateFn>,
-    tooltip: Option<TooltipFn>,
-    format_time: Option<TimeFormatterFn>,
+    title_status: Option<TitleStatusFn>,
     side_menu: Vec<MenuItem>,
     side_menu_builder: Option<SideMenuFn>,
     side_menu_buttons: Vec<(MenuAction, glam::Vec2, glam::Vec2)>,
     mouse_position: Option<(f32, f32)>,
     last_mouse: Option<(f32, f32)>,
     last_step: Option<Instant>,
+    last_title_update: Option<Instant>,
     step_interval: Duration,
     running: bool,
     origin_entity: Option<weaver_core::EntityId>,
@@ -125,8 +137,9 @@ impl Application {
             Duration::from_secs_f64(1.0 / f64::from(config.world.clock.steps_per_second.max(1)));
         Self {
             update: config.update.take(),
-            tooltip: config.tooltip.take(),
-            format_time: config.format_time.take(),
+            title_status: config.title_status.take(),
+            // Performance-focused native applications use the title for
+            // diagnostics; tooltip callbacks are deliberately not installed.
             side_menu: Vec::new(),
             side_menu_builder: config.side_menu.take(),
             side_menu_buttons: Vec::new(),
@@ -138,6 +151,7 @@ impl Application {
             mouse_position: None,
             last_mouse: None,
             last_step: None,
+            last_title_update: None,
             step_interval,
             running: true,
             origin_entity: None,
@@ -366,9 +380,7 @@ impl ApplicationHandler for Application {
                 if let Some(input) = input {
                     world.handle_input(input);
                 }
-                if matches!(logical_key.as_ref(), Key::Character("/" | "`" | "~")) {
-                    self.debug_menu.toggle();
-                }
+
                 match logical_key.as_ref() {
                     Key::Character("+" | "=") => {
                         self.camera_distance *= 0.9;
@@ -394,24 +406,31 @@ impl ApplicationHandler for Application {
                 }
             }
             WinitWindowEvent::RedrawRequested => {
-                let (width, height) = self
-                    .renderer
-                    .as_ref()
-                    .map_or((1280, 720), |r| r.context().size);
-                let hovered = self
-                    .mouse_position
-                    .is_some_and(|m| hovered_entity(world, m, (width, height)).is_some());
-
                 let now = Instant::now();
-                let should_step = !hovered
-                    && self
+                let mut steps_this_frame = 0;
+                loop {
+                    let due = self
                         .last_step
-                        .is_none_or(|t| now.duration_since(t) >= self.step_interval);
-                if should_step {
+                        .is_none_or(|last| now.duration_since(last) >= self.step_interval);
+                    if !due || steps_this_frame >= MAX_SIMULATION_CATCH_UP_STEPS {
+                        break;
+                    }
                     if let Err(err) = world.step() {
                         tracing::error!("simulation step failed: {err}");
+                        break;
                     }
-                    self.last_step = Some(now);
+                    self.last_step =
+                        Some(self.last_step.map_or(now, |last| last + self.step_interval));
+                    steps_this_frame += 1;
+                }
+                if steps_this_frame == MAX_SIMULATION_CATCH_UP_STEPS
+                    && self
+                        .last_step
+                        .is_some_and(|last| now.duration_since(last) >= self.step_interval)
+                {
+                    tracing::warn!(
+                        "simulation is behind its bounded catch-up limit; rendering cannot keep pace"
+                    );
                 }
                 let time = world.simulation_time();
                 if let Some(update) = self.update.as_mut() {
@@ -426,37 +445,11 @@ impl ApplicationHandler for Application {
                 );
                 if let Some(renderer) = self.renderer.as_mut() {
                     match world.extract_snapshot() {
-                        Ok(mut snapshot) => {
-                            self.debug_menu.push_top_bar(
-                                &mut snapshot,
-                                world,
-                                width,
-                                self.format_time
-                                    .as_ref()
-                                    .map(|f| f as &dyn Fn(f64) -> String),
-                            );
-                            self.side_menu_buttons = self.debug_menu.push_side_menu(
-                                &mut snapshot,
-                                width,
-                                &self.side_menu,
-                            );
-                            if let Some(mouse) = self.mouse_position {
-                                let (tooltip, size) = build_tooltip(
-                                    world,
-                                    mouse,
-                                    (width, height),
-                                    time,
-                                    self.tooltip.as_ref(),
-                                );
-                                if !tooltip.is_empty() {
-                                    self.debug_menu.push_tooltip(
-                                        &mut snapshot,
-                                        mouse,
-                                        &tooltip,
-                                        size,
-                                    );
-                                }
-                            }
+                        Ok(snapshot) => {
+                            // Native performance mode intentionally submits no
+                            // debug/menu/tooltip UI. Window-title metrics are
+                            // rate-limited and kept outside the render scene.
+                            self.side_menu_buttons.clear();
                             match renderer.render(&snapshot) {
                                 Ok(frame) => renderer.present(frame),
                                 Err(err) => tracing::error!("render failed: {err}"),
@@ -466,6 +459,28 @@ impl ApplicationHandler for Application {
                     }
                 }
                 self.debug_menu.mark_frame();
+                if self
+                    .last_title_update
+                    .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+                {
+                    if let Some(window) = self.window.as_ref() {
+                        let title = match self.title_status.as_ref() {
+                            Some(status) => format!(
+                                "{} | {} | {}",
+                                self.config.title,
+                                status(),
+                                self.debug_menu.title_status()
+                            ),
+                            None => format!(
+                                "{} | {}",
+                                self.config.title,
+                                self.debug_menu.title_status()
+                            ),
+                        };
+                        window.set_title(&title);
+                    }
+                    self.last_title_update = Some(now);
+                }
             }
             _ => {}
         }
@@ -508,51 +523,6 @@ fn hovered_entity(
         }
     }
     closest.map(|(id, _)| id)
-}
-
-fn build_tooltip(
-    world: &WeaverWorld,
-    mouse: (f32, f32),
-    screen: (u32, u32),
-    time: f64,
-    formatter: Option<&TooltipFn>,
-) -> (String, glam::Vec2) {
-    let Some(id) = hovered_entity(world, mouse, screen) else {
-        return (String::new(), glam::Vec2::ZERO);
-    };
-
-    let text = formatter.map_or_else(|| default_tooltip(world, id, time), |f| f(world, id, time));
-    if text.is_empty() {
-        return (String::new(), glam::Vec2::ZERO);
-    }
-
-    let (w, h) = weaver_render_wgpu::text::measure_text(&text, 12.0);
-    (text, glam::Vec2::new(w, h))
-}
-
-fn default_tooltip(world: &WeaverWorld, id: weaver_core::EntityId, time: f64) -> String {
-    let Some(renderable) = world.get(id) else {
-        return String::new();
-    };
-    let transform = renderable
-        .mesh
-        .as_ref()
-        .map(|m| m.transform)
-        .or_else(|| renderable.sprite.as_ref().map(|s| s.transform))
-        .unwrap_or_default();
-    let p = transform.translation;
-    let r = p.length();
-
-    let mut lines = Vec::new();
-    if let Some(label) = &renderable.label {
-        lines.push(label.clone());
-    }
-    lines.push(format!("t = {time:.3} s"));
-    lines.push(format!("r = {r:.3}"));
-    lines.push(format!("x = {:.3}", p.x));
-    lines.push(format!("y = {:.3}", p.y));
-    lines.push(format!("z = {:.3}", p.z));
-    lines.join("\n")
 }
 
 fn center_window_on_primary_monitor(window: &Window) {

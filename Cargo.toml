@@ -4,10 +4,11 @@ members = [
     "crates/weaver-app",
     "crates/weaver-render",
     "crates/weaver-render-wgpu",
-    "crates/weaver-signalweave",
+    "crates/weaver-woven",
     "crates/weaver-worldline",
     "examples/render-lab",
     "examples/space-lab",
+    "examples/woven-lab",
 ]
 resolver = "3"
 
@@ -24,12 +25,14 @@ weaver-core = { path = "crates/weaver-core" }
 weaver-app = { path = "crates/weaver-app" }
 weaver-render = { path = "crates/weaver-render" }
 weaver-render-wgpu = { path = "crates/weaver-render-wgpu" }
-weaver-signalweave = { path = "crates/weaver-signalweave" }
+weaver-woven = { path = "crates/weaver-woven" }
 weaver-worldline = { path = "crates/weaver-worldline" }
 
 # External references (pinned for reproducibility)
 simengine = { git = "https://github.com/jdharrison/worldline.git", rev = "21ace68928345f8581f660bffd0e50f181348199" }
-signalweave-core = { git = "https://github.com/jdharrison/signalweave.git", rev = "a2fc2d3bab7884969d22e14e039070fcfd93e2bb" }
+woven-client = { path = "../woven/crates/woven-client-rust" }
+woven-protocol = { path = "../woven/crates/woven-protocol" }
+woven-server = { path = "../woven/crates/woven-server" }
 
 # Math and data
 bytemuck = { version = "1.22", features = ["derive"] }
