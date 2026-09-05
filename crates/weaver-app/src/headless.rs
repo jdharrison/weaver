@@ -40,10 +40,10 @@ impl HeadlessApp {
         self.world.start();
         let mut steps = 0;
         loop {
-            if let Some(max) = self.max_steps {
-                if steps >= max {
-                    break;
-                }
+            if let Some(max) = self.max_steps
+                && steps >= max
+            {
+                break;
             }
             self.world.step()?;
             steps += 1;

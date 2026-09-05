@@ -354,6 +354,10 @@ async fn expect_entity_entered(client: &mut Client) -> Result<u64, WovenAdapterE
     }
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used point-free as map_err(client_error), which requires FnOnce(E)"
+)]
 fn client_error(error: woven_client::ClientError) -> WovenAdapterError {
     WovenAdapterError::ClientFailed(error.to_string())
 }

@@ -137,10 +137,10 @@ fn main() -> anyhow::Result<()> {
             ..WorldConfig::default()
         },
         setup: Some(Box::new(move |world, renderer| {
-            setup(world, renderer, &view_setup)
+            setup(world, renderer, &view_setup);
         })),
         update: Some(Box::new(move |world, time| {
-            update(world, time, &config_update, &view_update)
+            update(world, time, &config_update, &view_update);
         })),
         tooltip: None,
         format_time: Some(Box::new(move |_time| {
@@ -202,7 +202,7 @@ fn read_config() -> anyhow::Result<LabConfig> {
         .transpose()?
         .unwrap_or(1.0_f32);
     anyhow::ensure!(
-        angular_speed.is_finite() && angular_speed >= 0.0 && angular_speed <= 20.0,
+        angular_speed.is_finite() && (0.0..=20.0).contains(&angular_speed),
         "WOVEN_LAB_ANGULAR_SPEED must be in 0..=20"
     );
     Ok(LabConfig {
@@ -225,7 +225,7 @@ fn lab_clock(config: &LabConfig) -> SimulationClockConfig {
 fn setup(
     world: &mut WeaverWorld,
     renderer: &mut weaver_render_wgpu::WgpuRenderer,
-    _view: &Mutex<LabView>,
+    view: &Mutex<LabView>,
 ) {
     world.camera_mut().eye = Vec3::new(0.0, 0.0, 15.0);
     world.camera_mut().target = Vec3::ZERO;
@@ -249,7 +249,7 @@ fn setup(
             label: Some("idle".to_owned()),
             frame: FrameId::ROOT,
         });
-        _view.lock().expect("lab state poisoned").cells.push(id);
+        view.lock().expect("lab state poisoned").cells.push(id);
     }
 }
 
@@ -651,7 +651,10 @@ mod tests {
 
     #[test]
     fn confirm_status_flags_silent_server_as_lost() {
-        let metrics = metrics(Some(Instant::now() - Duration::from_secs(5)), 42);
+        let metrics = metrics(
+            Some(Instant::now().checked_sub(Duration::from_secs(5)).unwrap()),
+            42,
+        );
         assert_eq!(
             confirm_status(&metrics, 10.0, 0.0),
             "SERVER RECV LOST 5s (last seq 42)"
@@ -662,7 +665,14 @@ mod tests {
     fn confirm_status_tolerates_slow_publish_cadence() {
         // At 1 Hz the silence threshold stretches past two seconds so a
         // healthy low-rate run is not misreported as lost.
-        let metrics = metrics(Some(Instant::now() - Duration::from_millis(2_500)), 3);
+        let metrics = metrics(
+            Some(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(2_500))
+                    .unwrap(),
+            ),
+            3,
+        );
         assert_eq!(confirm_status(&metrics, 1.0, 1.0), "srv-recv 1 Hz seq 3");
     }
 }

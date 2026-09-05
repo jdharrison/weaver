@@ -340,10 +340,9 @@ impl WeaverWorld {
                 .replicated_payloads
                 .iter()
                 .find(|p| p.channel == envelope.channel && p.entity == envelope.entity)
+                && envelope.sequence <= existing.sequence
             {
-                if envelope.sequence <= existing.sequence {
-                    continue;
-                }
+                continue;
             }
             self.replicated_payloads
                 .retain(|p| p.channel != envelope.channel || p.entity != envelope.entity);

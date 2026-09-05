@@ -516,10 +516,10 @@ fn hovered_entity(
             .map(|m| m.transform.scale)
             .or_else(|| renderable.sprite.as_ref().map(|s| s.transform.scale))
             .unwrap_or(0.5);
-        if let Some(t) = ray_sphere_intersect(origin, dir, transform.translation, radius) {
-            if closest.is_none_or(|(_, best)| t < best) {
-                closest = Some((id, t));
-            }
+        if let Some(t) = ray_sphere_intersect(origin, dir, transform.translation, radius)
+            && closest.is_none_or(|(_, best)| t < best)
+        {
+            closest = Some((id, t));
         }
     }
     closest.map(|(id, _)| id)

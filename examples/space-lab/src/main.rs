@@ -843,11 +843,11 @@ fn animate_bodies(world: &mut WeaverWorld, time: f64, state: &Mutex<SimulationSt
         } else {
             relative[id]
         };
-        if let Some(renderable) = world.get_mut(*id) {
-            if let Some(mesh) = renderable.mesh.as_mut() {
-                mesh.transform.translation = abs;
-                mesh.transform.rotation = Quat::IDENTITY;
-            }
+        if let Some(renderable) = world.get_mut(*id)
+            && let Some(mesh) = renderable.mesh.as_mut()
+        {
+            mesh.transform.translation = abs;
+            mesh.transform.rotation = Quat::IDENTITY;
         }
     }
 }
@@ -875,10 +875,10 @@ fn format_body_tooltip(
     let r = f64::from(p.length()) / body.distance_scale;
 
     let mut lines = vec![body.name.to_string()];
-    if let Some(parent_id) = body.parent {
-        if let Some(parent) = state.bodies.get(&parent_id) {
-            lines.push(format!("parent: {}", parent.name));
-        }
+    if let Some(parent_id) = body.parent
+        && let Some(parent) = state.bodies.get(&parent_id)
+    {
+        lines.push(format!("parent: {}", parent.name));
     }
     if body.parent.is_none() {
         lines.push(format!("semi-major axis = {} AU", body.semi_major_axis));
