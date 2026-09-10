@@ -106,6 +106,8 @@ impl Default for ApplicationConfig {
 /// A windowed Weaver application.
 pub struct Application {
     config: ApplicationConfig,
+    shutdown_signal: crate::ShutdownSignal,
+    startup_error: Option<AppError>,
     window: Option<Arc<Window>>,
     renderer: Option<weaver_render_wgpu::WgpuRenderer>,
     world: Option<WeaverWorld>,
@@ -144,6 +146,8 @@ impl Application {
             side_menu_builder: config.side_menu.take(),
             side_menu_buttons: Vec::new(),
             config,
+            shutdown_signal: crate::ShutdownSignal::default(),
+            startup_error: None,
             window: None,
             renderer: None,
             world: None,
@@ -163,7 +167,14 @@ impl Application {
         }
     }
 
-    /// Run the application until the window closes.
+    /// Install a cooperative stop signal, checked independently of simulation pause/time.
+    #[must_use]
+    pub fn with_shutdown_signal(mut self, signal: crate::ShutdownSignal) -> Self {
+        self.shutdown_signal = signal;
+        self
+    }
+
+    /// Run the application until the window closes or shutdown is requested.
     ///
     /// # Errors
     ///
@@ -173,12 +184,16 @@ impl Application {
         event_loop
             .run_app(&mut self)
             .map_err(|err| AppError::Window(err.to_string()))?;
-        Ok(())
+        self.startup_error.take().map_or(Ok(()), Err)
     }
 }
 
 impl ApplicationHandler for Application {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.shutdown_signal.is_requested() {
+            event_loop.exit();
+            return;
+        }
         let window_attributes = Window::default_attributes()
             .with_title(&self.config.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
@@ -189,6 +204,7 @@ impl ApplicationHandler for Application {
             Ok(w) => Arc::new(w),
             Err(err) => {
                 tracing::error!("failed to create window: {err}");
+                self.startup_error = Some(AppError::Window(err.to_string()));
                 event_loop.exit();
                 return;
             }
@@ -205,6 +221,7 @@ impl ApplicationHandler for Application {
             Ok(r) => r,
             Err(err) => {
                 tracing::error!("failed to create renderer: {err}");
+                self.startup_error = Some(AppError::Render(err.to_string()));
                 event_loop.exit();
                 return;
             }
@@ -214,6 +231,7 @@ impl ApplicationHandler for Application {
             Ok(w) => w,
             Err(err) => {
                 tracing::error!("failed to create world: {err}");
+                self.startup_error = Some(err);
                 event_loop.exit();
                 return;
             }
@@ -244,6 +262,10 @@ impl ApplicationHandler for Application {
         _window_id: WindowId,
         event: WinitWindowEvent,
     ) {
+        if self.shutdown_signal.is_requested() {
+            event_loop.exit();
+            return;
+        }
         let Some(world) = self.world.as_mut() else {
             return;
         };
@@ -412,7 +434,10 @@ impl ApplicationHandler for Application {
                     let due = self
                         .last_step
                         .is_none_or(|last| now.duration_since(last) >= self.step_interval);
-                    if !due || steps_this_frame >= MAX_SIMULATION_CATCH_UP_STEPS {
+                    if !due
+                        || steps_this_frame >= MAX_SIMULATION_CATCH_UP_STEPS
+                        || self.shutdown_signal.is_requested()
+                    {
                         break;
                     }
                     if let Err(err) = world.step() {
@@ -431,6 +456,10 @@ impl ApplicationHandler for Application {
                     tracing::warn!(
                         "simulation is behind its bounded catch-up limit; rendering cannot keep pace"
                     );
+                }
+                if self.shutdown_signal.is_requested() {
+                    event_loop.exit();
+                    return;
                 }
                 let time = world.simulation_time();
                 if let Some(update) = self.update.as_mut() {
@@ -486,7 +515,15 @@ impl ApplicationHandler for Application {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.shutdown_signal.is_requested() {
+            event_loop.exit();
+            return;
+        }
+        // Keep cancellation responsive even when the window is minimized/occluded.
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(50),
+        ));
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }

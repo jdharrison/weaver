@@ -1,4 +1,4 @@
-//! Woven Lab — local multi-client replication visualizer.
+//! Woven Lab — opt-in local/verified-remote multi-client replication visualizer.
 //!
 //! Start one Woven node, then open this example in multiple terminals. Each
 //! window publishes its authoritative cube rotation on Woven's state channel
@@ -9,9 +9,10 @@ use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use weaver_app::{
-    Application, ApplicationConfig, HeadlessApp, Renderable, WeaverWorld, WorldConfig,
+    Application, ApplicationConfig, HeadlessApp, Renderable, ShutdownSignal, WeaverWorld,
+    WorldConfig,
 };
 use weaver_render::{MeshHandle, MeshInstance, RenderTransform};
 use weaver_render_wgpu::Vertex;
@@ -34,7 +35,8 @@ struct CubeState {
 
 #[derive(Clone, Debug)]
 struct LabConfig {
-    endpoint: String,
+    woven: WovenConfig,
+    duration: Option<Duration>,
     client_name: String,
     rate_hz: f64,
     steps_per_second: u32,
@@ -100,11 +102,11 @@ struct ObservedCube {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let config = read_config()?;
-    let woven = WovenConfig {
-        mode: ConnectivityMode::Loopback,
-        endpoint: Some(config.endpoint.clone()),
-        ..WovenConfig::default()
-    };
+    let mut woven = config.woven.clone();
+    woven.run_deadline = config.duration.map(|duration| Instant::now() + duration);
+    let shutdown = woven
+        .run_deadline
+        .map_or_else(ShutdownSignal::default, ShutdownSignal::with_deadline);
 
     if std::env::var("WEAVER_HEADLESS").is_ok() {
         let mut app = HeadlessApp::new(WorldConfig {
@@ -112,7 +114,9 @@ fn main() -> anyhow::Result<()> {
             clock: lab_clock(&config),
             ..WorldConfig::default()
         })?
-        .with_max_steps(60);
+        .with_max_steps(60)
+        .with_shutdown_signal(shutdown);
+        tracing::info!("headless smoke check: at most 60 steps, no lab publishing");
         app.run()?;
         return Ok(());
     }
@@ -123,10 +127,14 @@ fn main() -> anyhow::Result<()> {
     let view_metrics = Arc::clone(&view);
     let view_title = Arc::clone(&view);
     let config_update = config.clone();
+    let shutdown_update = shutdown.clone();
     let app = Application::new(ApplicationConfig {
         title: format!(
-            "Woven Lab | {} | {} Hz tick | {:?}",
-            config.client_name, config.steps_per_second, config.present_mode
+            "Woven Lab | {} | {} | {} Hz tick | {:?}",
+            config.woven.mode.description(),
+            config.client_name,
+            config.steps_per_second,
+            config.present_mode
         ),
         width: 1100,
         height: 720,
@@ -140,7 +148,9 @@ fn main() -> anyhow::Result<()> {
             setup(world, renderer, &view_setup);
         })),
         update: Some(Box::new(move |world, time| {
-            update(world, time, &config_update, &view_update);
+            if !shutdown_update.is_requested() {
+                update(world, time, &config_update, &view_update);
+            }
         })),
         tooltip: None,
         format_time: Some(Box::new(move |_time| {
@@ -161,15 +171,82 @@ fn main() -> anyhow::Result<()> {
         })),
         side_menu: None,
         present_mode: config.present_mode,
-    });
+    })
+    .with_shutdown_signal(shutdown);
     app.run()?;
     Ok(())
 }
 
+fn validate_target(target: Option<&str>) -> anyhow::Result<ConnectivityMode> {
+    match target.unwrap_or("local") {
+        "local" => Ok(ConnectivityMode::Loopback),
+        "remote" | "cloud" => Ok(ConnectivityMode::RemoteQuic),
+        _ => anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"),
+    }
+}
+
+fn validate_duration(
+    mode: ConnectivityMode,
+    value: Option<&str>,
+) -> anyhow::Result<Option<Duration>> {
+    let Some(value) = value else {
+        anyhow::ensure!(
+            mode != ConnectivityMode::RemoteQuic,
+            "remote runs require WOVEN_LAB_DURATION_SECONDS (1..=300)"
+        );
+        return Ok(None);
+    };
+    let seconds = value
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| (1..=300).contains(seconds));
+    Ok(Some(Duration::from_secs(seconds.context(
+        "WOVEN_LAB_DURATION_SECONDS must be an integer in 1..=300",
+    )?)))
+}
+
 fn read_config() -> anyhow::Result<LabConfig> {
-    let endpoint = std::env::var("WOVEN_LAB_URL")
-        .context("set WOVEN_LAB_URL, for example quic://127.0.0.1:8081")?;
+    let target = match std::env::var("WOVEN_LAB_TARGET") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"),
+    };
+    let mode = validate_target(target.as_deref())?;
+    let duration_value = std::env::var("WOVEN_LAB_DURATION_SECONDS").ok();
+    let duration = validate_duration(mode, duration_value.as_deref())?;
+    let mut woven = WovenConfig {
+        mode,
+        ..WovenConfig::default()
+    };
+    if mode == ConnectivityMode::RemoteQuic {
+        // A local URL or the development token must never become a remote fallback.
+        woven.endpoint = Some(std::env::var("WOVEN_LAB_REMOTE_URL")
+            .or_else(|_| if target.as_deref() == Some("cloud") {
+                std::env::var("WOVEN_LAB_CLOUD_URL")
+            } else { Err(std::env::VarError::NotPresent) })
+            .map_err(|_| anyhow::anyhow!("remote runs require WOVEN_LAB_REMOTE_URL (cloud alias also accepts WOVEN_LAB_CLOUD_URL)"))?);
+        woven.ca_pem_file = Some(
+            std::env::var_os("WOVEN_LAB_CA_PEM_FILE")
+                .context("remote runs require WOVEN_LAB_CA_PEM_FILE")?
+                .into(),
+        );
+        woven.token_file = Some(
+            std::env::var_os("WOVEN_LAB_TOKEN_FILE")
+                .context("remote runs require WOVEN_LAB_TOKEN_FILE")?
+                .into(),
+        );
+        woven.dev_token.clear();
+    } else {
+        woven.endpoint = Some(std::env::var("WOVEN_LAB_URL").map_err(|_| {
+            anyhow::anyhow!("set WOVEN_LAB_URL, for example quic://127.0.0.1:8081")
+        })?);
+    }
+    woven.validate()?;
     let client_name = std::env::var("WOVEN_LAB_CLIENT").unwrap_or_else(|_| "lab".to_owned());
+    anyhow::ensure!(
+        mode != ConnectivityMode::RemoteQuic || (1..=64).contains(&client_name.len()),
+        "remote WOVEN_LAB_CLIENT must contain 1..=64 UTF-8 bytes"
+    );
     let rate_hz = std::env::var("WOVEN_LAB_RATE_HZ")
         .ok()
         .map(|value| value.parse())
@@ -206,7 +283,8 @@ fn read_config() -> anyhow::Result<LabConfig> {
         "WOVEN_LAB_ANGULAR_SPEED must be in 0..=20"
     );
     Ok(LabConfig {
-        endpoint,
+        woven,
+        duration,
         client_name,
         rate_hz,
         steps_per_second,
@@ -617,6 +695,46 @@ fn cube_indices() -> Vec<u16> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn target_defaults_to_local_and_accepts_explicit_local() {
+        assert!(validate_target(None).is_ok());
+        assert!(validate_target(Some("local")).is_ok());
+    }
+
+    #[test]
+    fn remote_is_explicit_and_duration_is_bounded() {
+        for target in ["remote", "cloud"] {
+            let mode = validate_target(Some(target)).unwrap();
+            assert_eq!(mode, ConnectivityMode::RemoteQuic);
+            for value in [
+                None,
+                Some(""),
+                Some("0"),
+                Some("301"),
+                Some("NaN"),
+                Some("1.5"),
+                Some("-1"),
+            ] {
+                assert!(validate_duration(mode, value).is_err());
+            }
+            for value in ["1", "300"] {
+                assert!(validate_duration(mode, Some(value)).is_ok());
+            }
+        }
+        assert_eq!(
+            validate_duration(ConnectivityMode::Loopback, None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_targets_are_rejected() {
+        for target in ["", "web", "LOCAL", " local "] {
+            let error = validate_target(Some(target)).unwrap_err().to_string();
+            assert!(error.contains("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"));
+        }
+    }
 
     fn metrics(last_confirm_at: Option<Instant>, last_confirmed_sequence: u64) -> LabMetrics {
         LabMetrics {

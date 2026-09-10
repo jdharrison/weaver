@@ -7,6 +7,8 @@ pub enum ConnectivityMode {
     EmbeddedLocalNode,
     /// Connect to an explicitly configured loopback Woven node.
     Loopback,
+    /// Connect to an explicit QUIC endpoint using verified TLS and a token file.
+    RemoteQuic,
 }
 
 impl ConnectivityMode {
@@ -16,6 +18,7 @@ impl ConnectivityMode {
         match self {
             Self::EmbeddedLocalNode => "embedded local Woven node",
             Self::Loopback => "loopback Woven node",
+            Self::RemoteQuic => "verified remote Woven QUIC node",
         }
     }
 }

@@ -12,7 +12,14 @@ Weaver needs a self-contained local development path while preserving the Woven 
 
 `weaver-woven` implements `EmbeddedLocalNode`. It starts Woven's development composition on ephemeral loopback ports and connects through the official native `WVN1` QUIC client. Woven provisions the development namespace/session/space/channel definitions and assigns the client entity during subscription.
 
-`Remote` remains explicitly unsupported until it has an operator-supplied endpoint, credentials, capability discovery, and bounded lifecycle controls.
+At adoption, `Remote` remained unsupported pending an operator-supplied endpoint,
+credentials and bounded lifecycle controls. The subsequent `RemoteQuic` path now
+uses explicit CA trust, a file-supplied static token and the public verified QUIC
+client. The lab requires a 1–300 second deadline and bounded launch counts/rates;
+local modes retain their original development behavior. This first remote path
+targets the sibling server's fixed namespace/session/space/channel composition,
+not capability discovery or general production tenant provisioning. See the
+README's secure remote section for exact settings, safeguards and limitations.
 
 ## Consequences
 

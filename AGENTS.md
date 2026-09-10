@@ -40,7 +40,14 @@ Woven's development composition on ephemeral loopback ports and connects via
 its public `WVN1` QUIC client path. The server assigns the connection's entity
 when the client subscribes. `Loopback` connects to an explicitly configured
 local Woven node, allowing multiple Weaver processes to share a development
-session. Internet-facing remote targets remain unsupported.
+session. `RemoteQuic` is an explicit verified-TLS path using the sibling client's
+`ClientTlsConfig::from_ca_pem` and `Client::connect_with_tls`. It requires an
+explicit QUIC URL, bounded CA PEM/token files, and never falls back to development
+TLS or credentials. `woven-lab` remote/cloud selection additionally requires a
+1–300 second wall-clock duration; the launcher caps workers at 16 and rates at
+120 Hz per client. Remote network operations respect the lab deadline and a
+10-second per-operation timeout. See README for invocation and current limits;
+no cloud/shared-node validation is implied.
 
 Do not make unsupported modes appear to work, and do not couple Weaver to
 `woven-core` in-process. A real network integration uses Woven's

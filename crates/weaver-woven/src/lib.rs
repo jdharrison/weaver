@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod mode;
 pub mod payload;
+mod remote;
 
 pub use adapter::{WovenAdapter, WovenStatus};
 pub use config::WovenConfig;

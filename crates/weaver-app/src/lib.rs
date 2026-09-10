@@ -10,7 +10,9 @@ pub mod debug;
 pub mod error;
 pub mod event;
 pub mod headless;
+pub mod shutdown;
 pub mod world;
+pub use shutdown::ShutdownSignal;
 
 pub use app::{Application, ApplicationConfig, TitleStatusFn, TooltipFn};
 pub use error::AppError;

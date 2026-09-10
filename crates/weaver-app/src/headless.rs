@@ -9,6 +9,7 @@ use std::time::Duration;
 pub struct HeadlessApp {
     world: WeaverWorld,
     max_steps: Option<usize>,
+    shutdown_signal: crate::ShutdownSignal,
 }
 
 impl HeadlessApp {
@@ -21,6 +22,7 @@ impl HeadlessApp {
         Ok(Self {
             world: WeaverWorld::new(config)?,
             max_steps: None,
+            shutdown_signal: crate::ShutdownSignal::default(),
         })
     }
 
@@ -28,6 +30,13 @@ impl HeadlessApp {
     #[must_use]
     pub const fn with_max_steps(mut self, steps: usize) -> Self {
         self.max_steps = Some(steps);
+        self
+    }
+
+    /// Install a cooperative stop signal, checked before each simulation step.
+    #[must_use]
+    pub fn with_shutdown_signal(mut self, signal: crate::ShutdownSignal) -> Self {
+        self.shutdown_signal = signal;
         self
     }
 
@@ -39,7 +48,7 @@ impl HeadlessApp {
     pub fn run(&mut self) -> Result<(), AppError> {
         self.world.start();
         let mut steps = 0;
-        loop {
+        while !self.shutdown_signal.is_requested() {
             if let Some(max) = self.max_steps
                 && steps >= max
             {
@@ -86,6 +95,18 @@ impl HeadlessApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_headless_loop_does_not_step() {
+        let signal = crate::ShutdownSignal::default();
+        signal.request();
+        let mut app = HeadlessApp::new(WorldConfig::default())
+            .unwrap()
+            .with_shutdown_signal(signal);
+        let revision = app.world.revision();
+        app.run().unwrap();
+        assert_eq!(app.world.revision(), revision);
+    }
 
     #[test]
     fn headless_start_shutdown() {

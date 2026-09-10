@@ -1,4 +1,4 @@
-//! Woven network adapter backed by a local loopback development node.
+//! Woven network adapter using local development or verified remote QUIC.
 
 use crate::config::WovenConfig;
 use crate::error::WovenAdapterError;
@@ -23,6 +23,8 @@ pub enum WovenStatus {
     EmbeddedLocalNode,
     /// Connected to an externally started local Woven node over loopback QUIC.
     Loopback,
+    /// Connected using explicit CA trust and a file-supplied credential over QUIC.
+    RemoteQuic,
     /// The adapter encountered an error.
     Error(String),
 }
@@ -45,11 +47,7 @@ impl WovenAdapter {
     ///
     /// Returns an error when the requested connectivity mode is unsupported.
     pub fn new(config: WovenConfig) -> Result<Self, WovenAdapterError> {
-        if config.mode == ConnectivityMode::Loopback && config.endpoint.is_none() {
-            return Err(WovenAdapterError::InitializationFailed(
-                "loopback mode requires an endpoint".to_owned(),
-            ));
-        }
+        config.validate()?;
         Ok(Self {
             config,
             status: WovenStatus::Stopped,
@@ -73,7 +71,7 @@ impl WovenAdapter {
         self.entity_id
     }
 
-    /// Start Woven's local development composition and connect through its public QUIC endpoint.
+    /// Connect through the public QUIC protocol, starting a node only in embedded mode.
     ///
     /// # Errors
     ///
@@ -82,6 +80,11 @@ impl WovenAdapter {
         if self.client.is_some() {
             return Ok(());
         }
+        let remote = if self.config.mode == ConnectivityMode::RemoteQuic {
+            Some(crate::remote::load(&self.config)?)
+        } else {
+            None
+        };
         let runtime = Runtime::new()
             .map_err(|error| WovenAdapterError::InitializationFailed(error.to_string()))?;
         let (url, status) = match self.config.mode {
@@ -91,23 +94,35 @@ impl WovenAdapter {
                     .map_err(|error| WovenAdapterError::InitializationFailed(error.to_string()))?;
                 (urls.quic, WovenStatus::EmbeddedLocalNode)
             }
-            ConnectivityMode::Loopback => (
+            ConnectivityMode::Loopback | ConnectivityMode::RemoteQuic => (
                 self.config.endpoint.clone().ok_or_else(|| {
                     WovenAdapterError::InitializationFailed(
-                        "loopback mode requires an endpoint".to_owned(),
+                        "explicit mode requires an endpoint".to_owned(),
                     )
                 })?,
-                WovenStatus::Loopback,
+                if self.config.mode == ConnectivityMode::RemoteQuic {
+                    WovenStatus::RemoteQuic
+                } else {
+                    WovenStatus::Loopback
+                },
             ),
+        };
+        let (tls, token) = match remote {
+            Some((tls, token)) => (Some(tls), token),
+            None => (None, self.config.dev_token.clone()),
         };
         let client_config = ClientConfig {
             url,
-            token: self.config.dev_token.clone(),
+            token,
             max_frame_bytes: self.config.max_frame_bytes,
             max_payload_bytes: self.config.max_payload_bytes,
         };
-        let (client, entity_id) = runtime.block_on(async {
-            let mut client = Client::connect(client_config).await.map_err(client_error)?;
+        let (client, entity_id) = runtime.block_on(remote_operation(&self.config, async {
+            let mut client = match tls {
+                Some(tls) => Client::connect_with_tls(client_config, tls).await,
+                None => Client::connect(client_config).await,
+            }
+            .map_err(client_error)?;
             client
                 .join_session(self.config.namespace_id, self.config.session_id)
                 .await
@@ -125,7 +140,7 @@ impl WovenAdapter {
             expect_subscription(&mut client).await?;
             let entity_id = expect_entity_entered(&mut client).await?;
             Ok::<_, WovenAdapterError>((client, entity_id))
-        })?;
+        }))?;
 
         self.runtime = Some(runtime);
         self.client = Some(client);
@@ -207,36 +222,50 @@ impl WovenAdapter {
         let client = self.client.as_mut().ok_or(WovenAdapterError::NotRunning)?;
         let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let body = envelope.body_json.into_bytes();
-        let result = match (envelope.channel, envelope.delivery, envelope.persistence) {
-            (1, DeliveryClass::ReliableOrdered, PersistenceClass::Ephemeral) => {
-                runtime.block_on(client.publish_event(
-                    self.config.namespace_id,
-                    self.config.session_id,
-                    self.config.space_id,
-                    self.config.space_epoch,
-                    1,
-                    entity_id,
-                    envelope.sequence,
-                    1,
-                    body,
-                ))
-            }
-            (2, DeliveryClass::LatestValue, PersistenceClass::Stateful) => {
-                runtime.block_on(client.publish_state(
-                    self.config.namespace_id,
-                    self.config.session_id,
-                    self.config.space_id,
-                    self.config.space_epoch,
-                    2,
-                    entity_id,
-                    envelope.sequence,
-                    1,
-                    body,
-                ))
-            }
-            _ => return Err(WovenAdapterError::UnsupportedChannelPolicy),
-        };
-        result.map_err(client_error)?;
+        let result = runtime.block_on(remote_operation(&self.config, async {
+            let result = match (envelope.channel, envelope.delivery, envelope.persistence) {
+                (1, DeliveryClass::ReliableOrdered, PersistenceClass::Ephemeral) => {
+                    client
+                        .publish_event(
+                            self.config.namespace_id,
+                            self.config.session_id,
+                            self.config.space_id,
+                            self.config.space_epoch,
+                            1,
+                            entity_id,
+                            envelope.sequence,
+                            1,
+                            body,
+                        )
+                        .await
+                }
+                (2, DeliveryClass::LatestValue, PersistenceClass::Stateful) => {
+                    client
+                        .publish_state(
+                            self.config.namespace_id,
+                            self.config.session_id,
+                            self.config.space_id,
+                            self.config.space_epoch,
+                            2,
+                            entity_id,
+                            envelope.sequence,
+                            1,
+                            body,
+                        )
+                        .await
+                }
+                _ => return Err(WovenAdapterError::UnsupportedChannelPolicy),
+            };
+            result.map_err(client_error)
+        }));
+        if let Err(error) = &result
+            && self.config.mode == ConnectivityMode::RemoteQuic
+        {
+            // A cancelled write may be partial; do not reuse its stream or silently retry.
+            self.stop();
+            self.status = WovenStatus::Error(error.to_string());
+        }
+        result?;
         self.next_sequence
             .insert(envelope.channel, envelope.sequence);
 
@@ -253,10 +282,21 @@ impl WovenAdapter {
         let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let mut payloads = Vec::new();
         let mut entity_leaves = Vec::new();
-        while let Some(envelope) = runtime
-            .block_on(client.recv_timeout(Duration::from_millis(1)))
-            .map_err(client_error)?
-        {
+        let max_messages = if self.config.mode == ConnectivityMode::RemoteQuic {
+            128
+        } else {
+            usize::MAX
+        };
+        for _ in 0..max_messages {
+            let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
+                client
+                    .recv_timeout(Duration::from_millis(1))
+                    .await
+                    .map_err(client_error)
+            }))?
+            else {
+                break;
+            };
             if matches!(
                 &envelope.message,
                 MessagePayload::Control(ControlPayload::EntityLeft(_))
@@ -327,6 +367,32 @@ impl Drop for WovenAdapter {
     }
 }
 
+async fn remote_operation<T>(
+    config: &WovenConfig,
+    operation: impl std::future::Future<Output = Result<T, WovenAdapterError>>,
+) -> Result<T, WovenAdapterError> {
+    if config.mode != ConnectivityMode::RemoteQuic {
+        return operation.await;
+    }
+    let limit = config
+        .run_deadline
+        .map_or(Duration::from_secs(10), |deadline| {
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .min(Duration::from_secs(10))
+        });
+    if limit.is_zero() {
+        return Err(WovenAdapterError::ClientFailed(
+            "remote run deadline elapsed".to_owned(),
+        ));
+    }
+    tokio::time::timeout(limit, operation).await.map_err(|_| {
+        WovenAdapterError::ClientFailed(
+            "remote operation timed out or run deadline elapsed".to_owned(),
+        )
+    })?
+}
+
 async fn expect_subscription(client: &mut Client) -> Result<(), WovenAdapterError> {
     match client.recv().await.map_err(client_error)?.message {
         MessagePayload::Control(ControlPayload::SubscriptionAccepted(_)) => Ok(()),
@@ -359,12 +425,55 @@ async fn expect_entity_entered(client: &mut Client) -> Result<u64, WovenAdapterE
     reason = "used point-free as map_err(client_error), which requires FnOnce(E)"
 )]
 fn client_error(error: woven_client::ClientError) -> WovenAdapterError {
-    WovenAdapterError::ClientFailed(error.to_string())
+    // Transport close reasons and handshake diagnostics can contain peer-supplied text.
+    let message = match error {
+        woven_client::ClientError::Transport(_) => {
+            "transport/TLS failure (details redacted)".to_owned()
+        }
+        woven_client::ClientError::HandshakeFailed(_) => {
+            "handshake failed (details redacted)".to_owned()
+        }
+        woven_client::ClientError::UnsupportedScheme(_) => "unsupported URL scheme".to_owned(),
+        other => other.to_string(),
+    };
+    WovenAdapterError::ClientFailed(message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_deadline_prevents_polling_operation() {
+        let config = WovenConfig {
+            mode: ConnectivityMode::RemoteQuic,
+            run_deadline: Some(std::time::Instant::now()),
+            ..WovenConfig::default()
+        };
+        let runtime = Runtime::new().unwrap();
+        let result: Result<(), _> = runtime.block_on(remote_operation(&config, async {
+            panic!("expired remote operation must not be polled");
+        }));
+        assert!(result.is_err());
+        assert!(
+            !client_error(woven_client::ClientError::Transport("secret".into()))
+                .to_string()
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn remote_deadline_cancels_pending_operation() {
+        let config = WovenConfig {
+            mode: ConnectivityMode::RemoteQuic,
+            run_deadline: Some(std::time::Instant::now() + Duration::from_millis(10)),
+            ..WovenConfig::default()
+        };
+        let runtime = Runtime::new().unwrap();
+        let result: Result<(), _> =
+            runtime.block_on(remote_operation(&config, std::future::pending()));
+        assert!(result.is_err());
+    }
 
     #[test]
     fn local_node_startup_shutdown() {
