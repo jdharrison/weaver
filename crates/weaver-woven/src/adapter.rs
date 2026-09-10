@@ -13,6 +13,7 @@ use woven_client::{Client, ClientConfig};
 use woven_protocol::{ControlPayload, MessagePayload};
 
 const MAX_PENDING_ENTITY_LEAVES: usize = 1_024;
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Current status of the Woven adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -150,12 +151,35 @@ impl WovenAdapter {
         Ok(())
     }
 
-    /// Stop the protocol client and its local Woven runtime.
+    /// Stop the client, allowing up to two seconds for transport close before
+    /// shutting down its runtime, independently of the configured run deadline.
+    ///
+    /// This synchronous method blocks the caller, including in a Tokio context;
+    /// async callers should offload it to `spawn_blocking` to remain responsive.
+    /// It does not guarantee peer receipt or delivery of pending application data.
     pub fn stop(&mut self) {
-        if let Some(client) = self.client.take() {
+        let client = self.client.take();
+        if let Some(runtime) = self.runtime.take() {
+            // Neither nested block_on nor dropping a runtime in an async context
+            // is safe. A joined thread also supports current-thread Tokio callers.
+            if tokio::runtime::Handle::try_current().is_ok() {
+                std::thread::scope(|scope| {
+                    if scope
+                        .spawn(move || shutdown_client(runtime, client))
+                        .join()
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            "Woven shutdown thread panicked; peer cleanup is not confirmed"
+                        );
+                    }
+                });
+            } else {
+                shutdown_client(runtime, client);
+            }
+        } else if let Some(client) = client {
             let _ = client.close();
         }
-        self.runtime = None;
         self.entity_id = None;
         self.next_sequence.clear();
         self.entity_leaves.clear();
@@ -367,6 +391,21 @@ impl Drop for WovenAdapter {
     }
 }
 
+fn shutdown_client(runtime: Runtime, client: Option<Client>) {
+    if let Some(client) = client {
+        // Cleanup must still run after the traffic deadline has expired.
+        if runtime
+            .block_on(client.close_gracefully(CLOSE_TIMEOUT))
+            .is_err()
+        {
+            tracing::warn!("Woven transport close timed out; peer cleanup is not confirmed");
+        }
+    }
+    // Abort remaining tasks (including an embedded node) without an unbounded
+    // runtime drop wait. The transport has already received its separate budget.
+    runtime.shutdown_background();
+}
+
 async fn remote_operation<T>(
     config: &WovenConfig,
     operation: impl std::future::Future<Output = Result<T, WovenAdapterError>>,
@@ -438,6 +477,10 @@ fn client_error(error: woven_client::ClientError) -> WovenAdapterError {
     };
     WovenAdapterError::ClientFailed(message)
 }
+
+#[cfg(test)]
+#[path = "shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

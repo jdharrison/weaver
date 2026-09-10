@@ -14,7 +14,8 @@ pub struct WovenConfig {
     pub ca_pem_file: Option<PathBuf>,
     /// Static credential file path, required in remote mode; no development fallback.
     pub token_file: Option<PathBuf>,
-    /// Optional monotonic deadline for remote network operations (not a hard process kill).
+    /// Optional monotonic deadline for remote traffic operations (not a hard process kill).
+    /// Stop/Drop cleanup has its own two-second transport-close budget after this deadline.
     pub run_deadline: Option<std::time::Instant>,
     /// Namespace identifier.
     pub namespace_id: u64,

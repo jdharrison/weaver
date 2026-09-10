@@ -31,6 +31,31 @@ struct CubeState {
     angular_speed: f32,
     published_at_seconds: f64,
     tick: u64,
+    #[serde(default = "default_publish_rate_hz")]
+    publish_rate_hz: f64,
+}
+
+fn default_publish_rate_hz() -> f64 {
+    10.0
+}
+
+fn valid_rate(rate_hz: f64) -> bool {
+    rate_hz.is_finite() && rate_hz > 0.0 && rate_hz <= 120.0
+}
+
+fn valid_state(state: &CubeState) -> bool {
+    valid_rate(state.publish_rate_hz)
+        && state.rotation_radians.is_finite()
+        && state.angular_speed.is_finite()
+        && (0.0..=20.0).contains(&state.angular_speed)
+        && state.published_at_seconds.is_finite()
+        && state.published_at_seconds >= 0.0
+}
+
+/// Three declared publish intervals, with a floor for jitter and a hard horizon
+/// even for extremely slow publishers. Older payloads use the lab's 10 Hz default.
+fn peer_timeout(rate_hz: f64) -> Duration {
+    Duration::from_secs_f64((3.0 / rate_hz).clamp(2.0, 30.0))
 }
 
 #[derive(Clone, Debug)]
@@ -96,7 +121,107 @@ impl LabView {
 struct ObservedCube {
     state: CubeState,
     displayed_rotation_radians: f32,
-    displayed_at_seconds: f64,
+    received_at: Instant,
+    displayed_at: Instant,
+    receipt_rotation_radians: f32,
+}
+
+impl ObservedCube {
+    fn new(state: &CubeState, now: Instant, wall_seconds: f64) -> Self {
+        let rotation = rotation_at(state, wall_seconds);
+        Self {
+            state: state.clone(),
+            displayed_rotation_radians: rotation,
+            received_at: now,
+            displayed_at: now,
+            receipt_rotation_radians: rotation,
+        }
+    }
+
+    fn is_stale(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.received_at) >= peer_timeout(self.state.publish_rate_hz)
+    }
+
+    fn advance(&mut self, now: Instant) {
+        let until = now.min(self.received_at + peer_timeout(self.state.publish_rate_hz));
+        let elapsed = until
+            .saturating_duration_since(self.displayed_at)
+            .as_secs_f32();
+        if elapsed == 0.0 {
+            return;
+        }
+        let predicted = (self.displayed_rotation_radians + elapsed * self.state.angular_speed)
+            .rem_euclid(std::f32::consts::TAU);
+        let age = until
+            .saturating_duration_since(self.received_at)
+            .as_secs_f32();
+        let desired = (self.receipt_rotation_radians + age * self.state.angular_speed)
+            .rem_euclid(std::f32::consts::TAU);
+        let maximum = MAX_ROTATION_CORRECTION_RADIANS_PER_SECOND * elapsed;
+        self.displayed_rotation_radians = (predicted
+            + shortest_rotation_delta(desired, predicted).clamp(-maximum, maximum))
+        .rem_euclid(std::f32::consts::TAU);
+        self.displayed_at = until;
+    }
+
+    fn receive(&mut self, state: &CubeState, now: Instant, wall_seconds: f64) {
+        // Finish the old bounded prediction before replacing its velocity. Never
+        // apply time spent frozen to a recovery correction or snap to the packet.
+        self.advance(now);
+        self.state = state.clone();
+        self.received_at = now;
+        self.displayed_at = now;
+        self.receipt_rotation_radians = rotation_at(state, wall_seconds);
+    }
+}
+
+impl LabView {
+    fn receive_peer(
+        &mut self,
+        entity: u64,
+        sequence: u64,
+        state: &CubeState,
+        now: Instant,
+        wall_seconds: f64,
+    ) -> bool {
+        if Some(entity) == self.local_woven_entity
+            || !valid_state(state)
+            || self
+                .received_sequences
+                .get(&entity)
+                .is_some_and(|old| sequence <= *old)
+            || self
+                .states
+                .get(&entity)
+                .is_some_and(|old| state.tick <= old.state.tick)
+        {
+            return false;
+        }
+        match self.states.get_mut(&entity) {
+            Some(current) => current.receive(state, now, wall_seconds),
+            None => {
+                self.states
+                    .insert(entity, ObservedCube::new(state, now, wall_seconds));
+            }
+        }
+        self.received_sequences.insert(entity, sequence);
+        self.metrics.peer_updates_received += 1;
+        true
+    }
+
+    fn forget_peer(&mut self, entity: u64) {
+        self.states.remove(&entity);
+        self.received_sequences.remove(&entity);
+    }
+
+    fn stale_peers(&self, now: Instant) -> usize {
+        self.states
+            .iter()
+            .filter(|(entity, observed)| {
+                Some(**entity) != self.local_woven_entity && observed.is_stale(now)
+            })
+            .count()
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -252,10 +377,7 @@ fn read_config() -> anyhow::Result<LabConfig> {
         .map(|value| value.parse())
         .transpose()?
         .unwrap_or(10.0_f64);
-    anyhow::ensure!(
-        rate_hz.is_finite() && rate_hz > 0.0 && rate_hz <= 120.0,
-        "WOVEN_LAB_RATE_HZ must be in 0..=120"
-    );
+    anyhow::ensure!(valid_rate(rate_hz), "WOVEN_LAB_RATE_HZ must be in 0..=120");
     let minimum_steps_per_second = rate_hz.ceil() as u32;
     let steps_per_second = std::env::var("WOVEN_LAB_STEPS_PER_SECOND")
         .ok()
@@ -349,6 +471,7 @@ fn update(world: &mut WeaverWorld, time: f64, config: &LabConfig, view: &Mutex<L
             angular_speed: config.angular_speed,
             published_at_seconds,
             tick: view.tick,
+            publish_rate_hz: config.rate_hz,
         };
         let payload = Payload {
             body: state.clone(),
@@ -394,7 +517,11 @@ fn update(world: &mut WeaverWorld, time: f64, config: &LabConfig, view: &Mutex<L
     let local_woven_entity = world
         .woven()
         .and_then(weaver_woven::WovenAdapter::entity_id);
+    view.local_woven_entity = local_woven_entity;
     for envelope in world.replicated_payloads().to_vec() {
+        if envelope.channel != STATE_CHANNEL {
+            continue;
+        }
         let Some(woven_entity) = envelope.entity else {
             continue;
         };
@@ -413,25 +540,20 @@ fn update(world: &mut WeaverWorld, time: f64, config: &LabConfig, view: &Mutex<L
             }
             continue;
         }
-        if view
-            .received_sequences
-            .get(&woven_entity)
-            .is_some_and(|sequence| *sequence >= envelope.sequence)
-        {
-            continue;
-        }
         let Ok(state) = serde_json::from_str::<CubeState>(&envelope.body_json) else {
             continue;
         };
-        view.received_sequences
-            .insert(woven_entity, envelope.sequence);
-        view.metrics.peer_updates_received += 1;
-        apply_cube_state(world, &mut view, woven_entity, &state);
+        view.receive_peer(
+            woven_entity,
+            envelope.sequence,
+            &state,
+            Instant::now(),
+            unix_time_seconds(),
+        );
     }
 
-    // Animation is derived from the timestamped state, not packet arrival time.
-    // This keeps all windows smooth between publishes and compensates local latency.
-    layout_cubes(world, &mut view, unix_time_seconds());
+    // Wall time compensates packet latency once; monotonic time bounds prediction.
+    layout_cubes(world, &mut view, Instant::now());
     report_metrics(&mut view, config.rate_hz);
 }
 
@@ -475,8 +597,9 @@ fn report_metrics(view: &mut LabView, rate_hz: f64) {
     let peer_updates_per_second = view.metrics.peer_updates_received as f64 / seconds;
     let server_confirms_per_second = view.metrics.server_confirms as f64 / seconds;
     let confirm_status = confirm_status(&view.metrics, rate_hz, server_confirms_per_second);
+    let stale_peers = view.stale_peers(Instant::now());
     view.metrics.summary = format!(
-        "pub {publish_accepted_per_second:.0}/{publish_attempts_per_second:.0} Hz | {confirm_status} | recv {peer_updates_per_second:.0} Hz | active {} | errors {}",
+        "pub {publish_accepted_per_second:.0}/{publish_attempts_per_second:.0} Hz | {confirm_status} | recv {peer_updates_per_second:.0} Hz | active {} | stale {stale_peers} | errors {}",
         view.states.len(),
         view.metrics.publish_errors,
     );
@@ -489,6 +612,7 @@ fn report_metrics(view: &mut LabView, rate_hz: f64) {
         server_confirms_per_second,
         last_confirmed_sequence = view.metrics.last_confirmed_sequence,
         active_entities = view.states.len(),
+        stale_peers,
         "woven_lab_metrics"
     );
     view.metrics.window_started_at = Instant::now();
@@ -505,33 +629,22 @@ fn apply_cube_state(
     woven_entity: u64,
     state: &CubeState,
 ) {
-    let now_seconds = unix_time_seconds();
-    match view.states.get_mut(&woven_entity) {
-        Some(current) if state.tick >= current.state.tick => current.state = state.clone(),
-        Some(_) => {}
-        None => {
-            view.states.insert(
-                woven_entity,
-                ObservedCube {
-                    state: state.clone(),
-                    displayed_rotation_radians: rotation_at(state, now_seconds),
-                    displayed_at_seconds: now_seconds,
-                },
-            );
-        }
-    }
-    layout_cubes(world, view, now_seconds);
+    let now = Instant::now();
+    view.states.insert(
+        woven_entity,
+        ObservedCube::new(state, now, unix_time_seconds()),
+    );
+    layout_cubes(world, view, now);
 }
 
 fn release_cube(world: &mut WeaverWorld, view: &mut LabView, woven_entity: u64) {
-    if view.states.remove(&woven_entity).is_some() {
-        layout_cubes(world, view, unix_time_seconds());
-    }
+    view.forget_peer(woven_entity);
+    layout_cubes(world, view, Instant::now());
 }
 
 /// Keep every window's grid stable even if protocol messages arrive in a
 /// different order: cells are always assigned by ascending server entity ID.
-fn layout_cubes(world: &mut WeaverWorld, view: &mut LabView, now_seconds: f64) {
+fn layout_cubes(world: &mut WeaverWorld, view: &mut LabView, now: Instant) {
     for cell in &view.cells {
         set_idle_cube(world, *cell);
     }
@@ -544,8 +657,13 @@ fn layout_cubes(world: &mut WeaverWorld, view: &mut LabView, now_seconds: f64) {
             );
             break;
         };
+        let stale = Some(*woven_entity) != view.local_woven_entity && observed.is_stale(now);
         if let Some(renderable) = world.get_mut(cell) {
-            renderable.label = Some(format!("#{}\n{}", woven_entity, observed.state.client));
+            let status = if stale { " (stale)" } else { "" };
+            renderable.label = Some(format!(
+                "#{}\n{}{status}",
+                woven_entity, observed.state.client
+            ));
             if let Some(mesh) = renderable.mesh.as_mut() {
                 if Some(*woven_entity) == view.local_woven_entity {
                     // `Instant` never moves backwards or jumps forward when the
@@ -556,29 +674,20 @@ fn layout_cubes(world: &mut WeaverWorld, view: &mut LabView, now_seconds: f64) {
                             * f64::from(observed.state.angular_speed))
                         .rem_euclid(f64::from(std::f32::consts::TAU)))
                             as f32;
-                    observed.displayed_at_seconds = now_seconds;
+                    observed.displayed_at = now;
                 } else {
-                    let elapsed_seconds =
-                        (now_seconds - observed.displayed_at_seconds).max(0.0) as f32;
-                    let predicted_rotation = (observed.displayed_rotation_radians
-                        + elapsed_seconds * observed.state.angular_speed)
-                        .rem_euclid(std::f32::consts::TAU);
-                    let desired_rotation = rotation_at(&observed.state, now_seconds);
-                    let correction = shortest_rotation_delta(desired_rotation, predicted_rotation);
-                    let maximum_correction =
-                        MAX_ROTATION_CORRECTION_RADIANS_PER_SECOND * elapsed_seconds;
-                    let rotation = predicted_rotation
-                        + correction.clamp(-maximum_correction, maximum_correction);
-                    observed.displayed_rotation_radians =
-                        rotation.rem_euclid(std::f32::consts::TAU);
-                    observed.displayed_at_seconds = now_seconds;
+                    observed.advance(now);
                 }
                 mesh.transform.rotation = Quat::from_axis_angle(
                     Vec3::new(0.35, 1.0, 0.2).normalize(),
                     observed.displayed_rotation_radians,
                 );
-                mesh.color = color_for(*woven_entity);
-                mesh.emissive = 0.28;
+                mesh.color = if stale {
+                    [0.38, 0.4, 0.44, 1.0]
+                } else {
+                    color_for(*woven_entity)
+                };
+                mesh.emissive = if stale { 0.04 } else { 0.28 };
             }
         }
     }
@@ -603,9 +712,12 @@ fn unix_time_seconds() -> f64 {
 }
 
 fn rotation_at(state: &CubeState, now_seconds: f64) -> f32 {
-    let elapsed_seconds = (now_seconds - state.published_at_seconds).max(0.0) as f32;
-    (state.rotation_radians + elapsed_seconds * state.angular_speed)
-        .rem_euclid(std::f32::consts::TAU)
+    // Clamp wall-clock compensation too: delayed packets or clock skew cannot
+    // introduce an unbounded extrapolation, and f64 arithmetic avoids f32 overflow.
+    let elapsed_seconds = (now_seconds - state.published_at_seconds)
+        .clamp(0.0, peer_timeout(state.publish_rate_hz).as_secs_f64());
+    (f64::from(state.rotation_radians) + elapsed_seconds * f64::from(state.angular_speed))
+        .rem_euclid(f64::from(std::f32::consts::TAU)) as f32
 }
 
 fn shortest_rotation_delta(target: f32, current: f32) -> f32 {
@@ -734,6 +846,168 @@ mod tests {
             let error = validate_target(Some(target)).unwrap_err().to_string();
             assert!(error.contains("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"));
         }
+    }
+
+    fn state(rate: f64, tick: u64) -> CubeState {
+        CubeState {
+            client: "peer".to_owned(),
+            rotation_radians: 0.0,
+            angular_speed: 1.0,
+            published_at_seconds: 100.0,
+            tick,
+            publish_rate_hz: rate,
+        }
+    }
+
+    #[test]
+    fn timeout_tracks_cadence_with_a_floor_and_hard_cap() {
+        for (rate, seconds) in [(120.0, 2), (10.0, 2), (1.0, 3), (0.2, 15), (0.01, 30)] {
+            let now = Instant::now();
+            let cube = ObservedCube::new(&state(rate, 1), now, 100.0);
+            let timeout = Duration::from_secs(seconds);
+            assert_eq!(peer_timeout(rate), timeout);
+            assert!(
+                !cube.is_stale(
+                    (now + timeout)
+                        .checked_sub(Duration::from_nanos(1))
+                        .unwrap()
+                )
+            );
+            assert!(cube.is_stale(now + timeout));
+        }
+        assert_eq!(peer_timeout(f64::MIN_POSITIVE), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn expiry_freezes_at_horizon_even_after_a_long_frame_gap() {
+        let now = Instant::now();
+        let mut cube = ObservedCube::new(&state(10.0, 1), now, 100.0);
+        cube.advance(now + Duration::from_millis(500));
+        assert_eq!(cube.displayed_rotation_radians, 0.5);
+        cube.advance(now + Duration::from_secs(50));
+        assert_eq!(cube.displayed_rotation_radians, 2.0);
+        for seconds in [51, 100, 1000] {
+            cube.advance(now + Duration::from_secs(seconds));
+            assert_eq!(cube.displayed_rotation_radians, 2.0);
+            assert!(cube.is_stale(now + Duration::from_secs(seconds)));
+        }
+    }
+
+    #[test]
+    fn cached_delayed_and_old_updates_do_not_refresh_or_count() {
+        let now = Instant::now();
+        let mut view = LabView::new();
+        // An old sender timestamp is not a freshness clock. Only the first
+        // locally observed new sequence/tick earns a bounded receipt window.
+        let first = state(10.0, 10);
+        assert!(view.receive_peer(7, 11, &first, now, 1000.0));
+        for seconds in [1, 3, 10, 100] {
+            let later = now + Duration::from_secs(seconds);
+            assert!(!view.receive_peer(7, 11, &first, later, 1000.0));
+            assert!(!view.receive_peer(7, 12, &first, later, 1000.0));
+            assert!(!view.receive_peer(7, 10, &state(10.0, 11), later, 1000.0));
+            assert!(!view.receive_peer(7, 12, &state(10.0, 9), later, 1000.0));
+            assert_eq!(view.states[&7].received_at, now);
+        }
+        assert_eq!(view.stale_peers(now + Duration::from_secs(100)), 1);
+        assert_eq!(view.metrics.peer_updates_received, 1);
+        assert_eq!(view.received_sequences[&7], 11);
+    }
+
+    #[test]
+    fn newer_state_recovers_without_snap_or_frozen_time_correction() {
+        let now = Instant::now();
+        let mut view = LabView::new();
+        assert!(view.receive_peer(7, 1, &state(10.0, 1), now, 100.0));
+        let recovery = now + Duration::from_secs(100);
+        view.states.get_mut(&7).unwrap().advance(recovery);
+        let frozen = view.states[&7].displayed_rotation_radians;
+        let mut next = state(1.0, 2);
+        next.rotation_radians = 4.0;
+        next.angular_speed = 0.0;
+        assert!(view.receive_peer(7, 2, &next, recovery, 100.0));
+        assert_eq!(view.stale_peers(recovery), 0);
+        let cube = view.states.get_mut(&7).unwrap();
+        cube.advance(recovery);
+        assert_eq!(cube.displayed_rotation_radians, frozen);
+        cube.advance(recovery + Duration::from_millis(100));
+        let correction = shortest_rotation_delta(cube.displayed_rotation_radians, frozen);
+        assert!(correction > 0.0 && correction <= 0.100_001);
+        assert!(!cube.is_stale(recovery + Duration::from_secs(2)));
+        assert!(cube.is_stale(recovery + Duration::from_secs(3)));
+        assert_eq!(view.metrics.peer_updates_received, 2);
+    }
+
+    #[test]
+    fn old_payload_defaults_and_invalid_numbers_are_rejected_without_refresh() {
+        let old = r#"{"client":"old","rotation_radians":0.0,"angular_speed":1.0,"published_at_seconds":100.0,"tick":1}"#;
+        let decoded: CubeState = serde_json::from_str(old).unwrap();
+        assert_eq!(decoded.publish_rate_hz, 10.0);
+        assert!(valid_state(&decoded));
+        let now = Instant::now();
+        let mut view = LabView::new();
+        assert!(view.receive_peer(7, 1, &decoded, now, 100.0));
+        let mut invalid = Vec::new();
+        for rate in [0.0, -1.0, 121.0, f64::NAN, f64::INFINITY] {
+            invalid.push(state(rate, 2));
+        }
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut next = state(10.0, 2);
+            next.rotation_radians = value;
+            invalid.push(next);
+        }
+        for value in [-1.0, 21.0, f32::NAN, f32::INFINITY] {
+            let mut next = state(10.0, 2);
+            next.angular_speed = value;
+            invalid.push(next);
+        }
+        for value in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut next = state(10.0, 2);
+            next.published_at_seconds = value;
+            invalid.push(next);
+        }
+        for next in invalid {
+            assert!(!view.receive_peer(7, 2, &next, now + Duration::from_secs(10), 100.0));
+        }
+        assert_eq!(view.states[&7].received_at, now);
+        assert_eq!(view.received_sequences[&7], 1);
+        assert_eq!(view.metrics.peer_updates_received, 1);
+        let mut extreme = state(10.0, 2);
+        extreme.rotation_radians = f32::MAX;
+        assert!(rotation_at(&extreme, f64::MAX).is_finite());
+        extreme.published_at_seconds = f64::MAX;
+        assert!(rotation_at(&extreme, 100.0).is_finite());
+    }
+
+    #[test]
+    fn stale_peers_stay_assigned_until_departure_cleans_state_and_sequence() {
+        let now = Instant::now();
+        let mut view = LabView::new();
+        assert!(view.receive_peer(7, 1, &state(10.0, 1), now, 100.0));
+        assert!(view.receive_peer(8, 1, &state(10.0, 1), now, 100.0));
+        assert_eq!(view.stale_peers(now + Duration::from_secs(10)), 2);
+        assert_eq!(view.states.keys().copied().collect::<Vec<_>>(), vec![7, 8]);
+        view.forget_peer(7);
+        view.forget_peer(7);
+        assert!(!view.states.contains_key(&7));
+        assert!(!view.received_sequences.contains_key(&7));
+        assert!(view.states.contains_key(&8));
+        assert!(view.received_sequences.contains_key(&8));
+        assert_eq!(view.stale_peers(now + Duration::from_secs(10)), 1);
+    }
+
+    #[test]
+    fn local_cube_and_echoes_are_not_peer_freshness_or_receive_metrics() {
+        let now = Instant::now();
+        let mut view = LabView::new();
+        view.local_woven_entity = Some(7);
+        view.states
+            .insert(7, ObservedCube::new(&state(10.0, 1), now, 100.0));
+        assert!(!view.receive_peer(7, 2, &state(10.0, 2), now + Duration::from_secs(10), 100.0));
+        assert_eq!(view.stale_peers(now + Duration::from_secs(100)), 0);
+        assert_eq!(view.metrics.peer_updates_received, 0);
+        assert!(view.received_sequences.is_empty());
+        assert_eq!(view.states[&7].state.tick, 1);
     }
 
     fn metrics(last_confirm_at: Option<Instant>, last_confirmed_sequence: u64) -> LabMetrics {
