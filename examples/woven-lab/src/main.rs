@@ -19,7 +19,6 @@ use weaver_render_wgpu::Vertex;
 use weaver_worldline::{FrameId, SimulationClockConfig};
 use weaver_woven::{ConnectivityMode, DeliveryClass, Payload, PersistenceClass, WovenConfig};
 
-const STATE_CHANNEL: u64 = 2;
 const GRID_COLUMNS: usize = 4;
 const MAX_ROTATION_CORRECTION_RADIANS_PER_SECOND: f32 = 1.0;
 const MAX_PUBLISH_CATCH_UP_PER_UPDATE: u32 = 8;
@@ -66,6 +65,9 @@ struct LabConfig {
     rate_hz: f64,
     steps_per_second: u32,
     angular_speed: f32,
+    channel: u64,
+    delivery: DeliveryClass,
+    persistence: PersistenceClass,
     present_mode: wgpu::PresentMode,
 }
 
@@ -83,7 +85,7 @@ struct LabView {
 struct LabMetrics {
     window_started_at: Instant,
     publish_attempts: u64,
-    publish_accepted: u64,
+    publish_sent: u64,
     publish_errors: u64,
     peer_updates_received: u64,
     server_confirms: u64,
@@ -105,7 +107,7 @@ impl LabView {
             metrics: LabMetrics {
                 window_started_at: Instant::now(),
                 publish_attempts: 0,
-                publish_accepted: 0,
+                publish_sent: 0,
                 publish_errors: 0,
                 peer_updates_received: 0,
                 server_confirms: 0,
@@ -305,8 +307,11 @@ fn main() -> anyhow::Result<()> {
 fn validate_target(target: Option<&str>) -> anyhow::Result<ConnectivityMode> {
     match target.unwrap_or("local") {
         "local" => Ok(ConnectivityMode::Loopback),
+        "managed-local" => Ok(ConnectivityMode::ManagedQuic),
         "remote" | "cloud" => Ok(ConnectivityMode::RemoteQuic),
-        _ => anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"),
+        _ => {
+            anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `managed-local`, `remote` or `cloud`")
+        }
     }
 }
 
@@ -334,7 +339,9 @@ fn read_config() -> anyhow::Result<LabConfig> {
     let target = match std::env::var("WOVEN_LAB_TARGET") {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
-        Err(_) => anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"),
+        Err(_) => {
+            anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `managed-local`, `remote` or `cloud`")
+        }
     };
     let mode = validate_target(target.as_deref())?;
     let duration_value = std::env::var("WOVEN_LAB_DURATION_SECONDS").ok();
@@ -361,6 +368,26 @@ fn read_config() -> anyhow::Result<LabConfig> {
                 .into(),
         );
         woven.dev_token.clear();
+    } else if mode == ConnectivityMode::ManagedQuic {
+        woven.endpoint = Some(
+            std::env::var("WOVEN_LAB_MANAGED_URL")
+                .context("managed-local runs require WOVEN_LAB_MANAGED_URL")?,
+        );
+        woven.ca_pem_file = Some(
+            std::env::var_os("WOVEN_LAB_CA_PEM_FILE")
+                .context("managed-local runs require WOVEN_LAB_CA_PEM_FILE")?
+                .into(),
+        );
+        woven.token_file = Some(
+            std::env::var_os("WOVEN_LAB_TOKEN_FILE")
+                .context("managed-local runs require WOVEN_LAB_TOKEN_FILE")?
+                .into(),
+        );
+        woven.namespace_id = required_woven_id("WOVEN_LAB_NAMESPACE_ID")?;
+        woven.session_id = required_woven_id("WOVEN_LAB_SESSION_ID")?;
+        woven.space_id = 1;
+        woven.space_epoch = 1;
+        woven.dev_token.clear();
     } else {
         woven.endpoint = Some(std::env::var("WOVEN_LAB_URL").map_err(|_| {
             anyhow::anyhow!("set WOVEN_LAB_URL, for example quic://127.0.0.1:8081")
@@ -369,8 +396,11 @@ fn read_config() -> anyhow::Result<LabConfig> {
     woven.validate()?;
     let client_name = std::env::var("WOVEN_LAB_CLIENT").unwrap_or_else(|_| "lab".to_owned());
     anyhow::ensure!(
-        mode != ConnectivityMode::RemoteQuic || (1..=64).contains(&client_name.len()),
-        "remote WOVEN_LAB_CLIENT must contain 1..=64 UTF-8 bytes"
+        !matches!(
+            mode,
+            ConnectivityMode::ManagedQuic | ConnectivityMode::RemoteQuic
+        ) || (1..=64).contains(&client_name.len()),
+        "managed/remote WOVEN_LAB_CLIENT must contain 1..=64 UTF-8 bytes"
     );
     let rate_hz = std::env::var("WOVEN_LAB_RATE_HZ")
         .ok()
@@ -404,6 +434,15 @@ fn read_config() -> anyhow::Result<LabConfig> {
         angular_speed.is_finite() && (0.0..=20.0).contains(&angular_speed),
         "WOVEN_LAB_ANGULAR_SPEED must be in 0..=20"
     );
+    let (channel, delivery, persistence) = if mode == ConnectivityMode::ManagedQuic {
+        (
+            1,
+            DeliveryClass::ReliableOrdered,
+            PersistenceClass::Ephemeral,
+        )
+    } else {
+        (2, DeliveryClass::LatestValue, PersistenceClass::Stateful)
+    };
     Ok(LabConfig {
         woven,
         duration,
@@ -411,8 +450,27 @@ fn read_config() -> anyhow::Result<LabConfig> {
         rate_hz,
         steps_per_second,
         angular_speed,
+        channel,
+        delivery,
+        persistence,
         present_mode,
     })
+}
+
+fn required_woven_id(name: &str) -> anyhow::Result<u64> {
+    let value =
+        std::env::var(name).with_context(|| format!("managed-local runs require {name}"))?;
+    anyhow::ensure!(
+        !value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "{name} must be a canonical nonzero decimal identifier"
+    );
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value != 0)
+        .context(format!(
+            "{name} must be a canonical nonzero decimal identifier"
+        ))
 }
 
 fn lab_clock(config: &LabConfig) -> SimulationClockConfig {
@@ -480,14 +538,14 @@ fn update(world: &mut WeaverWorld, time: f64, config: &LabConfig, view: &Mutex<L
         };
         view.metrics.publish_attempts += 1;
         match world.publish(
-            STATE_CHANNEL,
+            config.channel,
             None,
             &payload,
-            DeliveryClass::LatestValue,
-            PersistenceClass::Stateful,
+            config.delivery,
+            config.persistence,
         ) {
             Ok(()) => {
-                view.metrics.publish_accepted += 1;
+                view.metrics.publish_sent += 1;
                 if let Some(entity) = world
                     .woven()
                     .and_then(weaver_woven::WovenAdapter::entity_id)
@@ -519,7 +577,7 @@ fn update(world: &mut WeaverWorld, time: f64, config: &LabConfig, view: &Mutex<L
         .and_then(weaver_woven::WovenAdapter::entity_id);
     view.local_woven_entity = local_woven_entity;
     for envelope in world.replicated_payloads().to_vec() {
-        if envelope.channel != STATE_CHANNEL {
+        if envelope.channel != config.channel {
             continue;
         }
         let Some(woven_entity) = envelope.entity else {
@@ -593,20 +651,20 @@ fn report_metrics(view: &mut LabView, rate_hz: f64) {
     }
     let seconds = elapsed.as_secs_f64();
     let publish_attempts_per_second = view.metrics.publish_attempts as f64 / seconds;
-    let publish_accepted_per_second = view.metrics.publish_accepted as f64 / seconds;
+    let publish_sent_per_second = view.metrics.publish_sent as f64 / seconds;
     let peer_updates_per_second = view.metrics.peer_updates_received as f64 / seconds;
     let server_confirms_per_second = view.metrics.server_confirms as f64 / seconds;
     let confirm_status = confirm_status(&view.metrics, rate_hz, server_confirms_per_second);
     let stale_peers = view.stale_peers(Instant::now());
     view.metrics.summary = format!(
-        "pub {publish_accepted_per_second:.0}/{publish_attempts_per_second:.0} Hz | {confirm_status} | recv {peer_updates_per_second:.0} Hz | active {} | stale {stale_peers} | errors {}",
+        "sent {publish_sent_per_second:.0}/{publish_attempts_per_second:.0} Hz | {confirm_status} | recv {peer_updates_per_second:.0} Hz | active {} | stale {stale_peers} | errors {}",
         view.states.len(),
         view.metrics.publish_errors,
     );
     tracing::info!(
         elapsed_seconds = view.started_at.elapsed().as_secs_f64(),
         publish_attempts_per_second,
-        publish_accepted_per_second,
+        publish_sent_per_second,
         publish_errors = view.metrics.publish_errors,
         peer_updates_per_second,
         server_confirms_per_second,
@@ -617,7 +675,7 @@ fn report_metrics(view: &mut LabView, rate_hz: f64) {
     );
     view.metrics.window_started_at = Instant::now();
     view.metrics.publish_attempts = 0;
-    view.metrics.publish_accepted = 0;
+    view.metrics.publish_sent = 0;
     view.metrics.publish_errors = 0;
     view.metrics.peer_updates_received = 0;
     view.metrics.server_confirms = 0;
@@ -812,6 +870,14 @@ mod tests {
     fn target_defaults_to_local_and_accepts_explicit_local() {
         assert!(validate_target(None).is_ok());
         assert!(validate_target(Some("local")).is_ok());
+        assert_eq!(
+            validate_target(Some("managed-local")).unwrap(),
+            ConnectivityMode::ManagedQuic
+        );
+        assert_eq!(
+            validate_duration(ConnectivityMode::ManagedQuic, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -844,7 +910,9 @@ mod tests {
     fn invalid_targets_are_rejected() {
         for target in ["", "web", "LOCAL", " local "] {
             let error = validate_target(Some(target)).unwrap_err().to_string();
-            assert!(error.contains("WOVEN_LAB_TARGET must be `local`, `remote` or `cloud`"));
+            assert!(error.contains(
+                "WOVEN_LAB_TARGET must be `local`, `managed-local`, `remote` or `cloud`"
+            ));
         }
     }
 
@@ -1014,7 +1082,7 @@ mod tests {
         LabMetrics {
             window_started_at: Instant::now(),
             publish_attempts: 0,
-            publish_accepted: 0,
+            publish_sent: 0,
             publish_errors: 0,
             peer_updates_received: 0,
             server_confirms: 0,

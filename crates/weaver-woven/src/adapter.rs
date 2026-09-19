@@ -9,11 +9,16 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
-use woven_client::{Client, ClientConfig};
-use woven_protocol::{ControlPayload, MessagePayload};
+use woven_client::{Client, ClientConfig, ManagedAdmissionOutcome};
+use woven_protocol::{
+    AdmissionRejectionCode, AdmissionStatus, AuthenticationScheme, ControlPayload, MessagePayload,
+    QueueState,
+};
 
 const MAX_PENDING_ENTITY_LEAVES: usize = 1_024;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Current status of the Woven adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,7 +29,9 @@ pub enum WovenStatus {
     EmbeddedLocalNode,
     /// Connected to an externally started local Woven node over loopback QUIC.
     Loopback,
-    /// Connected using explicit CA trust and a file-supplied credential over QUIC.
+    /// Connected to a Host-provisioned scope with verified TLS and Bearer admission.
+    ManagedQuic,
+    /// Connected using explicit CA trust and a file-supplied static credential over QUIC.
     RemoteQuic,
     /// The adapter encountered an error.
     Error(String),
@@ -81,7 +88,7 @@ impl WovenAdapter {
         if self.client.is_some() {
             return Ok(());
         }
-        let remote = if self.config.mode == ConnectivityMode::RemoteQuic {
+        let verified = if self.config.mode.uses_verified_tls() {
             Some(crate::remote::load(&self.config)?)
         } else {
             None
@@ -95,20 +102,26 @@ impl WovenAdapter {
                     .map_err(|error| WovenAdapterError::InitializationFailed(error.to_string()))?;
                 (urls.quic, WovenStatus::EmbeddedLocalNode)
             }
-            ConnectivityMode::Loopback | ConnectivityMode::RemoteQuic => (
-                self.config.endpoint.clone().ok_or_else(|| {
-                    WovenAdapterError::InitializationFailed(
-                        "explicit mode requires an endpoint".to_owned(),
-                    )
-                })?,
-                if self.config.mode == ConnectivityMode::RemoteQuic {
-                    WovenStatus::RemoteQuic
-                } else {
-                    WovenStatus::Loopback
-                },
-            ),
+            ConnectivityMode::Loopback
+            | ConnectivityMode::ManagedQuic
+            | ConnectivityMode::RemoteQuic => {
+                let status = match self.config.mode {
+                    ConnectivityMode::Loopback => WovenStatus::Loopback,
+                    ConnectivityMode::ManagedQuic => WovenStatus::ManagedQuic,
+                    ConnectivityMode::RemoteQuic => WovenStatus::RemoteQuic,
+                    ConnectivityMode::EmbeddedLocalNode => unreachable!(),
+                };
+                (
+                    self.config.endpoint.clone().ok_or_else(|| {
+                        WovenAdapterError::InitializationFailed(
+                            "explicit mode requires an endpoint".to_owned(),
+                        )
+                    })?,
+                    status,
+                )
+            }
         };
-        let (tls, token) = match remote {
+        let (tls, token) = match verified {
             Some((tls, token)) => (Some(tls), token),
             None => (None, self.config.dev_token.clone()),
         };
@@ -118,16 +131,47 @@ impl WovenAdapter {
             max_frame_bytes: self.config.max_frame_bytes,
             max_payload_bytes: self.config.max_payload_bytes,
         };
-        let (client, entity_id) = runtime.block_on(remote_operation(&self.config, async {
-            let mut client = match tls {
-                Some(tls) => Client::connect_with_tls(client_config, tls).await,
-                None => Client::connect(client_config).await,
+        let mut client = runtime.block_on(remote_operation(&self.config, async {
+            match (tls, self.config.mode) {
+                (Some(tls), ConnectivityMode::ManagedQuic) => {
+                    Client::connect_with_tls_and_auth(
+                        client_config,
+                        tls,
+                        AuthenticationScheme::Bearer,
+                    )
+                    .await
+                }
+                (Some(tls), ConnectivityMode::RemoteQuic) => {
+                    Client::connect_with_tls(client_config, tls).await
+                }
+                (None, _) => Client::connect(client_config).await,
+                (Some(_), _) => unreachable!("verified TLS is mode-validated"),
             }
-            .map_err(client_error)?;
-            client
-                .join_session(self.config.namespace_id, self.config.session_id)
-                .await
-                .map_err(client_error)?;
+            .map_err(client_error)
+        }))?;
+        if self.config.mode == ConnectivityMode::ManagedQuic {
+            let timeout = managed_admission_timeout(&self.config)?;
+            let key = managed_admission_key();
+            let (admitted, outcome) = runtime
+                .block_on(client.admit_with_cancellation(
+                    self.config.namespace_id,
+                    self.config.session_id,
+                    key,
+                    timeout,
+                    std::future::pending::<()>(),
+                ))
+                .map_err(admission_error)?;
+            ensure_managed_admitted(outcome)?;
+            client = admitted;
+        } else {
+            runtime.block_on(remote_operation(&self.config, async {
+                client
+                    .join_session(self.config.namespace_id, self.config.session_id)
+                    .await
+                    .map_err(client_error)
+            }))?;
+        }
+        let entity_id = runtime.block_on(remote_operation(&self.config, async {
             client
                 .subscribe_space(
                     self.config.namespace_id,
@@ -139,8 +183,7 @@ impl WovenAdapter {
                 .await
                 .map_err(client_error)?;
             expect_subscription(&mut client).await?;
-            let entity_id = expect_entity_entered(&mut client).await?;
-            Ok::<_, WovenAdapterError>((client, entity_id))
+            expect_entity_entered(&mut client).await
         }))?;
 
         self.runtime = Some(runtime);
@@ -220,18 +263,28 @@ impl WovenAdapter {
 
     /// Publish a pre-serialized envelope through the Woven client.
     ///
-    /// The local development node defines channel `1` as reliable/ephemeral and
-    /// channel `2` as latest-value/stateful. Other client-side policy combinations
-    /// are rejected rather than silently rewritten.
+    /// Managed mode permits only channel `1` as reliable/ephemeral. Development and
+    /// static remote modes also permit channel `2` as latest-value/stateful. Other
+    /// client-side policy combinations are rejected before any network write.
     ///
     /// # Errors
     ///
-    /// Returns an error if the adapter is not running, the sequence is stale, or Woven rejects it.
+    /// Returns an error if the adapter is not running, the sequence is stale, or the
+    /// local policy rejects it. Successful return means the frame was sent; asynchronous
+    /// server rejection is surfaced by [`Self::drain_envelopes`].
     pub fn publish_envelope(
         &mut self,
         entity: Option<u64>,
         envelope: PayloadEnvelope,
     ) -> Result<(), WovenAdapterError> {
+        if !supports_channel_policy(
+            self.config.mode,
+            envelope.channel,
+            envelope.delivery,
+            envelope.persistence,
+        ) {
+            return Err(WovenAdapterError::UnsupportedChannelPolicy);
+        }
         let last_sequence = self
             .next_sequence
             .get(&envelope.channel)
@@ -278,12 +331,12 @@ impl WovenAdapter {
                         )
                         .await
                 }
-                _ => return Err(WovenAdapterError::UnsupportedChannelPolicy),
+                _ => unreachable!("channel policy is validated before sending"),
             };
             result.map_err(client_error)
         }));
         if let Err(error) = &result
-            && self.config.mode == ConnectivityMode::RemoteQuic
+            && self.config.mode.uses_verified_tls()
         {
             // A cancelled write may be partial; do not reuse its stream or silently retry.
             self.stop();
@@ -306,7 +359,7 @@ impl WovenAdapter {
         let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let mut payloads = Vec::new();
         let mut entity_leaves = Vec::new();
-        let max_messages = if self.config.mode == ConnectivityMode::RemoteQuic {
+        let max_messages = if self.config.mode.uses_verified_tls() {
             128
         } else {
             usize::MAX
@@ -321,6 +374,10 @@ impl WovenAdapter {
             else {
                 break;
             };
+            if let MessagePayload::Control(ControlPayload::ProtocolError(error)) = &envelope.message
+            {
+                return Err(WovenAdapterError::ServerRejected(error.code));
+            }
             if matches!(
                 &envelope.message,
                 MessagePayload::Control(ControlPayload::EntityLeft(_))
@@ -410,7 +467,7 @@ async fn remote_operation<T>(
     config: &WovenConfig,
     operation: impl std::future::Future<Output = Result<T, WovenAdapterError>>,
 ) -> Result<T, WovenAdapterError> {
-    if config.mode != ConnectivityMode::RemoteQuic {
+    if !config.mode.uses_verified_tls() {
         return operation.await;
     }
     let limit = config
@@ -430,6 +487,111 @@ async fn remote_operation<T>(
             "remote operation timed out or run deadline elapsed".to_owned(),
         )
     })?
+}
+
+fn managed_admission_timeout(config: &WovenConfig) -> Result<Duration, WovenAdapterError> {
+    let timeout = config
+        .run_deadline
+        .map_or(DEFAULT_ADMISSION_TIMEOUT, |deadline| {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        });
+    let timeout = timeout.min(MAX_ADMISSION_TIMEOUT);
+    if timeout.is_zero() {
+        return Err(WovenAdapterError::ClientFailed(
+            "managed admission deadline elapsed".to_owned(),
+        ));
+    }
+    Ok(timeout)
+}
+
+fn managed_admission_key() -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("weaver-{}-{timestamp}", std::process::id())
+}
+
+fn supports_channel_policy(
+    mode: ConnectivityMode,
+    channel: u64,
+    delivery: DeliveryClass,
+    persistence: PersistenceClass,
+) -> bool {
+    matches!(
+        (channel, delivery, persistence),
+        (
+            1,
+            DeliveryClass::ReliableOrdered,
+            PersistenceClass::Ephemeral
+        )
+    ) || (mode != ConnectivityMode::ManagedQuic
+        && matches!(
+            (channel, delivery, persistence),
+            (2, DeliveryClass::LatestValue, PersistenceClass::Stateful)
+        ))
+}
+
+fn ensure_managed_admitted(outcome: ManagedAdmissionOutcome) -> Result<(), WovenAdapterError> {
+    match outcome {
+        ManagedAdmissionOutcome::Admission(result)
+            if result.status == AdmissionStatus::Admitted =>
+        {
+            Ok(())
+        }
+        ManagedAdmissionOutcome::Admission(result) => {
+            Err(WovenAdapterError::ManagedAdmissionFailed(
+                match (result.status, result.rejection_code) {
+                    (AdmissionStatus::Paused, _)
+                    | (AdmissionStatus::Rejected, AdmissionRejectionCode::ServerPaused) => {
+                        "server paused"
+                    }
+                    (AdmissionStatus::Rejected, AdmissionRejectionCode::QueueFull) => "queue full",
+                    (AdmissionStatus::Rejected, AdmissionRejectionCode::QueueDisabled) => {
+                        "queue disabled"
+                    }
+                    (AdmissionStatus::Rejected, AdmissionRejectionCode::AlreadyQueued) => {
+                        "already queued"
+                    }
+                    (AdmissionStatus::Rejected, AdmissionRejectionCode::InvalidIdempotencyKey) => {
+                        "invalid idempotency key"
+                    }
+                    (AdmissionStatus::Rejected, _) => "rejected",
+                    _ => "unexpected admission state",
+                },
+            ))
+        }
+        ManagedAdmissionOutcome::Queue(update) if update.state == QueueState::Admitted => Ok(()),
+        ManagedAdmissionOutcome::Queue(update) => Err(WovenAdapterError::ManagedAdmissionFailed(
+            match update.state {
+                QueueState::Cancelled => "queue cancelled",
+                QueueState::Expired => "queue expired",
+                QueueState::Missing => "queue ticket missing",
+                _ => "unexpected queue state",
+            },
+        )),
+    }
+}
+
+fn admission_error(error: woven_client::ClientError) -> WovenAdapterError {
+    match error {
+        woven_client::ClientError::Transport(message)
+            if message == "admission cancelled; connection closed" =>
+        {
+            WovenAdapterError::ManagedAdmissionFailed("cancelled")
+        }
+        woven_client::ClientError::Transport(message)
+            if message == "admission deadline exceeded; connection closed" =>
+        {
+            WovenAdapterError::ManagedAdmissionFailed("deadline exceeded")
+        }
+        woven_client::ClientError::Transport(message)
+            if message == "admission operation timed out; connection closed" =>
+        {
+            WovenAdapterError::ManagedAdmissionFailed("operation timed out")
+        }
+        other => client_error(other),
+    }
 }
 
 async fn expect_subscription(client: &mut Client) -> Result<(), WovenAdapterError> {
@@ -527,6 +689,47 @@ mod tests {
         assert!(adapter.entity_id().is_some());
         adapter.stop();
         assert_eq!(adapter.status(), WovenStatus::Stopped);
+    }
+
+    #[test]
+    fn managed_policy_and_admission_failures_are_classified_locally() {
+        assert!(!supports_channel_policy(
+            ConnectivityMode::ManagedQuic,
+            2,
+            DeliveryClass::LatestValue,
+            PersistenceClass::Stateful,
+        ));
+        assert!(supports_channel_policy(
+            ConnectivityMode::RemoteQuic,
+            2,
+            DeliveryClass::LatestValue,
+            PersistenceClass::Stateful,
+        ));
+        assert!(matches!(
+            ensure_managed_admitted(ManagedAdmissionOutcome::Admission(
+                woven_protocol::AdmissionResult {
+                    status: AdmissionStatus::Rejected,
+                    rejection_code: AdmissionRejectionCode::QueueFull,
+                    ticket_id: None,
+                    poll_after_ms: 0,
+                    ticket_remaining_ms: 0,
+                }
+            )),
+            Err(WovenAdapterError::ManagedAdmissionFailed("queue full"))
+        ));
+        assert!(matches!(
+            ensure_managed_admitted(ManagedAdmissionOutcome::Queue(
+                woven_protocol::QueueUpdate {
+                    ticket_id: 1,
+                    state: QueueState::Expired,
+                    position: 0,
+                    poll_after_ms: 0,
+                    ticket_remaining_ms: 0,
+                    offer_remaining_ms: 0,
+                }
+            )),
+            Err(WovenAdapterError::ManagedAdmissionFailed("queue expired"))
+        ));
     }
 
     #[test]

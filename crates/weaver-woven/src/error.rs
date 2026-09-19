@@ -18,8 +18,14 @@ pub enum WovenAdapterError {
     #[error("unexpected Woven protocol message: {0}")]
     UnexpectedMessage(String),
     /// The requested delivery/persistence combination is not supported by the configured channel.
-    #[error("channel policy is not supported by the embedded Woven development node")]
+    #[error("channel policy is not supported by the configured Woven mode")]
     UnsupportedChannelPolicy,
+    /// Managed admission ended with a safe, locally classified non-admitted result.
+    #[error("managed admission failed: {0}")]
+    ManagedAdmissionFailed(&'static str),
+    /// The server rejected an asynchronous protocol operation.
+    #[error("Woven server rejected an operation: {0:?}")]
+    ServerRejected(woven_protocol::ProtocolErrorCode),
     /// Serialization failed.
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),

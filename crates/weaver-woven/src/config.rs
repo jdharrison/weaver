@@ -8,13 +8,13 @@ use std::path::PathBuf;
 pub struct WovenConfig {
     /// Connectivity mode.
     pub mode: ConnectivityMode,
-    /// Explicit QUIC URL, required by loopback and remote modes. Never put credentials here.
+    /// Explicit QUIC URL, required by loopback, managed and remote modes. Never put credentials here.
     pub endpoint: Option<String>,
-    /// CA PEM bundle path, required in remote mode (at most 1 MiB).
+    /// CA PEM bundle path, required in managed and remote modes (at most 1 MiB).
     pub ca_pem_file: Option<PathBuf>,
-    /// Static credential file path, required in remote mode; no development fallback.
+    /// Credential file path, required in managed and remote modes; no development fallback.
     pub token_file: Option<PathBuf>,
-    /// Optional monotonic deadline for remote traffic operations (not a hard process kill).
+    /// Optional monotonic deadline for managed or remote traffic (not a hard process kill).
     /// Stop/Drop cleanup has its own two-second transport-close budget after this deadline.
     pub run_deadline: Option<std::time::Instant>,
     /// Namespace identifier.
@@ -57,11 +57,24 @@ impl WovenConfig {
             let endpoint = self.endpoint.as_deref().ok_or_else(|| {
                 InitializationFailed("explicit mode requires a QUIC endpoint".to_owned())
             })?;
-            if self.mode == ConnectivityMode::RemoteQuic {
+            if self.mode.uses_verified_tls() {
                 validate_endpoint(endpoint)?;
             }
         }
-        if self.mode == ConnectivityMode::RemoteQuic {
+        if self.mode == ConnectivityMode::ManagedQuic
+            && [
+                self.namespace_id,
+                self.session_id,
+                self.space_id,
+                self.space_epoch,
+            ]
+            .contains(&0)
+        {
+            return Err(InitializationFailed(
+                "managed scope identifiers must be nonzero".to_owned(),
+            ));
+        }
+        if self.mode.uses_verified_tls() {
             if self
                 .ca_pem_file
                 .as_ref()
@@ -72,12 +85,12 @@ impl WovenConfig {
                     .is_none_or(|path| path.as_os_str().is_empty())
             {
                 return Err(InitializationFailed(
-                    "remote QUIC requires CA PEM and token file paths".to_owned(),
+                    "verified QUIC requires CA PEM and token file paths".to_owned(),
                 ));
             }
         } else if self.ca_pem_file.is_some() || self.token_file.is_some() {
             return Err(InitializationFailed(
-                "remote credential paths require RemoteQuic mode".to_owned(),
+                "credential paths require ManagedQuic or RemoteQuic mode".to_owned(),
             ));
         }
         Ok(())
@@ -157,9 +170,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_requires_explicit_settings_and_quic() {
+    fn verified_modes_require_explicit_settings_and_quic() {
         assert!(WovenConfig::default().validate().is_ok());
         assert!(remote().validate().is_ok());
+        let managed = WovenConfig {
+            mode: ConnectivityMode::ManagedQuic,
+            ..remote()
+        };
+        assert!(managed.validate().is_ok());
+        assert!(
+            WovenConfig {
+                namespace_id: 0,
+                ..managed
+            }
+            .validate()
+            .is_err()
+        );
         for endpoint in ["quic://127.0.0.1:8081", "quic://[::1]:8081"] {
             assert!(
                 WovenConfig {

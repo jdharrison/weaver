@@ -5,18 +5,21 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: scripts/local/run-woven-labs.sh [local|remote|cloud] [count] [rate_hz]
+Usage: scripts/local/run-woven-labs.sh [local|managed-local|remote|cloud] [count] [rate_hz]
 
 Builds woven-lab once, then starts a bounded sequence of GUI clients.
 Start the shared Woven node separately, for example:
   cd ../woven && cargo run -p woven-server
 
 Configuration:
-  WOVEN_LAB_TARGET           local (default), remote, or cloud (remote alias)
+  WOVEN_LAB_TARGET           local (default), managed-local, remote, or cloud
+  WOVEN_LAB_MANAGED_URL      Managed local QUIC URL (default: quic://127.0.0.1:18082)
+  WOVEN_LAB_NAMESPACE_ID     Required managed-local namespace from Host Connect
+  WOVEN_LAB_SESSION_ID       Required managed-local session from Host Connect
   WOVEN_LAB_REMOTE_URL       Explicit verified remote quic://host:port; no default
   WOVEN_LAB_CLOUD_URL        Legacy URL alias accepted only with target cloud
-  WOVEN_LAB_CA_PEM_FILE      Required remote CA bundle file, maximum 1 MiB
-  WOVEN_LAB_TOKEN_FILE       Required remote token file, owner-only on Unix
+  WOVEN_LAB_CA_PEM_FILE      Required managed/remote CA bundle, maximum 1 MiB
+  WOVEN_LAB_TOKEN_FILE       Required managed/remote token file, owner-only on Unix
   WOVEN_LAB_DURATION_SECONDS Required remote per-client wall-clock cap, integer 1..300
   WOVEN_LAB_URL              Local QUIC URL (default: quic://127.0.0.1:8081)
   [count]                    Client count (default: 4, max: 16)
@@ -32,8 +35,10 @@ Configuration:
   WOVEN_LAB_ANGULAR_SPEED    Fallback speed when WOVEN_LAB_SPEEDS is unset (default: 1.0)
   WOVEN_LAB_DELAY_SECONDS    Delay between launches (default: 0.4, range: 0..10)
 
-Remote/shared traffic requires operator approval before invocation. No node is
-provisioned by this script. Missing remote settings fail before building/launching.
+Managed-local uses a product explicitly created in the local Host stack. Remote/shared
+traffic requires operator approval. This script never provisions a node or product;
+missing managed/remote settings fail before building or launching. The Rust client
+performs bounded content, TLS and owner-only token-permission validation after launch.
 Rates must be >0 and <=120 Hz per client; at most 16 clients are launched.
 Escape closes a window; Ctrl-C stops all launched clients. Headless mode only
 runs a short connection/step smoke check and DOES NOT publish lab traffic.
@@ -56,19 +61,44 @@ esac
 
 target="${WOVEN_LAB_TARGET-local}"
 case "${1:-}" in
-    local|remote|cloud)
+    local|managed-local|remote|cloud)
         target="$1"
         shift
         ;;
     ''|[0-9]*) ;;
     *)
-        echo "error: target must be local, remote or cloud (or omit it and supply a client count)" >&2
+        echo "error: target must be local, managed-local, remote or cloud (or omit it and supply a client count)" >&2
         exit 2
         ;;
 esac
 case "$target" in
     local)
         url="${WOVEN_LAB_URL:-quic://127.0.0.1:8081}"
+        ;;
+    managed-local)
+        url="${WOVEN_LAB_MANAGED_URL:-quic://127.0.0.1:18082}"
+        if [ -z "${WOVEN_LAB_NAMESPACE_ID:-}" ] || [ -z "${WOVEN_LAB_SESSION_ID:-}" ]; then
+            echo "error: managed-local target requires WOVEN_LAB_NAMESPACE_ID and WOVEN_LAB_SESSION_ID" >&2
+            exit 2
+        fi
+        case "$WOVEN_LAB_NAMESPACE_ID" in
+            0|0[0-9]*|*[!0-9]*)
+                echo "error: managed-local scope IDs must be canonical nonzero decimal identifiers" >&2
+                exit 2
+                ;;
+        esac
+        case "$WOVEN_LAB_SESSION_ID" in
+            0|0[0-9]*|*[!0-9]*)
+                echo "error: managed-local scope IDs must be canonical nonzero decimal identifiers" >&2
+                exit 2
+                ;;
+        esac
+        if [ ! -f "${WOVEN_LAB_CA_PEM_FILE:-}" ] || [ ! -r "${WOVEN_LAB_CA_PEM_FILE:-}" ] ||
+           [ ! -f "${WOVEN_LAB_TOKEN_FILE:-}" ] || [ ! -r "${WOVEN_LAB_TOKEN_FILE:-}" ]; then
+            echo "error: managed-local target requires readable WOVEN_LAB_CA_PEM_FILE and WOVEN_LAB_TOKEN_FILE regular files" >&2
+            exit 2
+        fi
+        export WOVEN_LAB_MANAGED_URL="$url"
         ;;
     remote|cloud)
         url="${WOVEN_LAB_REMOTE_URL:-}"
@@ -91,7 +121,7 @@ case "$target" in
         export WOVEN_LAB_REMOTE_URL="$url"
         ;;
     *)
-        echo "error: WOVEN_LAB_TARGET must be local, remote or cloud" >&2
+        echo "error: WOVEN_LAB_TARGET must be local, managed-local, remote or cloud" >&2
         exit 2
         ;;
 esac

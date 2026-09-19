@@ -22,6 +22,9 @@ class TargetSelectionTests(unittest.TestCase):
             binary.write_text(
                 '#!/bin/sh\nprintf "%s %s %s %s\\n" "$WOVEN_LAB_TARGET" '
                 '"$WOVEN_LAB_CLIENT" "$WOVEN_LAB_RATE_HZ" "$WOVEN_LAB_URL" >> calls\n'
+                'if [ "$WOVEN_LAB_TARGET" = managed-local ]; then '
+                'printf "managed-config %s %s %s\\n" "$WOVEN_LAB_MANAGED_URL" '
+                '"$WOVEN_LAB_NAMESPACE_ID" "$WOVEN_LAB_SESSION_ID" >> calls; fi\n'
             )
             binary.chmod(0o700)
             env = {key: value for key, value in os.environ.items()
@@ -32,6 +35,7 @@ class TargetSelectionTests(unittest.TestCase):
                 if overrides.get(variable) == "fixture":
                     path = root / variable
                     path.write_text("not a certificate or credential")
+                    path.chmod(0o600 if variable == "WOVEN_LAB_TOKEN_FILE" else 0o644)
                     overrides[variable] = str(path)
             env.update(overrides)
             result = subprocess.run(
@@ -74,6 +78,34 @@ class TargetSelectionTests(unittest.TestCase):
         result, calls = self.run_launcher(WOVEN_LAB_TARGET="local", WOVEN_LAB_COUNT="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, ["build", "local lab-1 10 quic://127.0.0.1:8081"])
+
+    def test_managed_local_requires_scope_and_files_then_uses_managed_endpoint(self):
+        self.assert_rejected(
+            ["managed-local"], message="requires WOVEN_LAB_NAMESPACE_ID",
+        )
+        base = dict(
+            WOVEN_LAB_NAMESPACE_ID="9007199254740993",
+            WOVEN_LAB_SESSION_ID="2",
+        )
+        self.assert_rejected(
+            ["managed-local"], message="readable WOVEN_LAB_CA_PEM_FILE", **base,
+        )
+        for invalid in ["0", "01", "-1", "1.5", "space id"]:
+            self.assert_rejected(
+                ["managed-local"], message="canonical nonzero decimal",
+                **(base | {"WOVEN_LAB_SESSION_ID": invalid}),
+            )
+        result, calls = self.run_launcher(
+            ["managed-local", "2", "10"], **base,
+            WOVEN_LAB_CA_PEM_FILE="fixture", WOVEN_LAB_TOKEN_FILE="fixture",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertCountEqual(calls[1:], [
+            "managed-local lab-1 10 quic://127.0.0.1:18082",
+            "managed-config quic://127.0.0.1:18082 9007199254740993 2",
+            "managed-local lab-2 10 quic://127.0.0.1:18082",
+            "managed-config quic://127.0.0.1:18082 9007199254740993 2",
+        ])
 
     def test_remote_missing_address_never_uses_local_url(self):
         for target in ["remote", "cloud"]:
@@ -119,9 +151,13 @@ class TargetSelectionTests(unittest.TestCase):
     def test_invalid_selection(self):
         for target in ["", "web", "LOCAL", " local "]:
             with self.subTest(target=target):
-                self.assert_rejected(message="WOVEN_LAB_TARGET must be local, remote or cloud",
-                                     WOVEN_LAB_TARGET=target)
-        self.assert_rejected(["web"], message="target must be local, remote or cloud")
+                self.assert_rejected(
+                    message="WOVEN_LAB_TARGET must be local, managed-local, remote or cloud",
+                    WOVEN_LAB_TARGET=target,
+                )
+        self.assert_rejected(
+            ["web"], message="target must be local, managed-local, remote or cloud"
+        )
 
     def test_invalid_count_and_extra_arguments(self):
         for args in [["local", "0"], ["local", "17"], ["local", "bad"],
@@ -132,7 +168,7 @@ class TargetSelectionTests(unittest.TestCase):
     def test_help_does_not_build(self):
         result, calls = self.run_launcher(["--help"], WOVEN_LAB_TARGET="cloud")
         self.assertEqual(result.returncode, 0)
-        self.assertIn("[local|remote|cloud] [count] [rate_hz]", result.stdout)
+        self.assertIn("[local|managed-local|remote|cloud] [count] [rate_hz]", result.stdout)
         self.assertEqual(calls, [])
 
 

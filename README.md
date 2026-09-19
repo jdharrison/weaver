@@ -51,8 +51,9 @@ Controls:
 
 ## Woven Lab
 
-`woven-lab` is a multi-client replication visualizer, local by default with an
-opt-in verified remote QUIC path. For local development, start a single
+`woven-lab` is a multi-client replication visualizer with development, Host-managed
+local, and opt-in verified remote native QUIC paths. All Woven crates resolve from
+the sibling `../woven` checkout. For development mode, start a single
 local Woven node from the sibling checkout:
 
 ```bash
@@ -90,7 +91,7 @@ node run:
 scripts/local/run-woven-labs.sh 5 30
 ```
 
-The arguments are `[local|remote|cloud] [count] [rate_hz]`; the target defaults to
+The arguments are `[local|managed-local|remote|cloud] [count] [rate_hz]`; the target defaults to
 `WOVEN_LAB_TARGET` or `local` when unset. An explicit first target argument
 wins over the environment. The legacy `5 30` form above still builds once and
 starts five GUI clients at `30 Hz` with a `0.4` second interval; explicit
@@ -108,11 +109,60 @@ WOVEN_LAB_DELAY_SECONDS=0.25 \
 Run `scripts/local/run-woven-labs.sh --help` for all controls. The script does
 not start, configure, or stop the Woven node; it only launches lab windows.
 
-Both the launcher and direct binary accept `WOVEN_LAB_TARGET=local|remote|cloud`.
-`cloud` is an alias for verified remote QUIC, not a provisioning command.
-Direct local runs still require `WOVEN_LAB_URL`; the launcher supplies
-`quic://127.0.0.1:8081` by default. Local mode retains the loopback-only
-adapter and development client settings; embedded mode remains unchanged.
+Both the launcher and direct binary accept
+`WOVEN_LAB_TARGET=local|managed-local|remote|cloud`. `cloud` is an alias for
+verified static remote QUIC, not a provisioning command. Direct local runs still
+require `WOVEN_LAB_URL`; the launcher supplies `quic://127.0.0.1:8081` by default.
+Local mode retains the loopback-only development client settings; embedded mode
+remains unchanged.
+
+### Managed local Host → Woven → Weaver QA
+
+Start the complete disposable stack from `woven-host`:
+
+```bash
+npm run dev:local
+```
+
+Open `http://127.0.0.1:5173`, create a Lite product with enough allocated CCU for
+the number of lab windows, and use **Connect** to reveal its native QUIC endpoint,
+namespace ID, session ID, client token, and TLS CA certificate. Save the token to
+an owner-only temporary file and the CA certificate to a separate temporary file;
+never put the token in a URL, command argument, repository file, or terminal output:
+
+```bash
+install -m 600 /dev/null /tmp/woven-lab-token
+install -m 600 /dev/null /tmp/woven-lab-ca.pem
+# Edit those two files locally using the values revealed by Host.
+```
+
+Then run from `weaver`, replacing only the two ID placeholders:
+
+```bash
+WOVEN_LAB_NAMESPACE_ID='<namespace-id>' \
+WOVEN_LAB_SESSION_ID='<session-id>' \
+WOVEN_LAB_CA_PEM_FILE=/tmp/woven-lab-ca.pem \
+WOVEN_LAB_TOKEN_FILE=/tmp/woven-lab-token \
+  scripts/local/run-woven-labs.sh managed-local 2 10
+```
+
+The managed-local launcher defaults to `quic://127.0.0.1:18082`, the native QUIC
+listener created by `dev:local`. Override it only with an explicit
+`WOVEN_LAB_MANAGED_URL`. Each client performs verified TLS, Bearer authentication,
+bounded managed admission, space subscription, server-assigned entity creation,
+and bidirectional publishing on Lite channel 1 (`ReliableOrdered`/`Ephemeral`). It
+never uses legacy `JoinSession`, the development token, or channel 2. A product's
+allocated CCU controls immediate admission; excess windows wait in Woven's bounded
+queue until capacity is available or the 60-second default admission deadline
+expires. The launcher owns Ctrl+C and terminates queued or running child processes,
+which releases their Woven connections without installing a process-global signal
+handler in the adapter. Set `WOVEN_LAB_DURATION_SECONDS=1..300` for an overall
+bounded run.
+
+This validates the native Rust client path against the same local managed node that
+Host provisioned. It does not validate the browser TypeScript/WebTransport client;
+that remains a separate website/browser QA pass. Remove the temporary credential
+files after QA and stop `dev:local` with Ctrl+C.
 
 ### Secure remote/shared-node runs (explicit operator approval required)
 
@@ -191,10 +241,9 @@ WOVEN_LAB_DURATION_SECONDS=30 WOVEN_LAB_RATE_HZ=10 \
   client observations/echo confirmations, not proof of
   delivery to every peer or server-side drop/coalescing statistics.
 
-The implementation depends on the sibling Woven checkout's new, potentially
-uncommitted `ClientTlsConfig::from_ca_pem` / `Client::connect_with_tls` APIs.
-No successful cloud/shared-node run is claimed; that remains an explicitly
-approved operator follow-up.
+The implementation resolves the Rust client, protocol, and server crates directly
+from the sibling Woven checkout. No successful cloud/shared-node run is claimed;
+that remains an explicitly approved operator follow-up.
 
 Focused checks (launcher tests use fake build/client commands, no connections):
 
