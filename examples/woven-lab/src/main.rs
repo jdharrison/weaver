@@ -4,6 +4,8 @@
 //! window publishes its authoritative cube rotation on Woven's state channel
 //! and renders a grid cell for every observed server-assigned entity.
 
+mod soak;
+
 use anyhow::Context;
 use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -228,6 +230,17 @@ impl LabView {
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    if std::env::var_os("WOVEN_LAB_SOAK").is_some() {
+        anyhow::ensure!(
+            soak::run(),
+            "woven-lab managed soak failed; inspect the JSON result"
+        );
+        return Ok(());
+    }
+    run_application()
+}
+
+fn run_application() -> anyhow::Result<()> {
     let config = read_config()?;
     let mut woven = config.woven.clone();
     woven.run_deadline = config.duration.map(|duration| Instant::now() + duration);

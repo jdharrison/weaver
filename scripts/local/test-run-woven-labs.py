@@ -28,11 +28,17 @@ class TargetSelectionTests(unittest.TestCase):
                 '*) managed_url="" ;; esac; '
                 'if [ -n "$managed_url" ]; then '
                 'printf "managed-config %s %s %s\\n" "$managed_url" '
-                '"$WOVEN_LAB_NAMESPACE_ID" "$WOVEN_LAB_SESSION_ID" >> calls; fi\n'
+                '"$WOVEN_LAB_NAMESPACE_ID" "$WOVEN_LAB_SESSION_ID" >> calls; fi; '
+                'if [ "${WOVEN_LAB_SOAK:-}" = 1 ]; then '
+                'printf "soak %s %s %s\\n" "$WOVEN_LAB_DURATION_SECONDS" '
+                '"${WOVEN_LAB_SOAK_STARTUP_SECONDS:-default}" '
+                '"${WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS:-default}" >> calls; fi\n'
             )
             binary.chmod(0o700)
-            env = {key: value for key, value in os.environ.items()
-                   if not key.startswith("WOVEN_LAB_")}
+            env = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith("WOVEN_LAB_") and key != "WEAVER_HEADLESS"
+            }
             env.update(PATH=f"{root}:{os.defpath}", WOVEN_LAB_DELAY_SECONDS="0")
             # Dummy files for fake-client preflight only; never used as TLS/auth material.
             for variable in ["WOVEN_LAB_CA_PEM_FILE", "WOVEN_LAB_TOKEN_FILE"]:
@@ -186,6 +192,60 @@ class TargetSelectionTests(unittest.TestCase):
             "cloud lab-1 120 quic://woven.example.test:8081",
             "managed-config quic://woven.example.test:8081 11 17",
         ])
+        self.assertNotIn("woven.example.test", result.stdout)
+
+    def test_soak_requires_explicit_managed_mode_duration_and_no_headless_smoke(self):
+        self.assert_rejected(
+            ["local", "1", "10"], message="requires target managed-local or cloud",
+            WOVEN_LAB_SOAK="1", WOVEN_LAB_DURATION_SECONDS="30",
+        )
+        self.assert_rejected(
+            ["remote", "1", "10"], message="requires target managed-local or cloud",
+            WOVEN_LAB_SOAK="1", WOVEN_LAB_DURATION_SECONDS="30",
+        )
+        self.assert_rejected(
+            ["managed-local", "1", "10"], message="soak runs require WOVEN_LAB_DURATION_SECONDS",
+            WOVEN_LAB_SOAK="1",
+        )
+        self.assert_rejected(
+            ["cloud", "1", "10"], message="WOVEN_LAB_SOAK must be exactly 1",
+            WOVEN_LAB_SOAK="0",
+        )
+        self.assert_rejected(
+            ["cloud", "1", "10"], message="WEAVER_HEADLESS is a separate connection smoke",
+            WOVEN_LAB_SOAK="1", WEAVER_HEADLESS="1",
+        )
+
+    def test_soak_preflight_bounds_and_propagates_explicit_mode(self):
+        base = dict(
+            WOVEN_LAB_SOAK="1",
+            WOVEN_LAB_CLOUD_URL="quic://woven.example.test:8081",
+            WOVEN_LAB_NAMESPACE_ID="11",
+            WOVEN_LAB_SESSION_ID="17",
+            WOVEN_LAB_DURATION_SECONDS="600",
+            WOVEN_LAB_CA_PEM_FILE="fixture",
+            WOVEN_LAB_TOKEN_FILE="fixture",
+        )
+        for variable, value, message in [
+            ("WOVEN_LAB_SOAK_STARTUP_SECONDS", "0", "STARTUP_SECONDS"),
+            ("WOVEN_LAB_SOAK_STARTUP_SECONDS", "901", "STARTUP_SECONDS"),
+            ("WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS", "0", "FINAL_DRAIN_SECONDS"),
+            ("WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS", "31", "FINAL_DRAIN_SECONDS"),
+        ]:
+            self.assert_rejected(
+                ["cloud", "1", "120"], message=message,
+                **(base | {variable: value}),
+            )
+        result, calls = self.run_launcher(
+            ["cloud", "1", "120"],
+            **(base | {
+                "WOVEN_LAB_SOAK_STARTUP_SECONDS": "90",
+                "WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS": "10",
+            }),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1], "soak 600 90 10")
+        self.assertIn("launching mode=managed-soak", result.stdout)
         self.assertNotIn("woven.example.test", result.stdout)
 
     def test_invalid_selection(self):

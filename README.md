@@ -110,9 +110,10 @@ Run `scripts/local/run-woven-labs.sh --help` for all controls. The script does
 not start, configure, or stop the Woven node; it only launches lab windows.
 
 Both the launcher and direct binary accept
-`WOVEN_LAB_TARGET=local|managed-local|remote|cloud`. `cloud` uses the managed
-Bearer-admission path against an explicit Host-provisioned endpoint; `remote` uses
-static development credentials. Neither target provisions resources. Direct local
+`WOVEN_LAB_TARGET=local|managed-local|remote|cloud`. `managed-local` and `cloud`
+use the Host-managed Bearer-admission contract against an explicit provisioned
+scope. `remote` is a separate static-server contract: verified TLS plus a static
+credential, legacy session join, and no managed admission. Neither target provisions resources. Direct local
 runs still require `WOVEN_LAB_URL`; the launcher supplies `quic://127.0.0.1:8081` by default.
 Local mode retains the loopback-only development client settings; embedded mode
 remains unchanged.
@@ -158,7 +159,7 @@ queue until capacity is available or the 60-second default admission deadline
 expires. The launcher owns Ctrl+C and terminates queued or running child processes,
 which releases their Woven connections without installing a process-global signal
 handler in the adapter. Set `WOVEN_LAB_DURATION_SECONDS=1..600` for an overall
-bounded run.
+bounded GUI run.
 
 This validates the native Rust client path against the same local managed node that
 Host provisioned. It does not validate the browser TypeScript/WebTransport client;
@@ -186,6 +187,43 @@ WOVEN_LAB_DURATION_SECONDS=30 \
 The cloud target requires every value above, uses verified TLS and Bearer
 admission, and exercises the managed Lite channel contract. It never falls back
 to local or static remote settings.
+
+#### Managed headless soak
+
+`WOVEN_LAB_SOAK=1` selects a real headless managed runner, not a GUI mode and not
+the `WEAVER_HEADLESS` connection smoke. It is accepted only with `managed-local`
+or `cloud`. The runner uses channel 1 as `ReliableOrdered`/`Ephemeral`, publishes
+with its server-assigned entity, and continuously drains its own server echoes and
+peer traffic. Startup/TLS/Bearer admission/subscription has a separate bounded
+budget (default 60 seconds); the requested active duration starts only after that
+phase succeeds. Publishing is monotonic wall-clock paced with no catch-up bursts.
+A bounded final echo drain defaults to 5 seconds.
+
+For an approved 600-second cloud run with one 10 Hz worker:
+
+```bash
+WOVEN_LAB_SOAK=1 \
+WOVEN_LAB_CLOUD_URL='quic://approved-woven-host.example.invalid:8081' \
+WOVEN_LAB_NAMESPACE_ID='<namespace-id>' \
+WOVEN_LAB_SESSION_ID='<session-id>' \
+WOVEN_LAB_CA_PEM_FILE=/tmp/woven-lab-ca.pem \
+WOVEN_LAB_TOKEN_FILE=/tmp/woven-lab-token \
+WOVEN_LAB_DURATION_SECONDS=600 \
+WOVEN_LAB_SOAK_STARTUP_SECONDS=60 \
+WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS=5 \
+  scripts/local/run-woven-labs.sh cloud 1 10
+```
+
+Each worker writes exactly one terminal JSON object to stdout and exits nonzero
+unless the full active duration completed with nonzero sends and confirmations,
+no publish/protocol/transport/disconnect error, no sustained echo outage, and no
+final confirmation gap. The result includes redacted resolved configuration,
+UTC timestamps, active duration and client-observed counts, plus local Weaver and
+Woven commit IDs when Git is available. It never includes the endpoint, credential
+paths, token, or payload bodies. Client names in soak mode are limited to 1–64
+ASCII letters, digits, `.`, `_`, or `-`. Override the startup budget only with
+`WOVEN_LAB_SOAK_STARTUP_SECONDS=1..900` and final drain with
+`WOVEN_LAB_SOAK_FINAL_DRAIN_SECONDS=1..30`.
 
 ### Static secure remote runs (explicit operator approval required)
 
@@ -223,19 +261,23 @@ WOVEN_LAB_DURATION_SECONDS=30 WOVEN_LAB_RATE_HZ=10 \
   there is no TLS bypass, insecure retry or development credential fallback.
 - `WOVEN_LAB_TOKEN_FILE` must be a nonempty regular UTF-8 file, at most **4098
   bytes** including optional trailing CR/LF. After trimming trailing CR/LF, the
-  credential must contain **32–4096 non-whitespace ASCII bytes**, matching Woven's
-  static remote server. Unix group/other permissions must be denied (e.g. an
+  credential must contain **32–4096 non-whitespace ASCII bytes**. The same bounded
+  file loader is used for managed Bearer tokens and static-server credentials, but
+  their authentication and admission semantics are distinct. Unix group/other permissions must be denied (e.g. an
   operator-provided mode `0600` file). On other platforms protect it with ACLs.
   Tokens never belong in URLs, CLI arguments or checked-in scripts. Config Debug
   omits URLs/paths and redacts tokens; token bytes remain plaintext in memory
   without zeroization, as in the sibling client.
-- `WOVEN_LAB_DURATION_SECONDS` is **required for remote and cloud runs**, integer
-  **1–600**; optional locally with the same bounds. Validation occurs before connection
-  and the launcher rejects missing/invalid caps before building or launching.
-  Each client's monotonic deadline starts after config validation, before its
-  world/connection is created; it is independent of simulation pause/time.
-  Remote startup (DNS/TLS/auth/join/subscribe) and each network operation are
-  bounded by the remaining duration and a 10-second timeout. Receive draining
+- `WOVEN_LAB_DURATION_SECONDS` is **required for remote and cloud GUI runs** and
+  every soak, integer **1–600**; it is optional for local/managed-local GUI runs
+  with the same bounds. Validation occurs before connection and the launcher
+  rejects missing/invalid caps before building or launching. For GUI runs, each
+  client's monotonic overall deadline starts after config validation, before its
+  world/connection is created; it is independent of simulation pause/time. For
+  soak runs, startup/admission has the separate bounded timeout documented above,
+  and the active deadline starts after successful subscription/entity assignment.
+  Verified startup and each network operation are bounded by their applicable
+  phase deadline and a 10-second per-operation timeout. Receive draining
   is capped at 128 envelopes per remote update. Expiry stops the application
   and drops/closes its client; timed-out writes close rather than reuse a
   potentially partial stream. Cancellation is cooperative, not a hard realtime
@@ -246,12 +288,16 @@ WOVEN_LAB_DURATION_SECONDS=30 WOVEN_LAB_RATE_HZ=10 \
   aggregate server allowance: 16 × 120 requests 1920 publishes/second. Choose
   lower approved totals for a shared node. Staggering means total launcher
   wall time can exceed a single client's duration (plus build/startup time).
-- The fixed server contract is **namespace/session/space 1, epoch 1, channel 2,
-  LatestValue/Stateful**, server-assigned entity/coalescing key, 64 KiB channel
-  payload ceiling. Remote client names are limited to 1–64 UTF-8 bytes. The lab
-  sends its small fixed cube-state schema, not arbitrary load scripts. This targets Woven's initial static remote composition, not
-  production tenant auth, remote WebTransport or management HTTP. Server limits
-  and rejections remain authoritative; no policy overrides or silent retries.
+- The contracts are intentionally distinct. **Managed-local/cloud** uses the
+  Host-provided namespace/session, space 1 epoch 1, Bearer admission, and Lite
+  channel 1 as `ReliableOrdered`/`Ephemeral`; the server assigns the entity.
+  **Static remote** uses the initial static composition's namespace/session/space
+  1, epoch 1, legacy session join, and channel 2 as `LatestValue`/`Stateful`, with
+  the server-assigned entity as coalescing key. The lab sends its small fixed
+  cube-state schema, not arbitrary load scripts. Static remote is not managed
+  tenant auth, and neither native mode claims remote WebTransport or management
+  HTTP coverage. Server limits and rejections remain authoritative; there are no
+  client policy overrides or silent retries.
 - `WEAVER_HEADLESS=1` still performs **at most 60 simulation steps and no lab
   publishing**, often exiting before the duration. It can check connection/
   subscription startup, but is **not a headless load test**. GUI runs require a

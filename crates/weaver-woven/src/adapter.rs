@@ -79,6 +79,14 @@ impl WovenAdapter {
         self.entity_id
     }
 
+    /// Replace the monotonic deadline used to bound subsequent verified-network operations.
+    ///
+    /// This supports a separately bounded startup/admission phase followed by a run deadline.
+    /// It does not schedule shutdown; the caller remains responsible for stopping the adapter.
+    pub fn set_run_deadline(&mut self, deadline: Option<std::time::Instant>) {
+        self.config.run_deadline = deadline;
+    }
+
     /// Connect through the public QUIC protocol, starting a node only in embedded mode.
     ///
     /// # Errors
