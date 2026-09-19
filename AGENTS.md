@@ -46,7 +46,7 @@ Host-provisioned scope IDs, verified TLS, Bearer authentication, bounded admissi
 and the managed Lite channel contract; it never sends legacy `JoinSession`.
 Both verified modes require an explicit QUIC URL and bounded CA PEM/token files and
 never fall back to development TLS or credentials. `woven-lab` remote/cloud selection
-additionally requires a 1–300 second wall-clock duration; the launcher caps workers at 16 and rates at
+additionally requires a 1–600 second wall-clock duration; the launcher caps workers at 16 and rates at
 120 Hz per client. Remote network operations respect the lab deadline and a
 10-second per-operation timeout. See README for invocation and current limits;
 no cloud/shared-node validation is implied.

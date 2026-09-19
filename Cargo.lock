@@ -4405,7 +4405,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "woven-client"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "quinn",
  "rustls",
@@ -4418,7 +4418,7 @@ dependencies = [
 
 [[package]]
 name = "woven-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ring",
  "serde",
@@ -4427,7 +4427,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-coordinator"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tokio",
  "woven-core",
@@ -4439,7 +4439,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "woven-core",
@@ -4447,7 +4447,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-test-provider"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "woven-inference-core",
@@ -4455,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-tools"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "woven-core",
@@ -4484,7 +4484,7 @@ dependencies = [
 
 [[package]]
 name = "woven-protocol"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",
@@ -4521,7 +4521,7 @@ dependencies = [
 
 [[package]]
 name = "woven-transport"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tokio",
  "tracing",

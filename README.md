@@ -110,9 +110,10 @@ Run `scripts/local/run-woven-labs.sh --help` for all controls. The script does
 not start, configure, or stop the Woven node; it only launches lab windows.
 
 Both the launcher and direct binary accept
-`WOVEN_LAB_TARGET=local|managed-local|remote|cloud`. `cloud` is an alias for
-verified static remote QUIC, not a provisioning command. Direct local runs still
-require `WOVEN_LAB_URL`; the launcher supplies `quic://127.0.0.1:8081` by default.
+`WOVEN_LAB_TARGET=local|managed-local|remote|cloud`. `cloud` uses the managed
+Bearer-admission path against an explicit Host-provisioned endpoint; `remote` uses
+static development credentials. Neither target provisions resources. Direct local
+runs still require `WOVEN_LAB_URL`; the launcher supplies `quic://127.0.0.1:8081` by default.
 Local mode retains the loopback-only development client settings; embedded mode
 remains unchanged.
 
@@ -156,7 +157,7 @@ allocated CCU controls immediate admission; excess windows wait in Woven's bound
 queue until capacity is available or the 60-second default admission deadline
 expires. The launcher owns Ctrl+C and terminates queued or running child processes,
 which releases their Woven connections without installing a process-global signal
-handler in the adapter. Set `WOVEN_LAB_DURATION_SECONDS=1..300` for an overall
+handler in the adapter. Set `WOVEN_LAB_DURATION_SECONDS=1..600` for an overall
 bounded run.
 
 This validates the native Rust client path against the same local managed node that
@@ -164,12 +165,29 @@ Host provisioned. It does not validate the browser TypeScript/WebTransport clien
 that remains a separate website/browser QA pass. Remove the temporary credential
 files after QA and stop `dev:local` with Ctrl+C.
 
-### Secure remote/shared-node runs (explicit operator approval required)
+### Managed cloud QA (explicit operator approval required)
 
 **Do not run against a shared, hosted, or production node without approval for
 that endpoint, credential, rate, worker count and duration.** Traffic may incur
-cost or affect other users. These instructions do not deploy or mutate cloud
-resources, create credentials, or imply a completed cloud test.
+cost or affect other users. The launcher does not provision or mutate cloud
+resources. Save the Host-provided CA certificate and scoped client token in the
+protected temporary files described above, then run a bounded managed smoke:
+
+```bash
+WOVEN_LAB_CLOUD_URL='quic://approved-woven-host.example.invalid:8081' \
+WOVEN_LAB_NAMESPACE_ID='<namespace-id>' \
+WOVEN_LAB_SESSION_ID='<session-id>' \
+WOVEN_LAB_CA_PEM_FILE=/tmp/woven-lab-ca.pem \
+WOVEN_LAB_TOKEN_FILE=/tmp/woven-lab-token \
+WOVEN_LAB_DURATION_SECONDS=30 \
+  scripts/local/run-woven-labs.sh cloud 2 10
+```
+
+The cloud target requires every value above, uses verified TLS and Bearer
+admission, and exercises the managed Lite channel contract. It never falls back
+to local or static remote settings.
+
+### Static secure remote runs (explicit operator approval required)
 
 From the Weaver checkout, after an operator has supplied the existing server,
 its CA certificate bundle and its scoped static credential file:
@@ -196,9 +214,9 @@ WOVEN_LAB_DURATION_SECONDS=30 WOVEN_LAB_RATE_HZ=10 \
 ```
 
 - Remote selection requires `WOVEN_LAB_REMOTE_URL` with an explicit port; it has
-  **no default address and never uses `WOVEN_LAB_URL` as a fallback**. Only the
-  `cloud` alias also accepts `WOVEN_LAB_CLOUD_URL` when the remote URL is absent.
-  URLs must not contain credentials, paths, queries or fragments.
+  **no default address and never uses `WOVEN_LAB_URL` as a fallback**. Cloud
+  selection independently requires `WOVEN_LAB_CLOUD_URL`. URLs must not contain
+  credentials, paths, queries or fragments.
 - `WOVEN_LAB_CA_PEM_FILE` must be a nonempty regular file, at most **1 MiB**,
   containing a valid CA PEM bundle. Only those roots are trusted. The sibling
   client's standard chain, validity and URL hostname/IP verification is used;
@@ -211,8 +229,8 @@ WOVEN_LAB_DURATION_SECONDS=30 WOVEN_LAB_RATE_HZ=10 \
   Tokens never belong in URLs, CLI arguments or checked-in scripts. Config Debug
   omits URLs/paths and redacts tokens; token bytes remain plaintext in memory
   without zeroization, as in the sibling client.
-- `WOVEN_LAB_DURATION_SECONDS` is **required remotely**, integer **1–300**;
-  optional locally with the same bounds. Validation occurs before connection
+- `WOVEN_LAB_DURATION_SECONDS` is **required for remote and cloud runs**, integer
+  **1–600**; optional locally with the same bounds. Validation occurs before connection
   and the launcher rejects missing/invalid caps before building or launching.
   Each client's monotonic deadline starts after config validation, before its
   world/connection is created; it is independent of simulation pause/time.

@@ -307,8 +307,8 @@ fn main() -> anyhow::Result<()> {
 fn validate_target(target: Option<&str>) -> anyhow::Result<ConnectivityMode> {
     match target.unwrap_or("local") {
         "local" => Ok(ConnectivityMode::Loopback),
-        "managed-local" => Ok(ConnectivityMode::ManagedQuic),
-        "remote" | "cloud" => Ok(ConnectivityMode::RemoteQuic),
+        "managed-local" | "cloud" => Ok(ConnectivityMode::ManagedQuic),
+        "remote" => Ok(ConnectivityMode::RemoteQuic),
         _ => {
             anyhow::bail!("WOVEN_LAB_TARGET must be `local`, `managed-local`, `remote` or `cloud`")
         }
@@ -316,22 +316,23 @@ fn validate_target(target: Option<&str>) -> anyhow::Result<ConnectivityMode> {
 }
 
 fn validate_duration(
+    target: Option<&str>,
     mode: ConnectivityMode,
     value: Option<&str>,
 ) -> anyhow::Result<Option<Duration>> {
     let Some(value) = value else {
         anyhow::ensure!(
-            mode != ConnectivityMode::RemoteQuic,
-            "remote runs require WOVEN_LAB_DURATION_SECONDS (1..=300)"
+            mode != ConnectivityMode::RemoteQuic && target != Some("cloud"),
+            "remote/cloud runs require WOVEN_LAB_DURATION_SECONDS (1..=600)"
         );
         return Ok(None);
     };
     let seconds = value
         .parse::<u64>()
         .ok()
-        .filter(|seconds| (1..=300).contains(seconds));
+        .filter(|seconds| (1..=600).contains(seconds));
     Ok(Some(Duration::from_secs(seconds.context(
-        "WOVEN_LAB_DURATION_SECONDS must be an integer in 1..=300",
+        "WOVEN_LAB_DURATION_SECONDS must be an integer in 1..=600",
     )?)))
 }
 
@@ -345,18 +346,17 @@ fn read_config() -> anyhow::Result<LabConfig> {
     };
     let mode = validate_target(target.as_deref())?;
     let duration_value = std::env::var("WOVEN_LAB_DURATION_SECONDS").ok();
-    let duration = validate_duration(mode, duration_value.as_deref())?;
+    let duration = validate_duration(target.as_deref(), mode, duration_value.as_deref())?;
     let mut woven = WovenConfig {
         mode,
         ..WovenConfig::default()
     };
     if mode == ConnectivityMode::RemoteQuic {
         // A local URL or the development token must never become a remote fallback.
-        woven.endpoint = Some(std::env::var("WOVEN_LAB_REMOTE_URL")
-            .or_else(|_| if target.as_deref() == Some("cloud") {
-                std::env::var("WOVEN_LAB_CLOUD_URL")
-            } else { Err(std::env::VarError::NotPresent) })
-            .map_err(|_| anyhow::anyhow!("remote runs require WOVEN_LAB_REMOTE_URL (cloud alias also accepts WOVEN_LAB_CLOUD_URL)"))?);
+        woven.endpoint = Some(
+            std::env::var("WOVEN_LAB_REMOTE_URL")
+                .context("remote runs require WOVEN_LAB_REMOTE_URL")?,
+        );
         woven.ca_pem_file = Some(
             std::env::var_os("WOVEN_LAB_CA_PEM_FILE")
                 .context("remote runs require WOVEN_LAB_CA_PEM_FILE")?
@@ -369,18 +369,23 @@ fn read_config() -> anyhow::Result<LabConfig> {
         );
         woven.dev_token.clear();
     } else if mode == ConnectivityMode::ManagedQuic {
+        let endpoint_variable = if target.as_deref() == Some("cloud") {
+            "WOVEN_LAB_CLOUD_URL"
+        } else {
+            "WOVEN_LAB_MANAGED_URL"
+        };
         woven.endpoint = Some(
-            std::env::var("WOVEN_LAB_MANAGED_URL")
-                .context("managed-local runs require WOVEN_LAB_MANAGED_URL")?,
+            std::env::var(endpoint_variable)
+                .with_context(|| format!("managed runs require {endpoint_variable}"))?,
         );
         woven.ca_pem_file = Some(
             std::env::var_os("WOVEN_LAB_CA_PEM_FILE")
-                .context("managed-local runs require WOVEN_LAB_CA_PEM_FILE")?
+                .context("managed runs require WOVEN_LAB_CA_PEM_FILE")?
                 .into(),
         );
         woven.token_file = Some(
             std::env::var_os("WOVEN_LAB_TOKEN_FILE")
-                .context("managed-local runs require WOVEN_LAB_TOKEN_FILE")?
+                .context("managed runs require WOVEN_LAB_TOKEN_FILE")?
                 .into(),
         );
         woven.namespace_id = required_woven_id("WOVEN_LAB_NAMESPACE_ID")?;
@@ -458,8 +463,7 @@ fn read_config() -> anyhow::Result<LabConfig> {
 }
 
 fn required_woven_id(name: &str) -> anyhow::Result<u64> {
-    let value =
-        std::env::var(name).with_context(|| format!("managed-local runs require {name}"))?;
+    let value = std::env::var(name).with_context(|| format!("managed runs require {name}"))?;
     anyhow::ensure!(
         !value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit()),
         "{name} must be a canonical nonzero decimal identifier"
@@ -875,33 +879,40 @@ mod tests {
             ConnectivityMode::ManagedQuic
         );
         assert_eq!(
-            validate_duration(ConnectivityMode::ManagedQuic, None).unwrap(),
+            validate_target(Some("cloud")).unwrap(),
+            ConnectivityMode::ManagedQuic
+        );
+        assert_eq!(
+            validate_duration(Some("managed-local"), ConnectivityMode::ManagedQuic, None).unwrap(),
             None
         );
     }
 
     #[test]
-    fn remote_is_explicit_and_duration_is_bounded() {
-        for target in ["remote", "cloud"] {
+    fn remote_and_cloud_are_explicit_and_duration_is_bounded() {
+        for (target, expected_mode) in [
+            ("remote", ConnectivityMode::RemoteQuic),
+            ("cloud", ConnectivityMode::ManagedQuic),
+        ] {
             let mode = validate_target(Some(target)).unwrap();
-            assert_eq!(mode, ConnectivityMode::RemoteQuic);
+            assert_eq!(mode, expected_mode);
             for value in [
                 None,
                 Some(""),
                 Some("0"),
-                Some("301"),
+                Some("601"),
                 Some("NaN"),
                 Some("1.5"),
                 Some("-1"),
             ] {
-                assert!(validate_duration(mode, value).is_err());
+                assert!(validate_duration(Some(target), mode, value).is_err());
             }
-            for value in ["1", "300"] {
-                assert!(validate_duration(mode, Some(value)).is_ok());
+            for value in ["1", "600"] {
+                assert!(validate_duration(Some(target), mode, Some(value)).is_ok());
             }
         }
         assert_eq!(
-            validate_duration(ConnectivityMode::Loopback, None).unwrap(),
+            validate_duration(Some("local"), ConnectivityMode::Loopback, None).unwrap(),
             None
         );
     }

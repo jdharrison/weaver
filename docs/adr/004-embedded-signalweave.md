@@ -15,7 +15,7 @@ Weaver needs a self-contained local development path while preserving the Woven 
 At adoption, `Remote` remained unsupported pending an operator-supplied endpoint,
 credentials and bounded lifecycle controls. The subsequent `RemoteQuic` path now
 uses explicit CA trust, a file-supplied static token and the public verified QUIC
-client. The lab requires a 1–300 second deadline and bounded launch counts/rates;
+client. The lab requires a 1–600 second deadline and bounded launch counts/rates;
 local modes retain their original development behavior. This first remote path
 targets the sibling server's fixed namespace/session/space/channel composition,
 not capability discovery or general production tenant provisioning. See the

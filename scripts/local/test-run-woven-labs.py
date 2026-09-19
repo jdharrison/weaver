@@ -22,8 +22,12 @@ class TargetSelectionTests(unittest.TestCase):
             binary.write_text(
                 '#!/bin/sh\nprintf "%s %s %s %s\\n" "$WOVEN_LAB_TARGET" '
                 '"$WOVEN_LAB_CLIENT" "$WOVEN_LAB_RATE_HZ" "$WOVEN_LAB_URL" >> calls\n'
-                'if [ "$WOVEN_LAB_TARGET" = managed-local ]; then '
-                'printf "managed-config %s %s %s\\n" "$WOVEN_LAB_MANAGED_URL" '
+                'case "$WOVEN_LAB_TARGET" in '
+                'managed-local) managed_url="$WOVEN_LAB_MANAGED_URL" ;; '
+                'cloud) managed_url="$WOVEN_LAB_CLOUD_URL" ;; '
+                '*) managed_url="" ;; esac; '
+                'if [ -n "$managed_url" ]; then '
+                'printf "managed-config %s %s %s\\n" "$managed_url" '
                 '"$WOVEN_LAB_NAMESPACE_ID" "$WOVEN_LAB_SESSION_ID" >> calls; fi\n'
             )
             binary.chmod(0o700)
@@ -81,7 +85,7 @@ class TargetSelectionTests(unittest.TestCase):
 
     def test_managed_local_requires_scope_and_files_then_uses_managed_endpoint(self):
         self.assert_rejected(
-            ["managed-local"], message="requires WOVEN_LAB_NAMESPACE_ID",
+            ["managed-local"], message="require WOVEN_LAB_NAMESPACE_ID",
         )
         base = dict(
             WOVEN_LAB_NAMESPACE_ID="9007199254740993",
@@ -108,25 +112,45 @@ class TargetSelectionTests(unittest.TestCase):
         ])
 
     def test_remote_missing_address_never_uses_local_url(self):
-        for target in ["remote", "cloud"]:
-            self.assert_rejected([target], message="requires WOVEN_LAB_REMOTE_URL",
-                                 WOVEN_LAB_URL="quic://127.0.0.1:8081")
-        self.assert_rejected(["1", "10"], message="requires WOVEN_LAB_REMOTE_URL",
-                             WOVEN_LAB_TARGET="cloud")
+        self.assert_rejected(["remote"], message="requires WOVEN_LAB_REMOTE_URL",
+                             WOVEN_LAB_URL="quic://127.0.0.1:8081")
+
+    def test_cloud_missing_address_never_uses_local_or_remote_url(self):
+        self.assert_rejected(
+            ["cloud"], message="requires WOVEN_LAB_CLOUD_URL",
+            WOVEN_LAB_URL="quic://127.0.0.1:8081",
+            WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081",
+        )
+        self.assert_rejected(
+            ["1", "10"], message="requires WOVEN_LAB_CLOUD_URL",
+            WOVEN_LAB_TARGET="cloud",
+        )
 
     def test_remote_requires_duration_and_files(self):
-        for target in ["remote", "cloud"]:
-            self.assert_rejected([target], message="require WOVEN_LAB_DURATION_SECONDS",
-                                 WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081")
-            self.assert_rejected([target], message="readable WOVEN_LAB_CA_PEM_FILE",
-                                 WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081",
-                                 WOVEN_LAB_DURATION_SECONDS="30")
+        self.assert_rejected(["remote"], message="require WOVEN_LAB_DURATION_SECONDS",
+                             WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081")
+        self.assert_rejected(["remote"], message="readable WOVEN_LAB_CA_PEM_FILE",
+                             WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081",
+                             WOVEN_LAB_DURATION_SECONDS="30")
+
+    def test_cloud_requires_duration_scope_and_files(self):
+        base = dict(
+            WOVEN_LAB_CLOUD_URL="quic://woven.example.test:8081",
+            WOVEN_LAB_NAMESPACE_ID="11",
+            WOVEN_LAB_SESSION_ID="17",
+        )
+        self.assert_rejected(["cloud"], message="require WOVEN_LAB_DURATION_SECONDS",
+                             **base)
+        self.assert_rejected(
+            ["cloud"], message="readable WOVEN_LAB_CA_PEM_FILE",
+            **(base | {"WOVEN_LAB_DURATION_SECONDS": "30"}),
+        )
 
     def test_remote_preflight_caps_and_url(self):
         valid = dict(WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081",
                      WOVEN_LAB_DURATION_SECONDS="30", WOVEN_LAB_CA_PEM_FILE="fixture",
                      WOVEN_LAB_TOKEN_FILE="fixture")
-        for duration in ["", "0", "301", "1.5", "NaN", "-1", "999999999999999999999"]:
+        for duration in ["", "0", "601", "1.5", "NaN", "-1", "999999999999999999999"]:
             self.assert_rejected(["remote"], message="WOVEN_LAB_DURATION_SECONDS",
                                  **(valid | {"WOVEN_LAB_DURATION_SECONDS": duration}))
         for rate in ["0", "121", "NaN", "10,", "10,121"]:
@@ -136,17 +160,33 @@ class TargetSelectionTests(unittest.TestCase):
                              **(valid | {"WOVEN_LAB_REMOTE_URL": "quic://secret@woven.example.test:8081"}))
         self.assert_rejected(["remote", "17"], **valid)
 
-    def test_remote_and_cloud_launch_only_explicit_remote_url(self):
-        for target, url_variable in [("remote", "WOVEN_LAB_REMOTE_URL"),
-                                     ("cloud", "WOVEN_LAB_CLOUD_URL")]:
-            result, calls = self.run_launcher(
-                [target, "1", "120"], **{url_variable: "quic://woven.example.test:8081"},
-                WOVEN_LAB_URL="quic://127.0.0.1:9001",
-                WOVEN_LAB_DURATION_SECONDS="1", WOVEN_LAB_CA_PEM_FILE="fixture",
-                WOVEN_LAB_TOKEN_FILE="fixture")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls, ["build", f"{target} lab-1 120 quic://woven.example.test:8081"])
-            self.assertNotIn("woven.example.test", result.stdout)
+    def test_remote_launches_only_explicit_remote_url(self):
+        result, calls = self.run_launcher(
+            ["remote", "1", "120"],
+            WOVEN_LAB_REMOTE_URL="quic://woven.example.test:8081",
+            WOVEN_LAB_URL="quic://127.0.0.1:9001",
+            WOVEN_LAB_DURATION_SECONDS="1", WOVEN_LAB_CA_PEM_FILE="fixture",
+            WOVEN_LAB_TOKEN_FILE="fixture")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["build", "remote lab-1 120 quic://woven.example.test:8081"])
+        self.assertNotIn("woven.example.test", result.stdout)
+
+    def test_cloud_launches_managed_scope_only_with_explicit_cloud_url(self):
+        result, calls = self.run_launcher(
+            ["cloud", "1", "120"],
+            WOVEN_LAB_CLOUD_URL="quic://woven.example.test:8081",
+            WOVEN_LAB_REMOTE_URL="quic://wrong.example.test:8081",
+            WOVEN_LAB_URL="quic://127.0.0.1:9001",
+            WOVEN_LAB_NAMESPACE_ID="11", WOVEN_LAB_SESSION_ID="17",
+            WOVEN_LAB_DURATION_SECONDS="600", WOVEN_LAB_CA_PEM_FILE="fixture",
+            WOVEN_LAB_TOKEN_FILE="fixture")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            "build",
+            "cloud lab-1 120 quic://woven.example.test:8081",
+            "managed-config quic://woven.example.test:8081 11 17",
+        ])
+        self.assertNotIn("woven.example.test", result.stdout)
 
     def test_invalid_selection(self):
         for target in ["", "web", "LOCAL", " local "]:
