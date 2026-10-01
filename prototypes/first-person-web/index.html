@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#080a0f">
+    <title>WVR | First-Person Web Lab</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="main.js" defer></script>
+  </head>
+  <body>
+    <canvas id="scene" aria-label="Interactive first-person box room"></canvas>
+    <div class="brand">WVR / FIRST-PERSON WEB LAB</div>
+    <section id="instructions" class="instructions">
+      <p class="eyebrow">Browser prototype</p>
+      <h1>Enclosed Room</h1>
+      <div class="desktop-only">
+        <p>Click to capture the pointer, then look with the mouse.</p>
+        <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrow keys to move.</p>
+        <p><kbd>Esc</kbd> releases the pointer.</p>
+      </div>
+      <div class="touch-only">
+        <p>Drag anywhere in the room to look around.</p>
+        <p>Use the movement pad in the lower-left corner to walk.</p>
+      </div>
+      <button id="enter" type="button">Enter room</button>
+    </section>
+    <section id="mobile-controls" class="mobile-controls" aria-label="Touch controls" hidden>
+      <div class="dpad" aria-label="Movement pad">
+        <button class="move-button move-up" type="button" data-code="ArrowUp" aria-label="Move forward"></button>
+        <button class="move-button move-left" type="button" data-code="ArrowLeft" aria-label="Move left"></button>
+        <button class="move-button move-right" type="button" data-code="ArrowRight" aria-label="Move right"></button>
+        <button class="move-button move-down" type="button" data-code="ArrowDown" aria-label="Move backward"></button>
+      </div>
+      <p class="look-hint">Drag scene to look</p>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <noscript>This prototype requires JavaScript.</noscript>
+  </body>
+</html>
