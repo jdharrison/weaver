@@ -30,3 +30,10 @@ The code seams (command sink, snapshot interface, connectivity mode enum, frame 
 - The bootstrap codebase stays focused and verifiable.
 - Deferred features are documented so they are not accidentally designed out.
 - Future milestones will add each feature with real behavior and tests.
+
+## Subsequent scope refinement
+
+[ADR 9](009-unified-rendering-and-scriptable-ui.md) records an accepted direction
+for shared graphics and UI-scoped scripting, with implementation still deferred.
+It does not reopen general scripting/WASM execution, the editor, or the other
+bootstrap deferrals listed here.
