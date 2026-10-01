@@ -1,0 +1,15 @@
+[package]
+name = "weaver-app-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+weaver-render.workspace = true
+weaver-render-wgpu.workspace = true
+glam.workspace = true
+
+[lints]
+workspace = true

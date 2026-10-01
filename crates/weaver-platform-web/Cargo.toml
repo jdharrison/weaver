@@ -1,33 +1,26 @@
 [package]
-name = "render-lab"
+name = "weaver-platform-web"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-path = "src/lib.rs"
-
-[[bin]]
-name = "render-lab"
-path = "src/main.rs"
-
 [dependencies]
-weaver-core.workspace = true
 weaver-app-core.workspace = true
-weaver-render.workspace = true
 weaver-render-wgpu.workspace = true
+winit.workspace = true
+wgpu.workspace = true
 glam.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-weaver-platform-desktop.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-weaver-platform-web.workspace = true
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
+
+[dev-dependencies]
+weaver-render.workspace = true
 
 [lints]
 workspace = true

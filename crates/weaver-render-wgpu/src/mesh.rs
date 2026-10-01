@@ -5,7 +5,8 @@ use crate::pipeline::{
     MESH_SHADER, camera_bind_group_layout, create_shader, instance_uniform_layout,
 };
 
-const MAX_INSTANCES: usize = 200;
+// Keep the complete uniform binding below WebGL2's guaranteed 16 KiB limit.
+const MAX_INSTANCES: usize = 160;
 use crate::resource::{GpuMesh, Vertex};
 use bytemuck::{Pod, Zeroable};
 
@@ -17,6 +18,8 @@ struct MeshInstanceRaw {
     emissive: f32,
     _pad: [f32; 3],
 }
+
+const _: () = assert!(MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>() <= 16 * 1024);
 
 /// Mesh rendering pipeline and resources.
 pub struct MeshPipeline {
@@ -148,7 +151,11 @@ impl MeshPipeline {
 
         let mut instance_offset = 0;
         for (mesh, instances) in meshes {
-            let count = instances.len() as u32;
+            let remaining = total_instances.saturating_sub(instance_offset as usize);
+            let count = instances.len().min(remaining) as u32;
+            if count == 0 {
+                break;
+            }
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(

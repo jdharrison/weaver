@@ -40,7 +40,7 @@ struct Instance {
     _pad1: f32,
     _pad2: f32,
 };
-const MAX_INSTANCES: u32 = 200u;
+const MAX_INSTANCES: u32 = 160u;
 @group(1) @binding(0)
 var<uniform> instances: array<Instance, MAX_INSTANCES>;
 

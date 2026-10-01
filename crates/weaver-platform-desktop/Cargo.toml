@@ -1,5 +1,5 @@
 [package]
-name = "weaver-woven"
+name = "weaver-platform-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,18 +8,16 @@ repository.workspace = true
 
 [dependencies]
 weaver-app-core.workspace = true
-weaver-core.workspace = true
-woven-client.workspace = true
-woven-protocol.workspace = true
-woven-server.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+weaver-render-wgpu.workspace = true
+winit.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+pollster.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+[dev-dependencies]
+weaver-render.workspace = true
 
 [lints]
 workspace = true

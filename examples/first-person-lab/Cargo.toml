@@ -1,5 +1,5 @@
 [package]
-name = "render-lab"
+name = "first-person-lab"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,18 +11,22 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [[bin]]
-name = "render-lab"
+name = "first-person-lab"
 path = "src/main.rs"
 
 [dependencies]
-weaver-core.workspace = true
 weaver-app-core.workspace = true
 weaver-render.workspace = true
 weaver-render-wgpu.workspace = true
 glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 weaver-platform-desktop.workspace = true
+weaver-woven.workspace = true
+anyhow.workspace = true
+tracing-subscriber.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 weaver-platform-web.workspace = true

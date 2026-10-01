@@ -1,0 +1,16 @@
+{
+  "name": "weaver-first-person-web-shell",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild main.ts --bundle --format=esm --platform=browser --target=es2022 --external:./pkg/*",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@signalweave/woven-client": "file:../../../../../woven/crates/woven-client-ts"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "typescript": "5.8.3"
+  }
+}

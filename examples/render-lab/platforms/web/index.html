@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#060a12">
+    <link rel="icon" href="data:,">
+    <title>WVR | Render Lab</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <canvas id="scene" tabindex="0" aria-label="Weaver renderer feature lab"></canvas>
+    <aside class="panel">
+      <strong>WVR / RENDER LAB</strong>
+      <p id="status">Loading Weaver GPU backend…</p>
+      <p>Drag to orbit · Scroll to zoom</p>
+    </aside>
+    <script type="module">
+      import init from "./pkg/render_lab.js";
+
+      init().catch((error) => {
+        console.error(error);
+        document.querySelector("#status").textContent = `Unable to start Weaver: ${error}`;
+      });
+    </script>
+  </body>
+</html>

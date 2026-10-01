@@ -4,7 +4,7 @@ A next-generation, local-first Rust engine for interactive simulations, games, a
 
 ## Bootstrap milestone
 
-This repository contains the initial vertical slice of Weaver: a runnable runtime that composes Worldline-backed simulation time, a local Woven node reached through the `WVN1` protocol, and a WGPU renderer through a renderer-neutral snapshot seam.
+This repository contains Weaver's initial vertical slice: renderer-neutral application state, native and browser WGPU shells, Worldline-backed simulation support, and optional Woven connectivity through the public `WVN1` protocol boundary.
 
 ## Workspace layout
 
@@ -13,43 +13,144 @@ weaver/
 ├── Cargo.toml
 ├── rust-toolchain.toml
 ├── crates/
-│   ├── weaver-core/        # Runtime lifecycle, ids, commands, revisions, snapshot interfaces
-│   ├── weaver-app/         # Native application runner and world composition
-│   ├── weaver-render/      # Renderer-neutral vocabulary
-│   ├── weaver-render-wgpu/ # WGPU graphics backend
-│   ├── weaver-woven/       # Local Woven node and protocol adapter
-│   └── weaver-worldline/   # Worldline-backed time and frame adapter
-├── examples/render-lab/    # Integrated rendering example
-├── examples/woven-lab/     # Local multi-client Woven replication visualizer
-├── assets/                 # Repository-owned test assets
-├── shaders/                # WGSL shaders
-├── tests/                  # Additional integration tests
-└── docs/adr/               # Architecture Decision Records
+│   ├── weaver-core/             # Runtime lifecycle, ids, commands, revisions, snapshots
+│   ├── weaver-app/              # Existing native runner and world composition
+│   ├── weaver-app-core/         # Platform-neutral app, asset, controller, and input contract
+│   ├── weaver-platform-desktop/ # Native winit/WGPU shell
+│   ├── weaver-platform-web/     # Browser WASM/winit/WGPU shell
+│   ├── weaver-render/           # Renderer-neutral vocabulary
+│   ├── weaver-render-wgpu/      # WGPU graphics backend
+│   ├── weaver-woven/            # Local Woven node and protocol adapter
+│   └── weaver-worldline/        # Worldline-backed time and frame adapter
+├── examples/first-person-lab/ # One shared room lab with desktop and web shells
+├── examples/render-lab/       # One shared renderer lab with desktop and web shells
+├── examples/space-lab/        # One shared solar-system lab with desktop and web shells
+├── examples/woven-lab/        # Native multi-client Woven replication visualizer
+├── prototypes/first-person-web/ # Standalone non-Weaver JavaScript/WebGL2 behavior mock
+├── xtask/                     # Repository-local lab build/run workflow
+├── assets/                    # Repository-owned test assets
+├── shaders/                   # WGSL shaders
+├── tests/                     # Additional integration tests
+└── docs/adr/                  # Architecture Decision Records
 ```
 
-## Running
+## Graphics and UI architecture
 
-Headless smoke test:
+The accepted direction is a shared accelerated graphics foundation for dynamic,
+depth-tested 3D scenes, fixed orthographic 2D scenes, and a modular, scriptable UI
+overlay composited above scene content. This is an architectural decision, not a
+claim that the component/scripting system has shipped. Curved, diegetic, and VR
+presentation remain future extensions, not bundled initial features.
+
+- [Architecture and scope](docs/UI-ARCHITECTURE.md)
+- [ADR 9: unified accelerated rendering and scriptable UI](docs/adr/009-unified-rendering-and-scriptable-ui.md)
+- [Deferred implementation plan](docs/UI-IMPLEMENTATION-PLAN.md)
+
+## Cross-platform labs
+
+`first-person-lab`, `render-lab`, and `space-lab` each contain one shared Rust
+application implementation. Thin platform shells translate native or browser
+lifecycle and input events into the same `weaver-app-core` contract.
+
+Use the repository-local task runner from the Weaver root:
 
 ```bash
-WEAVER_HEADLESS=1 cargo run --example render-lab
+# Run a native desktop shell.
+cargo xtask run first-person --platform desktop
+cargo xtask run render --platform desktop
+cargo xtask run space --platform desktop
+
+# Check either target or both targets.
+cargo xtask check first-person --platform desktop
+cargo xtask check render --platform web
+cargo xtask check space --platform all
+
+# Produce static browser output under dist/<lab>/.
+cargo xtask build first-person --platform web
+cargo xtask build render --platform web
+cargo xtask build space --platform web
 ```
 
-Render Lab (requires a display and GPU):
+Web builds require `wasm32-unknown-unknown` and the `wasm-bindgen` CLI version
+locked by `Cargo.lock`. `xtask` checks that version before packaging. It does not
+run a web server; host the generated static output separately, for example:
 
 ```bash
-cargo run --example render-lab
+python3 -m http.server 8000 --bind 127.0.0.1 --directory dist/first-person
 ```
 
-Controls:
+Open <http://127.0.0.1:8000>. Browser rendering prefers WebGPU and falls back to
+WebGL2 when WebGPU is unavailable. Browser networking never compiles native QUIC
+or the Woven server into WASM: First-Person Lab bundles the sibling
+`@signalweave/woven-client` and speaks `WVN1` over browser WebTransport. Render
+Lab and Space Lab remain offline until they opt into the same realtime seam.
 
-- `Space` — pause/resume simulation
-- `1`, `2`, `3` — set time multiplier to 0.5x, 1.0x, 2.0x
-- `F1` — toggle coordinate frame visualization
-- `F2` — toggle trajectory history visualization
-- `Escape` — quit
+First-Person Lab captures the pointer on click, uses mouse look, and supports
+`WASD` or arrow-key movement bounded to the enclosed room. On coarse-pointer
+browsers, the left half of the canvas moves and the right half looks. The room
+shows no synthetic occupants: when connected to Woven, the lab publishes the
+local pose at 10 Hz and renders only bounded, interpolated remote visitors backed
+by live Woven entities from the same shared Rust application on desktop and web.
 
-## Woven Lab
+For a local development node with native QUIC and browser WebTransport, start the
+sibling Woven composition:
+
+```bash
+cd ../woven
+sh scripts/local/run-dev.sh
+```
+
+Desktop remains offline unless an endpoint is explicit:
+
+```bash
+FIRST_PERSON_WOVEN_URL=quic://127.0.0.1:8081 \
+  cargo xtask run first-person --platform desktop
+```
+
+The browser's **Woven multiplayer** panel accepts the endpoint, development or
+managed-Bearer authentication, namespace/session/space/epoch, and an optional
+SHA-256 certificate hash for disposable development TLS. It is prefilled with
+the non-secret hosted FPS demo endpoint and scope `2/2/1/1`; the credential
+field intentionally remains empty. Credentials stay in memory and are not
+accepted in endpoint URLs.
+
+For opt-in loopback-only auto-connect during local development, build first and
+then copy a current managed credential from a private file into the ignored output:
+
+```bash
+install -m 600 /path/to/fps-demo-token dist/first-person/woven.local-token
+python3 -m http.server 8000 --bind 127.0.0.1 --directory dist/first-person
+```
+
+The browser loads that file only at exactly `http://127.0.0.1:8000` or
+`http://localhost:8000`, selects managed Bearer authentication, and connects using
+the checked-in endpoint/scope defaults. A web rebuild clears `dist/`, so copy the
+file again after rebuilding. Never place `woven.local-token` under a lab source
+directory or deploy an output directory containing it; the task runner excludes
+that filename from source asset copies as a second guard.
+
+Managed native runs use
+`FIRST_PERSON_WOVEN_TARGET=managed` plus `FIRST_PERSON_WOVEN_CA_PEM_FILE`,
+`FIRST_PERSON_WOVEN_TOKEN_FILE`, and explicit scope-ID environment variables.
+Public browser deployment requires HTTPS and a Woven WebTransport listener with
+browser-trusted TLS (or an explicitly approved development certificate hash). The
+listener must also allow the page's exact browser origin, including scheme and
+non-default port. For example, local hosted-endpoint testing from this README uses
+`http://127.0.0.1:8000`; allowing `https://woven.host` does not allow that local
+origin. Browsers commonly report an origin rejection only as `Opening handshake
+failed` before Woven authentication begins.
+
+Render Lab and Space Lab drag to orbit and scroll to zoom. Space toggles pause
+with `Space` and sets 0.5×, 1×, or 2× time with `1`, `2`, or `3`.
+
+The older standalone JavaScript/WebGL2 behavior mock remains under
+`prototypes/first-person-web`; it is explicitly not a Weaver runtime target.
+
+## Woven Lab (deprecated diagnostic)
+
+`woven-lab` is retained temporarily for native soak and protocol diagnostics.
+New interactive multiplayer behavior belongs in consumer labs through the shared
+realtime seam; First-Person Lab is its replacement path.
 
 `woven-lab` is a multi-client replication visualizer with development, Host-managed
 local, and opt-in verified remote native QUIC paths. All Woven crates resolve from

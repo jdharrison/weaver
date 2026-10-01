@@ -802,6 +802,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "first-person-lab"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "serde",
+ "serde_json",
+ "tracing-subscriber",
+ "wasm-bindgen",
+ "weaver-app-core",
+ "weaver-platform-desktop",
+ "weaver-platform-web",
+ "weaver-render",
+ "weaver-render-wgpu",
+ "weaver-woven",
+ "web-sys",
+]
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2535,16 +2554,15 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "render-lab"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "glam",
- "tracing-subscriber",
- "weaver-app",
+ "wasm-bindgen",
+ "weaver-app-core",
  "weaver-core",
+ "weaver-platform-desktop",
+ "weaver-platform-web",
  "weaver-render",
  "weaver-render-wgpu",
- "weaver-worldline",
- "weaver-woven",
- "wgpu",
+ "web-sys",
 ]
 
 [[package]]
@@ -3000,16 +3018,14 @@ dependencies = [
 name = "space-lab"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "glam",
- "tracing-subscriber",
- "weaver-app",
- "weaver-core",
+ "wasm-bindgen",
+ "weaver-app-core",
+ "weaver-platform-desktop",
+ "weaver-platform-web",
  "weaver-render",
  "weaver-render-wgpu",
- "weaver-worldline",
- "wgpu",
 ]
 
 [[package]]
@@ -3800,6 +3816,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "weaver-app-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "weaver-render",
+ "weaver-render-wgpu",
+]
+
+[[package]]
 name = "weaver-core"
 version = "0.1.0"
 dependencies = [
@@ -3807,6 +3832,37 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "tracing",
+]
+
+[[package]]
+name = "weaver-platform-desktop"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "pollster",
+ "thiserror 2.0.20",
+ "tracing",
+ "weaver-app-core",
+ "weaver-render",
+ "weaver-render-wgpu",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "weaver-platform-web"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "weaver-app-core",
+ "weaver-render",
+ "weaver-render-wgpu",
+ "web-sys",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -3827,13 +3883,17 @@ dependencies = [
  "glam",
  "glyphon",
  "image",
+ "js-sys",
  "pollster",
  "raw-window-handle",
  "serde",
  "thiserror 2.0.20",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "weaver-core",
  "weaver-render",
+ "web-sys",
  "wgpu",
  "winit",
 ]
@@ -3860,6 +3920,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "weaver-app-core",
  "weaver-core",
  "woven-client",
  "woven-protocol",
@@ -3940,6 +4001,7 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-types",
@@ -3959,6 +4021,15 @@ name = "wgpu-core-deps-emscripten"
 version = "25.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f09ad7aceb3818e52539acc679f049d3475775586f3f4e311c30165cf2c00445"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "25.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eca8809ad123f6c7f2c5e01a2c7117c4fdfd02f70bd422ee2533f69dfa98756c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -4667,6 +4738,10 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
 
 [[package]]
 name = "yasna"

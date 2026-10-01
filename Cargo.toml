@@ -2,13 +2,18 @@
 members = [
     "crates/weaver-core",
     "crates/weaver-app",
+    "crates/weaver-app-core",
+    "crates/weaver-platform-desktop",
+    "crates/weaver-platform-web",
     "crates/weaver-render",
     "crates/weaver-render-wgpu",
     "crates/weaver-woven",
     "crates/weaver-worldline",
+    "examples/first-person-lab",
     "examples/render-lab",
     "examples/space-lab",
     "examples/woven-lab",
+    "xtask",
 ]
 resolver = "3"
 
@@ -23,6 +28,9 @@ repository = "https://github.com/jdharrison/weaver"
 # Internal crates
 weaver-core = { path = "crates/weaver-core" }
 weaver-app = { path = "crates/weaver-app" }
+weaver-app-core = { path = "crates/weaver-app-core" }
+weaver-platform-desktop = { path = "crates/weaver-platform-desktop" }
+weaver-platform-web = { path = "crates/weaver-platform-web" }
 weaver-render = { path = "crates/weaver-render" }
 weaver-render-wgpu = { path = "crates/weaver-render-wgpu" }
 weaver-woven = { path = "crates/weaver-woven" }
@@ -46,6 +54,19 @@ pollster = "0.4"
 wgpu = "25"
 winit = "0.30"
 raw-window-handle = "0.6"
+
+# Browser / WebAssembly
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "Performance",
+    "console",
+] }
 
 # Text rendering
 glyphon = "0.9"

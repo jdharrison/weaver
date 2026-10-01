@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod mode;
 pub mod payload;
+mod realtime;
 mod remote;
 
 pub use adapter::{WovenAdapter, WovenStatus};
@@ -17,3 +18,4 @@ pub use config::WovenConfig;
 pub use error::WovenAdapterError;
 pub use mode::ConnectivityMode;
 pub use payload::{DeliveryClass, Payload, PayloadEnvelope, PersistenceClass};
+pub use realtime::WovenRealtimeDriver;

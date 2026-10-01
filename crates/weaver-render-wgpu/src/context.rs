@@ -63,10 +63,11 @@ impl WgpuContext {
         window: std::sync::Arc<Window>,
         config: WgpuContextConfig,
     ) -> Result<Self, WgpuRenderError> {
-        let instance = wgpu::Instance::new(&InstanceDescriptor {
+        let instance = create_instance(&InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
-        });
+        })
+        .await;
 
         let surface = instance
             .create_surface(window.clone())
@@ -135,10 +136,11 @@ impl WgpuContext {
     ///
     /// Returns an error if no adapter or device is available.
     pub async fn headless(config: WgpuContextConfig) -> Result<HeadlessContext, WgpuRenderError> {
-        let instance = wgpu::Instance::new(&InstanceDescriptor {
+        let instance = create_instance(&InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
-        });
+        })
+        .await;
 
         let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -207,6 +209,59 @@ impl WgpuContext {
         let (w, h) = self.size;
         if h == 0 { 1.0 } else { w as f32 / h as f32 }
     }
+}
+
+fn create_instance(
+    descriptor: &InstanceDescriptor,
+) -> impl std::future::Future<Output = wgpu::Instance> + '_ {
+    #[cfg(target_arch = "wasm32")]
+    {
+        create_browser_instance(descriptor)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::future::ready(wgpu::Instance::new(descriptor))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn create_browser_instance(descriptor: &InstanceDescriptor) -> wgpu::Instance {
+    let mut descriptor = descriptor.clone();
+    if descriptor.backends.contains(wgpu::Backends::BROWSER_WEBGPU)
+        && !browser_webgpu_supported_with_timeout().await
+    {
+        descriptor.backends.remove(wgpu::Backends::BROWSER_WEBGPU);
+    }
+    wgpu::Instance::new(&descriptor)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn browser_webgpu_supported_with_timeout() -> bool {
+    const PROBE_TIMEOUT_MILLIS: i32 = 1_500;
+
+    let probe = wasm_bindgen_futures::future_to_promise(async {
+        Ok(wasm_bindgen::JsValue::from_bool(
+            wgpu::util::is_browser_webgpu_supported().await,
+        ))
+    });
+    let timeout = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                &resolve,
+                PROBE_TIMEOUT_MILLIS,
+            );
+        } else {
+            let _ = resolve.call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::FALSE);
+        }
+    });
+    let candidates = js_sys::Array::new();
+    candidates.push(&probe);
+    candidates.push(&timeout);
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::race(&candidates))
+        .await
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 /// A headless WGPU context without a surface.

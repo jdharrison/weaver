@@ -21,15 +21,23 @@ as certified, fail-operational, or suitable to control real vehicles.
 ```text
 weaver/
 ├── crates/
-│   ├── weaver-core/        # Runtime lifecycle, IDs, commands, snapshots
-│   ├── weaver-app/         # Native application runner and world composition
-│   ├── weaver-render/      # Renderer-neutral vocabulary
-│   ├── weaver-render-wgpu/ # WGPU graphics backend
-│   ├── weaver-woven/       # Local Woven node and protocol adapter
-│   └── weaver-worldline/   # Simulation time/frame adapter
-└── examples/
-    ├── render-lab/         # Integrated rendering example
-    └── space-lab/
+│   ├── weaver-core/             # Runtime lifecycle, IDs, commands, snapshots
+│   ├── weaver-app/              # Existing native runner and world composition
+│   ├── weaver-app-core/         # Platform-neutral lab contract, assets, and input
+│   ├── weaver-platform-desktop/ # Native winit/WGPU shell
+│   ├── weaver-platform-web/     # Browser WASM/winit/WGPU shell
+│   ├── weaver-render/           # Renderer-neutral vocabulary
+│   ├── weaver-render-wgpu/      # WGPU graphics backend
+│   ├── weaver-woven/            # Local Woven node and protocol adapter
+│   └── weaver-worldline/        # Simulation time/frame adapter
+├── examples/
+│   ├── first-person-lab/ # Shared multiplayer room with desktop/web shells
+│   ├── render-lab/       # Shared renderer feature lab with desktop/web shells
+│   ├── space-lab/        # Shared solar-system lab with desktop/web shells
+│   └── woven-lab/        # Deprecated native protocol/load diagnostic
+├── prototypes/
+│   └── first-person-web/ # Non-Weaver JavaScript/WebGL2 behavior mock
+└── xtask/                # Repository-local lab build/run orchestration
 ```
 
 ## Current network status
@@ -45,13 +53,19 @@ session. `RemoteQuic` is an explicit verified-TLS path using the sibling client'
 Host-provisioned scope IDs, verified TLS, Bearer authentication, bounded admission,
 and the managed Lite channel contract; it never sends legacy `JoinSession`.
 Both verified modes require an explicit QUIC URL and bounded CA PEM/token files and
-never fall back to development TLS or credentials. `woven-lab` remote/cloud GUI
-selection additionally requires a 1–600 second wall-clock duration; the launcher
-caps workers at 16 and rates at 120 Hz per client. `WOVEN_LAB_SOAK=1` is a distinct
-managed-local/cloud-only headless runner with separately bounded startup/admission,
-post-start active duration, and final echo drain. Verified network operations respect
-the applicable phase deadline and a 10-second per-operation timeout. See README for
-invocation and current limits; no cloud/shared-node validation is implied.
+never fall back to development TLS or credentials. `weaver-app-core` exposes a bounded
+realtime event/command seam. Desktop labs may drive it with `WovenRealtimeDriver` over
+native QUIC. First-Person Lab's browser shell uses the sibling
+`@signalweave/woven-client` over WebTransport and forwards opaque application payloads
+to the same shared Rust scene; it does not compile native QUIC or a Woven server into
+WASM. Its credentials are explicit and held in memory.
+
+`woven-lab` is deprecated as an interactive example but retained for native protocol,
+soak, and managed-admission diagnostics. Its remote/cloud GUI selection requires a
+1–600 second wall-clock duration; the launcher caps workers at 16 and rates at 120 Hz
+per client. `WOVEN_LAB_SOAK=1` remains a distinct managed-local/cloud-only headless
+runner. See README for invocation and current limits; no cloud/shared-node validation
+is implied.
 
 Do not make unsupported modes appear to work, and do not couple Weaver to
 `woven-core` in-process. A real network integration uses Woven's
@@ -59,6 +73,26 @@ Do not make unsupported modes appear to work, and do not couple Weaver to
 session provisioning, identity/ownership, routing, channel definitions,
 delivery/persistence policy, and bounded queues; Weaver owns the application
 and presentation behavior around that connection.
+
+## Graphics and UI direction
+
+Read `docs/UI-ARCHITECTURE.md` and
+`docs/adr/009-unified-rendering-and-scriptable-ui.md` before changing graphics or
+component/UI contracts. The direction is accepted; implementation is deferred in
+`docs/UI-IMPLEMENTATION-PLAN.md`, not implied shipped by these documents.
+
+Initial built-in modes are dynamic/depth-tested 3D, flat X/Y fixed-orthographic
+2D, and a screen-space UI overlay above scene content with its own stacking and
+clipping. Share graphics infrastructure without forcing scenes into a widget
+model. UI composition is scriptable; the language/runtime/framework is not yet
+selected. Execution authority, GPU ownership, and bounded scheduling remain in
+Rust/application services.
+
+Support future presentation and input adapters through explicit contracts, but
+do not bundle curved/diegetic surfaces, VR/OpenXR, or mobile integrations as part
+of the initial work. Preserve platform text/accessibility requirements and
+explicit WebGPU/WebGL2 capabilities; do not infer performance or sandboxing from
+GPU acceleration or an embedded interpreter.
 
 ## First milestone: Woven load-test client and UI
 
@@ -121,11 +155,15 @@ cargo test --workspace --all-targets --all-features
 cargo build --workspace --all-targets
 ```
 
-The current headless renderer smoke test is:
+Cross-platform labs use the repository task runner:
 
 ```sh
-WEAVER_HEADLESS=1 cargo run --example render-lab
+cargo xtask check first-person --platform all
+cargo xtask build render --platform web
+cargo xtask run space --platform desktop
 ```
+
+First-Person Lab uses the real Woven TypeScript WebTransport client in browsers. Other browser labs remain offline until they explicitly adopt the same realtime seam; browser targets must never compile or embed the native QUIC/server composition.
 
 For wire/client changes, also consult and run the focused validation prescribed
 by `../woven/AGENTS.md`.

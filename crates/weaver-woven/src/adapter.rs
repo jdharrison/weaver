@@ -15,6 +15,8 @@ use woven_protocol::{
     QueueState,
 };
 
+const APPLICATION_PAYLOAD_TYPE_ID: u64 = 1;
+const MAX_DRAIN_MESSAGES: usize = 128;
 const MAX_PENDING_ENTITY_LEAVES: usize = 1_024;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -363,15 +365,17 @@ impl WovenAdapter {
     ///
     /// Returns an error when Woven returns an invalid UTF-8 payload or transport error.
     pub fn drain_envelopes(&mut self) -> Result<Vec<PayloadEnvelope>, WovenAdapterError> {
+        self.drain_envelopes_bounded(MAX_DRAIN_MESSAGES)
+    }
+
+    pub(crate) fn drain_envelopes_bounded(
+        &mut self,
+        max_messages: usize,
+    ) -> Result<Vec<PayloadEnvelope>, WovenAdapterError> {
         let client = self.client.as_mut().ok_or(WovenAdapterError::NotRunning)?;
         let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let mut payloads = Vec::new();
         let mut entity_leaves = Vec::new();
-        let max_messages = if self.config.mode.uses_verified_tls() {
-            128
-        } else {
-            usize::MAX
-        };
         for _ in 0..max_messages {
             let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
                 client
@@ -386,20 +390,30 @@ impl WovenAdapter {
             {
                 return Err(WovenAdapterError::ServerRejected(error.code));
             }
+            let matches_scope = envelope.namespace_id == self.config.namespace_id
+                && envelope.session_id == self.config.session_id
+                && envelope.space_id == self.config.space_id
+                && envelope.space_epoch == self.config.space_epoch;
             if matches!(
                 &envelope.message,
                 MessagePayload::Control(ControlPayload::EntityLeft(_))
             ) {
-                if let Some(entity) = envelope.entity_id {
+                if matches_scope && let Some(entity) = envelope.entity_id {
                     entity_leaves.push(entity);
                 }
                 continue;
             }
             let (body, delivery) = match envelope.message {
-                MessagePayload::ReliableEvent(payload) => {
+                MessagePayload::ReliableEvent(payload)
+                    if matches_scope && payload.type_id == APPLICATION_PAYLOAD_TYPE_ID =>
+                {
                     (payload.bytes, DeliveryClass::ReliableOrdered)
                 }
-                MessagePayload::EntityState(payload) => (payload.bytes, DeliveryClass::LatestValue),
+                MessagePayload::EntityState(payload)
+                    if matches_scope && payload.type_id == APPLICATION_PAYLOAD_TYPE_ID =>
+                {
+                    (payload.bytes, DeliveryClass::LatestValue)
+                }
                 _ => continue,
             };
             let persistence = match envelope.channel_id {
@@ -430,7 +444,13 @@ impl WovenAdapter {
     /// Drain entity IDs that Woven reported as having left the subscribed space.
     #[must_use]
     pub fn drain_entity_leaves(&mut self) -> Vec<u64> {
-        self.entity_leaves.drain(..).collect()
+        self.drain_entity_leaves_bounded(MAX_PENDING_ENTITY_LEAVES)
+    }
+
+    pub(crate) fn drain_entity_leaves_bounded(&mut self, max_messages: usize) -> Vec<u64> {
+        (0..max_messages)
+            .map_while(|_| self.entity_leaves.pop_front())
+            .collect()
     }
 
     /// Drain currently available Woven application payloads.

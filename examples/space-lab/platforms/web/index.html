@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#000000">
+    <link rel="icon" href="data:,">
+    <title>WVR | Space Lab</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <canvas id="scene" tabindex="0" aria-label="Interactive solar system simulation"></canvas>
+    <aside class="status-panel" aria-label="Space Lab status and controls">
+      <strong>WVR / SPACE LAB</strong>
+      <p id="status">Loading Weaver GPU backend…</p>
+      <p class="desktop-controls">
+        Drag to orbit · Scroll to zoom · <kbd>Space</kbd> pause ·
+        <kbd>1</kbd> 0.5× · <kbd>2</kbd> 1× · <kbd>3</kbd> 2×
+      </p>
+    </aside>
+    <script type="module">
+      import init from "./pkg/space_lab.js";
+
+      init().catch((error) => {
+        console.error(error);
+        document.querySelector("#status").textContent = `Unable to start Weaver: ${error}`;
+      });
+    </script>
+  </body>
+</html>
