@@ -144,7 +144,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             examples/first-person-lab/platforms/web/package-lock.json
-            ../woven/crates/woven-client-ts/package-lock.json
 
       - name: Resolve locked wasm-bindgen version
         id: bindgen
