@@ -149,7 +149,7 @@ impl Default for WovenConfig {
             space_id: 1,
             space_epoch: 1,
             dev_token: "dev-token".to_owned(),
-            max_frame_bytes: 65_536,
+            max_frame_bytes: 1_048_576,
             max_payload_bytes: 65_536,
         }
     }

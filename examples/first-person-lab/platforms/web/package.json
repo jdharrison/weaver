@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "esbuild main.ts --bundle --format=esm --platform=browser --target=es2022 --external:./pkg/*",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test *.test.mjs"
   },
   "dependencies": {
     "@signalweave/woven-client": "file:../../../../../woven/crates/woven-client-ts"

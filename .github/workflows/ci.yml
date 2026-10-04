@@ -6,8 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  WOVEN_REVISION: 2bc74d3298b2f317cc00a1508b09b54250c612d8
 
 jobs:
   validate:
@@ -18,20 +22,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - name: Check out woven (path dependency)
+      - name: Check out compatible woven
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
+          persist-credentials: false
+          ref: ${{ env.WOVEN_REVISION }}
           path: woven-dep
 
-      - name: Link woven as a sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
+      - name: Place real woven sibling checkout
+        run: mv woven-dep ../woven
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
-          toolchain: 1.88
           components: rustfmt, clippy
 
       - name: Cache Cargo registry
@@ -49,7 +55,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test
@@ -60,20 +66,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - name: Check out woven (path dependency)
+      - name: Check out compatible woven
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
+          persist-credentials: false
+          ref: ${{ env.WOVEN_REVISION }}
           path: woven-dep
 
-      - name: Link woven as a sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
+      - name: Place real woven sibling checkout
+        run: mv woven-dep ../woven
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
-          toolchain: 1.88
           components: rustfmt, clippy
 
       - name: Cache Cargo registry
@@ -92,11 +100,102 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev
 
+      - name: Set up Node for packaging tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+
       - name: Run tests
-        run: cargo test --workspace --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
+
+  web-artifact:
+    name: First-Person web artifact
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Check out weaver
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Check out compatible woven
+        uses: actions/checkout@v4
+        with:
+          repository: jdharrison/woven
+          persist-credentials: false
+          ref: ${{ env.WOVEN_REVISION }}
+          path: woven-dep
+
+      - name: Place real woven sibling checkout
+        run: mv woven-dep ../woven
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: |
+            examples/first-person-lab/platforms/web/package-lock.json
+            ../woven/crates/woven-client-ts/package-lock.json
+
+      - name: Resolve locked wasm-bindgen version
+        id: bindgen
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("Cargo.lock", "rb") as source:
+              packages = tomllib.load(source)["package"]
+          versions = {p["version"] for p in packages if p["name"] == "wasm-bindgen"}
+          assert len(versions) == 1, "expected exactly one wasm-bindgen version"
+          print("version=" + versions.pop())
+          PY
+
+      - name: Cache matching wasm-bindgen CLI
+        id: bindgen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ runner.os }}-wasm-bindgen-${{ steps.bindgen.outputs.version }}
+
+      - name: Install matching wasm-bindgen CLI
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        env:
+          BINDGEN_VERSION: ${{ steps.bindgen.outputs.version }}
+        run: cargo install wasm-bindgen-cli --version "$BINDGEN_VERSION" --locked
+
+      - name: Fetch locked target dependency sources for notice verification
+        run: cargo fetch --locked --target wasm32-unknown-unknown
+
+      - name: Check WASM target
+        run: cargo run --locked -p xtask -- check first-person --platform web
+
+      - name: Build validated web artifact and redistribution notices
+        run: cargo run --locked -p xtask -- build first-person --platform web
+
+      - name: Test browser shell
+        working-directory: examples/first-person-lab/platforms/web
+        run: npm test
+
+      - name: Verify final artifact inventory
+        run: node scripts/check-web-artifact.mjs dist/first-person
+
+      - name: Upload static web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-person-web
+          path: dist/first-person/
+          if-no-files-found: error
 
   build-artifacts:
-    name: Build artifacts (${{ matrix.target }})
+    name: Build artifacts (${{ matrix.binary }} / ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     needs: test
     strategy:
@@ -113,20 +212,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - name: Check out woven (path dependency)
+      - name: Check out compatible woven
         uses: actions/checkout@v4
         with:
           repository: jdharrison/woven
+          persist-credentials: false
+          ref: ${{ env.WOVEN_REVISION }}
           path: woven-dep
 
-      - name: Link woven as a sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/woven-dep" "$GITHUB_WORKSPACE/../woven"
+      - name: Place real woven sibling checkout
+        run: mv woven-dep ../woven
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
-          toolchain: 1.88
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry
@@ -147,11 +248,14 @@ jobs:
           sudo apt-get install -y libwayland-dev libxkbcommon-dev
 
       - name: Build release binary
-        run: cargo build --release -p ${{ matrix.binary }} --target ${{ matrix.target }}
+        run: cargo build --locked --release -p ${{ matrix.binary }} --target ${{ matrix.target }}
 
-      - name: Upload artifact
+      - name: Upload native build artifact and local licenses
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.binary }}
+            LICENSE
+            crates/weaver-render-wgpu/assets/fonts/OFL.txt
           if-no-files-found: error

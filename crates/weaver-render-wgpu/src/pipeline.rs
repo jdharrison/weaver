@@ -223,6 +223,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 pub const UI_SHADER: &str = r"
 struct UiUniform {
     screen_size: vec2<f32>,
+    // Match the 16-byte Rust buffer layout required by downlevel WebGL2 devices.
+    _pad: vec2<f32>,
 };
 @group(0) @binding(0)
 var<uniform> ui_uniform: UiUniform;

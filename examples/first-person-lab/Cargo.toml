@@ -15,6 +15,7 @@ name = "first-person-lab"
 path = "src/main.rs"
 
 [dependencies]
+weaver-core.workspace = true
 weaver-app-core.workspace = true
 weaver-render.workspace = true
 weaver-render-wgpu.workspace = true

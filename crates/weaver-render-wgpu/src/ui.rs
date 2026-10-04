@@ -224,3 +224,32 @@ impl UiPipeline {
         self.rect_capacity = new_capacity;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_shader_uniforms_match_rust_and_downlevel_alignment() {
+        let shader = wgpu::naga::front::wgsl::parse_str(UI_SHADER).expect("valid UI shader");
+        for (name, rust_size) in [
+            ("UiUniform", std::mem::size_of::<UiUniform>()),
+            ("Rect", std::mem::size_of::<UiRectRaw>()),
+        ] {
+            let shader_type = shader
+                .types
+                .iter()
+                .find_map(|(_, ty)| (ty.name.as_deref() == Some(name)).then_some(ty))
+                .expect("UI uniform type exists");
+            let wgpu::naga::TypeInner::Struct { span, .. } = shader_type.inner else {
+                panic!("UI uniform must be a struct");
+            };
+            assert_eq!(span as usize, rust_size);
+            assert_eq!(
+                span % 16,
+                0,
+                "WebGL2 uniform bindings require 16-byte sizes"
+            );
+        }
+    }
+}

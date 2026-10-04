@@ -17,6 +17,7 @@ pub mod revision;
 pub mod runtime;
 pub mod snapshot;
 pub mod tick;
+pub mod user;
 
 pub use commands::{Command, CommandSink};
 pub use entity::{EntityId, EntityRegistry};
@@ -28,3 +29,4 @@ pub use revision::{Revision, Versioned};
 pub use runtime::{RuntimeConfig, RuntimePhase, WeaverRuntime};
 pub use snapshot::{ExtractSnapshot, RenderSnapshot};
 pub use tick::{Tick, TickRate};
+pub use user::{UserNameError, generate_user_id, generate_user_name};

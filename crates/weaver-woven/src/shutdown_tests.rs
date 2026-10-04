@@ -72,6 +72,7 @@ fn secure_remote_stop_notifies_peer_with_separate_runtimes() {
     };
     let mut observer = WovenAdapter::new(config.clone()).unwrap();
     observer.start().unwrap();
+    super::datagram_tests::assert_byte_and_json_roundtrip(&mut observer, 1, 11);
 
     // Each adapter owns a distinct multi-thread runtime; the server survives stop.
     // Exercise normal and already-expired traffic deadlines, from sync and both
@@ -92,6 +93,7 @@ fn secure_remote_stop_notifies_peer_with_separate_runtimes() {
                     assert_eq!(departing.status(), WovenStatus::Stopped);
                     assert!(departing.runtime.is_none());
                     assert!(departing.client.is_none());
+                    assert!(departing.datagram_receiver.is_none());
                     assert!(departing.entity_id().is_none());
                     departing.stop(); // Idempotent.
                 }
@@ -224,8 +226,18 @@ fn managed_adapter_admits_subscribes_publishes_and_releases_ccu() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(echoed, "managed publish must be echoed through Woven");
+    super::datagram_tests::assert_byte_and_json_roundtrip(&mut adapter, 2, 1);
+    adapter.set_run_deadline(Some(Instant::now()));
+    assert!(
+        adapter
+            .publish_unreliable_payload(None, 2, vec![0xff])
+            .is_err()
+    );
+    assert!(adapter.drain_unreliable().is_err());
+    assert_eq!(adapter.next_sequence.get(&UNRELIABLE_CHANNEL), Some(&1));
 
     adapter.stop();
+    assert!(adapter.datagram_receiver.is_none());
     let released = (0..20).any(|_| {
         if server_runtime.block_on(active_ccu(&server, 11, 17)) == 0 {
             true

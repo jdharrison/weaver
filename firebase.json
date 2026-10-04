@@ -1,0 +1,42 @@
+{
+  "hosting": {
+    "target": "portfolio",
+    "public": "dist/first-person",
+    "predeploy": [
+      "node scripts/check-web-artifact.mjs dist/first-person"
+    ],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "**/*.{ts,tsx,mjs,map,pem,key}",
+      "**/package*.json",
+      "**/*token*",
+      "**/*secret*"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, max-age=0, must-revalidate" },
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "Referrer-Policy", "value": "no-referrer" },
+          { "key": "X-Frame-Options", "value": "DENY" },
+          { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+          { "key": "Content-Security-Policy-Report-Only", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://api.woven.host:4434; img-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" }
+        ]
+      },
+      {
+        "source": "**/*.wasm",
+        "headers": [
+          { "key": "Content-Type", "value": "application/wasm" }
+        ]
+      }
+    ]
+  },
+  "emulators": {
+    "hosting": { "host": "127.0.0.1", "port": 8002 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

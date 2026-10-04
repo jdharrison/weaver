@@ -3,8 +3,22 @@
 use crate::error::WgpuRenderError;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
+    TextAtlas, TextBounds, TextRenderer, Viewport, fontdb,
 };
+
+const DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
+
+fn configure_default_font(db: &mut fontdb::Database) {
+    // Browsers have no system font database; measurement and rendering need the same face.
+    db.load_font_data(DEFAULT_FONT.to_vec());
+    db.set_sans_serif_family("Noto Sans");
+}
+
+fn create_font_system() -> FontSystem {
+    let mut font_system = FontSystem::new();
+    configure_default_font(font_system.db_mut());
+    font_system
+}
 
 /// Text rendering subsystem.
 pub struct TextPipeline {
@@ -36,7 +50,7 @@ impl TextPipeline {
         screen_width: u32,
         screen_height: u32,
     ) -> Result<Self, WgpuRenderError> {
-        let font_system = FontSystem::new();
+        let font_system = create_font_system();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut viewport = Viewport::new(device, &cache);
@@ -190,10 +204,74 @@ fn measure(buffer: &Buffer) -> (f32, f32) {
 /// height of the laid-out glyphs.
 #[must_use]
 pub fn measure_text(text: &str, size: f32) -> (f32, f32) {
-    let mut font_system = FontSystem::new();
+    let mut font_system = create_font_system();
     let mut buffer = Buffer::new(&mut font_system, Metrics::new(size, size));
     buffer.set_size(&mut font_system, Some(size * 4096.0), Some(size * 4096.0));
     let attrs = Attrs::new().family(Family::SansSerif);
     buffer.set_text(&mut font_system, text, &attrs, glyphon::Shaping::Advanced);
     measure(&buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_default_font_shapes_without_system_fonts() {
+        let mut db = fontdb::Database::new();
+        assert!(db.is_empty());
+        configure_default_font(&mut db);
+        let font_id = db
+            .query(&fontdb::Query {
+                families: &[fontdb::Family::SansSerif],
+                ..fontdb::Query::default()
+            })
+            .expect("bundled sans-serif font must resolve without installed fonts");
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 16.0));
+        buffer.set_size(&mut font_system, Some(800.0), Some(600.0));
+        buffer.set_text(
+            &mut font_system,
+            "Guest-0007 · café Ω",
+            &Attrs::new().family(Family::SansSerif),
+            glyphon::Shaping::Advanced,
+        );
+        let glyphs: Vec<_> = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .collect();
+        assert!(!glyphs.is_empty());
+        assert!(
+            glyphs
+                .iter()
+                .all(|glyph| glyph.font_id == font_id && glyph.glyph_id != 0)
+        );
+        let (width, height) = measure(&buffer);
+        assert!(width.is_finite() && width > 0.0);
+        assert!(height.is_finite() && height > 0.0);
+    }
+
+    #[test]
+    fn text_measurement_uses_the_bundled_default() {
+        let font_system = create_font_system();
+        let font_id = font_system
+            .db()
+            .query(&fontdb::Query {
+                families: &[fontdb::Family::SansSerif],
+                ..fontdb::Query::default()
+            })
+            .unwrap();
+        assert!(
+            font_system
+                .db()
+                .face(font_id)
+                .unwrap()
+                .families
+                .iter()
+                .any(|(family, _)| family == "Noto Sans")
+        );
+        let (width, height) = measure_text("First-Person Lab", 16.0);
+        assert!(width.is_finite() && width > 0.0);
+        assert!(height.is_finite() && height > 0.0);
+    }
 }

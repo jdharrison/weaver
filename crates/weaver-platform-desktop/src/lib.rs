@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::Instant;
 use weaver_app_core::{
     AppAction, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeDriver,
-    RealtimeEvent, WeaverApp,
+    RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
-    DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+    DeviceEvent, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
@@ -87,6 +87,8 @@ fn run_optional_realtime(
 
 const MAX_REALTIME_EVENTS_PER_REDRAW: usize = 256;
 const MAX_REALTIME_COMMANDS_PER_REDRAW: usize = 32;
+const MAX_TEXT_EVENTS_PER_REDRAW: usize = 32;
+const MAX_TEXT_EVENT_BYTES: usize = 1_024;
 
 fn poll_realtime(
     app: &mut dyn WeaverApp,
@@ -196,6 +198,7 @@ struct DesktopShell {
     last_cursor: Option<Vec2>,
     dragging: bool,
     cursor_captured: bool,
+    last_text_input_mode: TextInputMode,
     started_at: Instant,
     last_frame: Instant,
 }
@@ -222,6 +225,7 @@ impl DesktopShell {
             last_cursor: None,
             dragging: false,
             cursor_captured: false,
+            last_text_input_mode: TextInputMode::Disabled,
             started_at: now,
             last_frame: now,
         }
@@ -239,6 +243,43 @@ impl DesktopShell {
             window.set_cursor_visible(true);
         }
         self.cursor_captured = false;
+    }
+
+    fn push_text_event(&mut self, event: TextInputEvent) {
+        if self.input.text_events.len() < MAX_TEXT_EVENTS_PER_REDRAW {
+            self.input.text_events.push(event);
+        }
+    }
+
+    fn push_committed_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut end = text.len().min(MAX_TEXT_EVENT_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end != 0 {
+            self.push_text_event(TextInputEvent::Insert(text[..end].to_owned()));
+        }
+    }
+
+    fn sync_text_input(&mut self) {
+        let focused = self.app.text_input_mode() == TextInputMode::Focused;
+        if focused {
+            self.movement.clear();
+            self.input.movement = Vec2::ZERO;
+            self.input.look_delta = Vec2::ZERO;
+            self.dragging = false;
+            self.release_cursor();
+        }
+        let mode = self.app.text_input_mode();
+        if mode != self.last_text_input_mode {
+            if let Some(window) = self.window.as_ref() {
+                window.set_ime_allowed(focused);
+            }
+            self.last_text_input_mode = mode;
+        }
     }
 }
 
@@ -328,6 +369,11 @@ impl ApplicationHandler for DesktopShell {
                     MouseScrollDelta::PixelDelta(position) => position.y as f32 * 0.02,
                 };
             }
+            WindowEvent::Ime(Ime::Commit(text))
+                if self.app.text_input_mode() == TextInputMode::Focused =>
+            {
+                self.push_committed_text(&text);
+            }
             WindowEvent::MouseInput {
                 button: MouseButton::Left,
                 state,
@@ -353,11 +399,44 @@ impl ApplicationHandler for DesktopShell {
                         logical_key,
                         physical_key,
                         state,
+                        repeat,
                         ..
                     },
                 ..
             } => {
-                if state == ElementState::Pressed && logical_key == Key::Named(NamedKey::Escape) {
+                let pressed = state == ElementState::Pressed;
+                let text_mode = self.app.text_input_mode();
+                if pressed && !repeat && logical_key == Key::Named(NamedKey::Enter) {
+                    match text_mode {
+                        TextInputMode::Available => {
+                            self.movement.clear();
+                            self.release_cursor();
+                            self.push_text_event(TextInputEvent::Open);
+                            return;
+                        }
+                        TextInputMode::Focused => {
+                            self.push_text_event(TextInputEvent::Submit);
+                            return;
+                        }
+                        TextInputMode::Disabled => {}
+                    }
+                }
+                if text_mode == TextInputMode::Focused {
+                    if pressed {
+                        match logical_key.as_ref() {
+                            Key::Named(NamedKey::Escape) => {
+                                self.push_text_event(TextInputEvent::Cancel);
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.push_text_event(TextInputEvent::Backspace);
+                            }
+                            Key::Character(text) => self.push_committed_text(text),
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+                if pressed && logical_key == Key::Named(NamedKey::Escape) {
                     if self.cursor_captured {
                         self.release_cursor();
                     } else {
@@ -365,9 +444,8 @@ impl ApplicationHandler for DesktopShell {
                     }
                     return;
                 }
-                self.movement
-                    .set(physical_key, state == ElementState::Pressed);
-                if state == ElementState::Pressed {
+                self.movement.set(physical_key, pressed);
+                if pressed {
                     let action = match logical_key.as_ref() {
                         Key::Named(NamedKey::Space) => Some(AppAction::TogglePause),
                         Key::Named(NamedKey::F1) => Some(AppAction::ToggleCoordinateFrames),
@@ -384,9 +462,14 @@ impl ApplicationHandler for DesktopShell {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
+                let viewport_size = self.window.as_ref().map_or(glam::UVec2::ZERO, |window| {
+                    let size = window.inner_size();
+                    glam::UVec2::new(size.width, size.height)
+                });
                 let frame = FrameContext {
                     delta_seconds: now.duration_since(self.last_frame).as_secs_f32().min(0.1),
                     elapsed_seconds: now.duration_since(self.started_at).as_secs_f64(),
+                    viewport_size,
                 };
                 self.last_frame = now;
                 self.input.movement = self.movement.axis();
@@ -402,6 +485,7 @@ impl ApplicationHandler for DesktopShell {
                     self.realtime = None;
                 }
                 self.app.update(frame, &self.input);
+                self.sync_text_input();
                 self.input.clear_transient();
                 if let (Some(window), Some(renderer)) =
                     (self.window.as_ref(), self.renderer.as_mut())
@@ -476,12 +560,12 @@ mod tests {
         }
 
         fn drain_realtime_commands(&mut self, commands: &mut Vec<RealtimeCommand>) {
-            commands.extend(
-                (0..self.command_count).map(|sequence| RealtimeCommand::Publish {
+            commands.extend((0..self.command_count).map(|sequence| {
+                RealtimeCommand::PublishReliable {
                     sequence: sequence as u64,
                     payload: String::new(),
-                }),
-            );
+                }
+            }));
         }
     }
 

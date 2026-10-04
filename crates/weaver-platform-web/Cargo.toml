@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+weaver-core.workspace = true
 weaver-app-core.workspace = true
 weaver-render-wgpu.workspace = true
 winit.workspace = true

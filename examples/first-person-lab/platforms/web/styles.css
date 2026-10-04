@@ -19,10 +19,27 @@ body {
   background: #080a0f;
 }
 
+body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+  height: 100vh;
+  height: 100dvh;
+  padding: max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+}
+
 canvas {
+  position: fixed;
+  inset: 0;
   display: block;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   outline: none;
   touch-action: none;
   user-select: none;
@@ -30,10 +47,10 @@ canvas {
   -webkit-touch-callout: none;
 }
 
-.brand,
 .instructions,
+.connection-status,
 .network-panel {
-  position: fixed;
+  position: relative;
   z-index: 2;
   border: 1px solid rgb(255 255 255 / 16%);
   border-radius: 0.4rem;
@@ -42,19 +59,11 @@ canvas {
   backdrop-filter: blur(8px);
 }
 
-.brand {
-  top: max(1rem, env(safe-area-inset-top));
-  left: max(1rem, env(safe-area-inset-left));
-  padding: 0.5rem 0.7rem;
-  font: 600 0.7rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
-  pointer-events: none;
-}
-
 .instructions {
-  top: max(1rem, env(safe-area-inset-top));
-  right: max(1rem, env(safe-area-inset-right));
-  max-width: min(31rem, calc(100vw - 2rem));
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  max-width: min(31rem, 100%);
   padding: 0.65rem 0.8rem;
   font-size: 0.75rem;
   pointer-events: none;
@@ -69,25 +78,92 @@ canvas {
   display: none;
 }
 
-.network-panel {
-  left: max(1rem, env(safe-area-inset-left));
-  bottom: max(1rem, env(safe-area-inset-bottom));
-  width: min(27rem, calc(100vw - 2rem));
-  padding: 0.7rem 0.8rem;
+.connection-panel {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(27rem, 100%);
+  max-height: 100%;
+  min-height: 0;
   font-size: 0.75rem;
 }
 
+.connection-status {
+  flex: 0 0 auto;
+  padding: 0.65rem 0.8rem;
+}
+
+.network-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  width: fit-content;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.network-panel[open] {
+  width: 27rem;
+}
+
 .network-panel summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-height: 2rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.35rem;
   cursor: pointer;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font: 600 0.7rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.12em;
+  list-style: none;
   user-select: none;
+}
+
+.network-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.network-panel summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.network-panel[open] summary {
+  background: rgb(8 10 15 / 96%);
+}
+
+.network-panel[open] summary::after {
+  transform: rotate(225deg);
+}
+
+.network-panel summary:hover {
+  color: #f4f7fb;
+}
+
+.network-panel summary:focus-visible {
+  outline: 2px solid #9fc3ff;
+  outline-offset: -3px;
+  color: #f4f7fb;
 }
 
 .network-panel form {
   display: grid;
   gap: 0.55rem;
-  margin-top: 0.7rem;
+  margin: 0.7rem 0.8rem 0;
 }
 
 .network-panel label {
@@ -97,7 +173,9 @@ canvas {
 
 .network-panel input,
 .network-panel select,
-.network-panel button {
+.network-panel button,
+.connection-status button,
+.connection-status a {
   min-width: 0;
   padding: 0.42rem 0.5rem;
   border: 1px solid rgb(255 255 255 / 18%);
@@ -115,7 +193,26 @@ canvas {
 
 .network-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.connection-status a {
+  text-decoration: none;
+}
+
+.connection-status :is(button, a):focus-visible {
+  outline: 2px solid #9fc3ff;
+  outline-offset: 2px;
+}
+
+.settings-hint {
+  padding: 0.65rem 0.8rem;
 }
 
 .network-actions button {
@@ -129,12 +226,32 @@ canvas {
 }
 
 #network-status {
-  margin-top: 0.65rem;
+  margin: 0 0 0.6rem;
+  max-height: 8rem;
+  overflow: auto;
   color: #9fc3ff;
+  overflow-wrap: anywhere;
 }
 
-#network-status.failed {
+#network-status.failed,
+#status.failed {
   color: #ff9b9b;
+}
+
+@media (max-width: 64rem), (pointer: coarse) {
+  body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .instructions {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .scope-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (pointer: coarse) {
@@ -146,18 +263,7 @@ canvas {
     display: block;
   }
 
-  .instructions {
-    top: auto;
-    right: max(1rem, env(safe-area-inset-right));
-    bottom: max(1rem, env(safe-area-inset-bottom));
-  }
-
-  .network-panel {
-    top: max(3.7rem, calc(env(safe-area-inset-top) + 3.7rem));
-    bottom: auto;
-  }
-
-  .scope-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .network-panel summary {
+    min-height: 2.75rem;
   }
 }

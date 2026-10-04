@@ -58,6 +58,19 @@ pub struct PayloadEnvelope {
     pub persistence: PersistenceClass,
 }
 
+/// Opaque bytes received on channel `4` (`UnreliableSequenced`/`Ephemeral`).
+///
+/// Unlike [`PayloadEnvelope`], this envelope never interprets application bytes as UTF-8 or JSON.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnreliablePayloadEnvelope {
+    /// Application-specific bytes, unchanged from the datagram.
+    pub payload: Vec<u8>,
+    /// Application-defined sequence; receivers must handle loss and reordering.
+    pub sequence: u64,
+    /// Server-assigned sending entity.
+    pub entity_id: u64,
+}
+
 impl PayloadEnvelope {
     /// Create an envelope from a typed payload.
     ///

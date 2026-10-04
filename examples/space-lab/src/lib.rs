@@ -958,6 +958,7 @@ mod tests {
             FrameContext {
                 delta_seconds: 2.0,
                 elapsed_seconds: 2.0,
+                ..FrameContext::default()
             },
             &InputFrame {
                 actions: vec![AppAction::SetTimeMultiplier(2.0)],
@@ -971,6 +972,7 @@ mod tests {
             FrameContext {
                 delta_seconds: 2.0,
                 elapsed_seconds: 4.0,
+                ..FrameContext::default()
             },
             &InputFrame {
                 actions: vec![AppAction::TogglePause],
@@ -991,6 +993,7 @@ mod tests {
             FrameContext {
                 delta_seconds: 0.1,
                 elapsed_seconds: 1.0,
+                ..FrameContext::default()
             },
             &InputFrame::default(),
         );
@@ -998,6 +1001,7 @@ mod tests {
             FrameContext {
                 delta_seconds: 0.1,
                 elapsed_seconds: 3.0,
+                ..FrameContext::default()
             },
             &InputFrame::default(),
         );

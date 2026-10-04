@@ -4,10 +4,45 @@
 
 use weaver_app_core::WeaverApp;
 
+/// Generate a shared two-adjective display name unless other options are supplied.
+///
+/// Names are not unique or authenticated. Counts and affixes obey Weaver core's bounds.
+///
+/// # Errors
+///
+/// Returns an error for an invalid adjective count or affix.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = GenerateUserName)]
+pub fn generate_user_name(
+    adjectives: Option<u32>,
+    prefix: Option<String>,
+    postfix: Option<String>,
+) -> Result<String, wasm_bindgen::JsValue> {
+    weaver_core::generate_user_name(
+        adjectives.unwrap_or(2) as usize,
+        prefix.as_deref().unwrap_or(""),
+        postfix.as_deref().unwrap_or(""),
+    )
+    .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
+}
+
+/// Generate a fresh UUIDv4; persist and reuse it when a stable local ID is needed.
+///
+/// This is not an authenticated identity or a Woven entity ID.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = GenerateUserID)]
+pub fn generate_user_id() -> String {
+    weaver_core::generate_user_id()
+}
+
 #[cfg(any(test, target_arch = "wasm32"))]
 const MAX_REALTIME_EVENTS: usize = 256;
 #[cfg(target_arch = "wasm32")]
 const MAX_REALTIME_COMMANDS_PER_REDRAW: usize = 32;
+#[cfg(target_arch = "wasm32")]
+const MAX_TEXT_EVENTS_PER_REDRAW: usize = 32;
+#[cfg(target_arch = "wasm32")]
+const MAX_TEXT_EVENT_BYTES: usize = 1_024;
 
 #[cfg(any(test, target_arch = "wasm32"))]
 struct RealtimeInbox {
@@ -166,6 +201,27 @@ pub fn realtime_connected(entity_id: u64) -> bool {
     enqueue_realtime_event(weaver_app_core::RealtimeEvent::Connected { entity_id })
 }
 
+/// Queue a realtime entity entry for delivery before the next application update.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn realtime_entity_entered(entity_id: u64) -> bool {
+    enqueue_realtime_event(weaver_app_core::RealtimeEvent::EntityEntered { entity_id })
+}
+
+/// Queue an unreliable byte payload without a UTF-8 or JSON conversion.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn realtime_unreliable_payload(entity_id: u64, sequence: u64, payload: &[u8]) -> bool {
+    if payload.len() > 65_536 {
+        return false;
+    }
+    enqueue_realtime_event(weaver_app_core::RealtimeEvent::UnreliablePayload {
+        entity_id,
+        sequence,
+        payload: payload.to_vec(),
+    })
+}
+
 /// Queue a realtime entity departure for delivery before the next application update.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -239,18 +295,20 @@ fn run_platform(app: Box<dyn WeaverApp>, config: WebConfig) -> Result<(), WebErr
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use super::{
-        MAX_REALTIME_COMMANDS_PER_REDRAW, TouchControls, WebConfig, WebError, drain_realtime_events,
+        MAX_REALTIME_COMMANDS_PER_REDRAW, MAX_TEXT_EVENT_BYTES, MAX_TEXT_EVENTS_PER_REDRAW,
+        TouchControls, WebConfig, WebError, drain_realtime_events,
     };
     use glam::Vec2;
     use std::sync::Arc;
     use wasm_bindgen::prelude::wasm_bindgen;
     use wasm_bindgen::{JsCast, JsValue};
     use weaver_app_core::{
-        AppAction, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeEvent, WeaverApp,
+        AppAction, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeEvent,
+        TextInputEvent, TextInputMode, WeaverApp,
     };
     use winit::application::ApplicationHandler;
     use winit::event::{
-        DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+        DeviceEvent, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
     };
     use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
     use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
@@ -261,10 +319,38 @@ mod browser {
     extern "C" {
         #[wasm_bindgen(
             js_namespace = globalThis,
-            js_name = weaverRealtimePublish,
+            js_name = weaverRealtimePublishLatest,
             catch
         )]
-        fn weaver_realtime_publish(sequence: u64, payload: &str) -> Result<(), JsValue>;
+        fn weaver_realtime_publish_latest(sequence: u64, payload: &str) -> Result<(), JsValue>;
+
+        #[wasm_bindgen(
+            js_namespace = globalThis,
+            js_name = weaverRealtimePublishReliable,
+            catch
+        )]
+        fn weaver_realtime_publish_reliable(sequence: u64, payload: &str) -> Result<(), JsValue>;
+
+        #[wasm_bindgen(
+                    js_namespace = globalThis,
+                    js_name = weaverRealtimePublishUnreliable,
+                    catch
+                )]
+        fn weaver_realtime_publish_unreliable(sequence: u64, payload: &[u8])
+        -> Result<(), JsValue>;
+
+        #[wasm_bindgen(
+            js_namespace = globalThis,
+            js_name = weaverRealtimePublishPositionedUnreliable,
+            catch
+        )]
+        fn weaver_realtime_publish_positioned_unreliable(
+            sequence: u64,
+            x: f64,
+            y: f64,
+            z: f64,
+            payload: &[u8],
+        ) -> Result<(), JsValue>;
 
         #[wasm_bindgen(
             js_namespace = globalThis,
@@ -272,6 +358,12 @@ mod browser {
             catch
         )]
         fn weaver_realtime_fatal(reason: &str) -> Result<(), JsValue>;
+
+        #[wasm_bindgen(js_namespace = globalThis, js_name = weaverSceneReady, catch)]
+        fn weaver_scene_ready() -> Result<(), JsValue>;
+
+        #[wasm_bindgen(js_namespace = globalThis, js_name = weaverSceneFatal, catch)]
+        fn weaver_scene_fatal(message: &str) -> Result<(), JsValue>;
     }
 
     enum UserEvent {
@@ -294,10 +386,31 @@ mod browser {
         }
 
         for command in commands.drain(..) {
-            let RealtimeCommand::Publish { sequence, payload } = command;
-            if let Err(error) = weaver_realtime_publish(sequence, &payload) {
+            let result = match command {
+                RealtimeCommand::PublishLatest { sequence, payload } => {
+                    weaver_realtime_publish_latest(sequence, &payload)
+                }
+                RealtimeCommand::PublishReliable { sequence, payload } => {
+                    weaver_realtime_publish_reliable(sequence, &payload)
+                }
+                RealtimeCommand::PublishUnreliable { sequence, payload } => {
+                    weaver_realtime_publish_unreliable(sequence, &payload)
+                }
+                RealtimeCommand::PublishPositionedUnreliable {
+                    sequence,
+                    position,
+                    payload,
+                } => weaver_realtime_publish_positioned_unreliable(
+                    sequence,
+                    position[0],
+                    position[1],
+                    position[2],
+                    &payload,
+                ),
+            };
+            if let Err(error) = result {
                 let detail = error.as_string().unwrap_or_else(|| format!("{error:?}"));
-                let reason = format!("weaverRealtimePublish failed: {detail}");
+                let reason = format!("browser realtime publish bridge failed: {detail}");
                 let _ = weaver_realtime_fatal(&reason);
                 app.handle_realtime_event(RealtimeEvent::Disconnected { reason });
                 break;
@@ -370,6 +483,7 @@ mod browser {
         last_cursor: Option<Vec2>,
         dragging: bool,
         cursor_captured: bool,
+        last_text_input_mode: TextInputMode,
         started_millis: Option<f64>,
         last_frame_millis: Option<f64>,
     }
@@ -395,6 +509,7 @@ mod browser {
                 last_cursor: None,
                 dragging: false,
                 cursor_captured: false,
+                last_text_input_mode: TextInputMode::Disabled,
                 started_millis: None,
                 last_frame_millis: None,
             }
@@ -406,6 +521,44 @@ mod browser {
                 window.set_cursor_visible(true);
             }
             self.cursor_captured = false;
+        }
+
+        fn push_text_event(&mut self, event: TextInputEvent) {
+            if self.input.text_events.len() < MAX_TEXT_EVENTS_PER_REDRAW {
+                self.input.text_events.push(event);
+            }
+        }
+
+        fn push_committed_text(&mut self, text: &str) {
+            if text.is_empty() {
+                return;
+            }
+            let mut end = text.len().min(MAX_TEXT_EVENT_BYTES);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end != 0 {
+                self.push_text_event(TextInputEvent::Insert(text[..end].to_owned()));
+            }
+        }
+
+        fn sync_text_input(&mut self) {
+            let focused = self.app.text_input_mode() == TextInputMode::Focused;
+            if focused {
+                self.movement.clear();
+                self.touches.clear();
+                self.input.movement = Vec2::ZERO;
+                self.input.look_delta = Vec2::ZERO;
+                self.dragging = false;
+                self.release_cursor();
+            }
+            let mode = self.app.text_input_mode();
+            if mode != self.last_text_input_mode {
+                if let Some(window) = self.window.as_ref() {
+                    window.set_ime_allowed(focused);
+                }
+                self.last_text_input_mode = mode;
+            }
         }
 
         fn install_renderer(
@@ -444,6 +597,8 @@ mod browser {
             let backend = renderer.context().adapter.get_info().backend;
             self.renderer = Some(renderer);
             set_status(&format!("Weaver ready on {backend:?}"));
+            // Offline lab shells may omit these optional lifecycle callbacks.
+            let _ = weaver_scene_ready();
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
@@ -568,6 +723,11 @@ mod browser {
                         &mut self.input.look_delta,
                     );
                 }
+                WindowEvent::Ime(Ime::Commit(text))
+                    if self.app.text_input_mode() == TextInputMode::Focused =>
+                {
+                    self.push_committed_text(&text);
+                }
                 WindowEvent::MouseInput {
                     button: MouseButton::Left,
                     state,
@@ -593,18 +753,50 @@ mod browser {
                             logical_key,
                             physical_key,
                             state,
+                            repeat,
                             ..
                         },
                     ..
                 } => {
-                    if state == ElementState::Pressed && logical_key == Key::Named(NamedKey::Escape)
-                    {
+                    let pressed = state == ElementState::Pressed;
+                    let text_mode = self.app.text_input_mode();
+                    if pressed && !repeat && logical_key == Key::Named(NamedKey::Enter) {
+                        match text_mode {
+                            TextInputMode::Available => {
+                                self.movement.clear();
+                                self.touches.clear();
+                                self.release_cursor();
+                                self.push_text_event(TextInputEvent::Open);
+                                return;
+                            }
+                            TextInputMode::Focused => {
+                                self.push_text_event(TextInputEvent::Submit);
+                                return;
+                            }
+                            TextInputMode::Disabled => {}
+                        }
+                    }
+                    if text_mode == TextInputMode::Focused {
+                        if pressed {
+                            match logical_key.as_ref() {
+                                Key::Named(NamedKey::Escape) => {
+                                    self.push_text_event(TextInputEvent::Cancel);
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    self.push_text_event(TextInputEvent::Backspace);
+                                }
+                                Key::Character(text) => self.push_committed_text(text),
+                                _ => {}
+                            }
+                        }
+                        return;
+                    }
+                    if pressed && logical_key == Key::Named(NamedKey::Escape) {
                         self.release_cursor();
                         return;
                     }
-                    self.movement
-                        .set(physical_key, state == ElementState::Pressed);
-                    if state == ElementState::Pressed {
+                    self.movement.set(physical_key, pressed);
+                    if pressed {
                         let action = match logical_key.as_ref() {
                             Key::Named(NamedKey::Space) => Some(AppAction::TogglePause),
                             Key::Named(NamedKey::F1) => Some(AppAction::ToggleCoordinateFrames),
@@ -636,13 +828,19 @@ mod browser {
                     for event in drain_realtime_events() {
                         self.app.handle_realtime_event(event);
                     }
+                    let viewport_size = self.window.as_ref().map_or(glam::UVec2::ZERO, |window| {
+                        let size = window.inner_size();
+                        glam::UVec2::new(size.width, size.height)
+                    });
                     self.app.update(
                         FrameContext {
                             delta_seconds: delta,
                             elapsed_seconds: (now - started) / 1000.0,
+                            viewport_size,
                         },
                         &self.input,
                     );
+                    self.sync_text_input();
                     publish_realtime_commands(self.app.as_mut(), &mut self.realtime_commands);
                     self.input.clear_transient();
                     if let (Some(window), Some(renderer)) =
@@ -653,7 +851,19 @@ mod browser {
                                 window.pre_present_notify();
                                 renderer.present(frame);
                             }
-                            Err(error) => report_error(&format!("render failed: {error}")),
+                            Err(error) if super::recoverable_surface_error(&error) => {
+                                if !matches!(
+                                    error,
+                                    weaver_render_wgpu::WgpuRenderError::SurfaceAcquisitionFailed
+                                ) {
+                                    let size = window.inner_size();
+                                    renderer.resize(size.width, size.height);
+                                }
+                            }
+                            Err(error) => {
+                                report_error(&format!("render failed: {error}"));
+                                event_loop.exit();
+                            }
                         }
                     }
                 }
@@ -702,7 +912,18 @@ mod browser {
     fn report_error(message: &str) {
         web_sys::console::error_1(&JsValue::from_str(message));
         set_status(message);
+        let _ = weaver_scene_fatal(message);
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn recoverable_surface_error(error: &weaver_render_wgpu::WgpuRenderError) -> bool {
+    matches!(
+        error,
+        weaver_render_wgpu::WgpuRenderError::SurfaceAcquisitionFailed
+            | weaver_render_wgpu::WgpuRenderError::SurfaceLost
+            | weaver_render_wgpu::WgpuRenderError::SurfaceOutOfDate
+    )
 }
 
 #[cfg(test)]
@@ -727,6 +948,26 @@ mod tests {
         }
         fn assets(&self) -> &AppAssets {
             &self.assets
+        }
+    }
+
+    #[test]
+    fn transient_surface_failures_do_not_disable_the_scene() {
+        use weaver_render_wgpu::WgpuRenderError;
+
+        for error in [
+            WgpuRenderError::SurfaceAcquisitionFailed,
+            WgpuRenderError::SurfaceLost,
+            WgpuRenderError::SurfaceOutOfDate,
+        ] {
+            assert!(recoverable_surface_error(&error));
+        }
+        for error in [
+            WgpuRenderError::Surface("out of memory".to_owned()),
+            WgpuRenderError::Internal("invalid scene".to_owned()),
+            WgpuRenderError::NoAdapter,
+        ] {
+            assert!(!recoverable_surface_error(&error));
         }
     }
 

@@ -3,24 +3,33 @@
 use crate::config::WovenConfig;
 use crate::error::WovenAdapterError;
 use crate::mode::ConnectivityMode;
-use crate::payload::{DeliveryClass, Payload, PayloadEnvelope, PersistenceClass};
+use crate::payload::{
+    DeliveryClass, Payload, PayloadEnvelope, PersistenceClass, UnreliablePayloadEnvelope,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use weaver_app_core::RealtimeEvent;
 
-use woven_client::{Client, ClientConfig, ManagedAdmissionOutcome};
+use woven_client::{
+    Client, ClientConfig, DatagramReceiver, ManagedAdmissionOutcome, RoutingPosition3D,
+};
 use woven_protocol::{
-    AdmissionRejectionCode, AdmissionStatus, AuthenticationScheme, ControlPayload, MessagePayload,
-    QueueState,
+    AdmissionRejectionCode, AdmissionStatus, AuthenticationScheme, ControlPayload, MessageKind,
+    MessagePayload, QueueState,
 };
 
 const APPLICATION_PAYLOAD_TYPE_ID: u64 = 1;
+const UNRELIABLE_CHANNEL: u64 = 4;
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(1);
+const MAX_DRAIN_TIME: Duration = Duration::from_millis(4);
 const MAX_DRAIN_MESSAGES: usize = 128;
-const MAX_PENDING_ENTITY_LEAVES: usize = 1_024;
+const MAX_PENDING_LIFECYCLE_EVENTS: usize = 1_024;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+const LOG_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const MAX_ADMISSION_TIMEOUT: Duration = Duration::from_mins(15);
 
 /// Current status of the Woven adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,9 +54,10 @@ pub struct WovenAdapter {
     status: WovenStatus,
     runtime: Option<Runtime>,
     client: Option<Client>,
+    datagram_receiver: Option<DatagramReceiver>,
     entity_id: Option<u64>,
     next_sequence: HashMap<u64, u64>,
-    entity_leaves: VecDeque<u64>,
+    entity_lifecycle: VecDeque<RealtimeEvent>,
 }
 
 impl WovenAdapter {
@@ -63,9 +73,10 @@ impl WovenAdapter {
             status: WovenStatus::Stopped,
             runtime: None,
             client: None,
+            datagram_receiver: None,
             entity_id: None,
             next_sequence: HashMap::new(),
-            entity_leaves: VecDeque::with_capacity(MAX_PENDING_ENTITY_LEAVES),
+            entity_lifecycle: VecDeque::with_capacity(MAX_PENDING_LIFECYCLE_EVENTS),
         })
     }
 
@@ -79,6 +90,14 @@ impl WovenAdapter {
     #[must_use]
     pub const fn entity_id(&self) -> Option<u64> {
         self.entity_id
+    }
+
+    /// Whether the connected server negotiated atomic positioned entity state.
+    #[must_use]
+    pub fn supports_positioned_state(&self) -> bool {
+        self.client
+            .as_ref()
+            .is_some_and(Client::supports_positioned_state)
     }
 
     /// Replace the monotonic deadline used to bound subsequent verified-network operations.
@@ -196,8 +215,11 @@ impl WovenAdapter {
             expect_entity_entered(&mut client).await
         }))?;
 
+        // Admission and subscription consume control messages before receiver handout.
+        let datagram_receiver = client.take_datagram_receiver().map_err(client_error)?;
         self.runtime = Some(runtime);
         self.client = Some(client);
+        self.datagram_receiver = Some(datagram_receiver);
         self.entity_id = Some(entity_id);
         self.status = status;
 
@@ -211,6 +233,7 @@ impl WovenAdapter {
     /// async callers should offload it to `spawn_blocking` to remain responsive.
     /// It does not guarantee peer receipt or delivery of pending application data.
     pub fn stop(&mut self) {
+        self.datagram_receiver = None;
         let client = self.client.take();
         if let Some(runtime) = self.runtime.take() {
             // Neither nested block_on nor dropping a runtime in an async context
@@ -235,7 +258,7 @@ impl WovenAdapter {
         }
         self.entity_id = None;
         self.next_sequence.clear();
-        self.entity_leaves.clear();
+        self.entity_lifecycle.clear();
         self.status = WovenStatus::Stopped;
     }
 
@@ -248,6 +271,36 @@ impl WovenAdapter {
     /// Returns an error if the adapter is not running.
     pub fn spawn_entity(&mut self) -> Result<u64, WovenAdapterError> {
         self.entity_id.ok_or(WovenAdapterError::NotRunning)
+    }
+
+    /// Send one session-scoped info log through the client's ordered control stream.
+    ///
+    /// Success means sent, not persisted in Host Logs. Local validation and unsupported
+    /// capabilities do not stop the adapter, and failures are never retried. A cancelled
+    /// write closes the potentially partial control stream rather than reusing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stopped, the SDK rejects the message, or the bounded write fails.
+    pub fn log_info(&mut self, message: &str) -> Result<(), WovenAdapterError> {
+        let client = self.client.as_mut().ok_or(WovenAdapterError::NotRunning)?;
+        let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        let result = runtime.block_on(remote_operation(&self.config, async {
+            tokio::time::timeout(LOG_TIMEOUT, client.logger().info(message))
+                .await
+                .map_err(|_| {
+                    WovenAdapterError::ClientFailed("client log write timed out".to_owned())
+                })
+        }));
+        match result {
+            Ok(result) => result.map_err(client_error),
+            Err(error) => {
+                // A cancelled control write may be partial; its stream is no longer safe to reuse.
+                self.stop();
+                self.status = WovenStatus::Error(error.to_string());
+                Err(error)
+            }
+        }
     }
 
     /// Publish a typed payload through the configured Woven channel.
@@ -359,11 +412,161 @@ impl WovenAdapter {
         Ok(())
     }
 
+    /// Submit opaque bytes on channel `4` as an ephemeral, sequenced datagram (type `1`).
+    ///
+    /// Sequences must increase strictly on this channel. Success means local transport
+    /// submission, not server acceptance or delivery. An oversized or unsupported
+    /// datagram returns an error without retry, fragmentation, or reliable fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stopped, the sequence is stale, the verified run deadline
+    /// has elapsed, or the client's codec or datagram transport rejects the payload.
+    pub fn publish_unreliable_payload(
+        &mut self,
+        entity: Option<u64>,
+        sequence: u64,
+        payload: Vec<u8>,
+    ) -> Result<(), WovenAdapterError> {
+        if sequence
+            <= self
+                .next_sequence
+                .get(&UNRELIABLE_CHANNEL)
+                .copied()
+                .unwrap_or(0)
+        {
+            return Err(WovenAdapterError::StalePayload);
+        }
+        let entity_id = entity
+            .or(self.entity_id)
+            .ok_or(WovenAdapterError::NotRunning)?;
+        let client = self.client.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        runtime.block_on(remote_operation(&self.config, async {
+            client
+                .publish_unreliable_state(
+                    self.config.namespace_id,
+                    self.config.session_id,
+                    self.config.space_id,
+                    self.config.space_epoch,
+                    UNRELIABLE_CHANNEL,
+                    entity_id,
+                    sequence,
+                    APPLICATION_PAYLOAD_TYPE_ID,
+                    payload,
+                )
+                .map_err(client_error)
+        }))?;
+        self.next_sequence.insert(UNRELIABLE_CHANNEL, sequence);
+        Ok(())
+    }
+
+    /// Submit opaque bytes and an atomic 3D routing position on channel `4`.
+    ///
+    /// There is no unpositioned or reliable fallback. The server validates the selected
+    /// preconfigured spatial space and its authoritative bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when positioned state was not negotiated, the position or sequence
+    /// is invalid, or the datagram transport rejects the payload.
+    pub fn publish_unreliable_positioned_payload(
+        &mut self,
+        entity: Option<u64>,
+        sequence: u64,
+        position: [f64; 3],
+        payload: Vec<u8>,
+    ) -> Result<(), WovenAdapterError> {
+        if sequence
+            <= self
+                .next_sequence
+                .get(&UNRELIABLE_CHANNEL)
+                .copied()
+                .unwrap_or(0)
+        {
+            return Err(WovenAdapterError::StalePayload);
+        }
+        let entity_id = entity
+            .or(self.entity_id)
+            .ok_or(WovenAdapterError::NotRunning)?;
+        let client = self.client.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        runtime.block_on(remote_operation(&self.config, async {
+            client
+                .publish_unreliable_positioned_state(
+                    self.config.namespace_id,
+                    self.config.session_id,
+                    self.config.space_id,
+                    self.config.space_epoch,
+                    UNRELIABLE_CHANNEL,
+                    entity_id,
+                    sequence,
+                    APPLICATION_PAYLOAD_TYPE_ID,
+                    RoutingPosition3D {
+                        x: position[0],
+                        y: position[1],
+                        z: position[2],
+                    },
+                    payload,
+                )
+                .map_err(client_error)
+        }))?;
+        self.next_sequence.insert(UNRELIABLE_CHANNEL, sequence);
+        Ok(())
+    }
+
+    /// Drain at most 128 channel-`4` datagrams, retaining application bytes unchanged.
+    ///
+    /// Only the configured scope/epoch, `UnreliableSequenced` class, type `1`, and
+    /// nonzero sending entities are accepted. This is independent of the control
+    /// stream; callers should also drain JSON envelopes and entity leaves.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stopped, the deadline expires, or datagram decoding/transport fails.
+    pub fn drain_unreliable(
+        &mut self,
+    ) -> Result<Vec<UnreliablePayloadEnvelope>, WovenAdapterError> {
+        self.drain_unreliable_bounded(MAX_DRAIN_MESSAGES)
+    }
+
+    pub(crate) fn drain_unreliable_bounded(
+        &mut self,
+        max_messages: usize,
+    ) -> Result<Vec<UnreliablePayloadEnvelope>, WovenAdapterError> {
+        let receiver = self
+            .datagram_receiver
+            .as_mut()
+            .ok_or(WovenAdapterError::NotRunning)?;
+        let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
+        let started = std::time::Instant::now();
+        let mut payloads = Vec::new();
+        for _ in 0..max_messages.min(MAX_DRAIN_MESSAGES) {
+            if started.elapsed() >= MAX_DRAIN_TIME {
+                break;
+            }
+            let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
+                receiver
+                    .recv_timeout(DRAIN_TIMEOUT)
+                    .await
+                    .map_err(client_error)
+            }))?
+            else {
+                break;
+            };
+            if let Some(payload) = unreliable_payload(&self.config, envelope) {
+                payloads.push(payload);
+            }
+        }
+        Ok(payloads)
+    }
+
     /// Drain currently available Woven application envelopes.
     ///
     /// # Errors
     ///
-    /// Returns an error when Woven returns an invalid UTF-8 payload or transport error.
+    /// Returns an error when Woven returns an invalid UTF-8 payload or transport error,
+    /// or the bounded lifecycle queue overflows. Drain lifecycle events alongside payloads.
     pub fn drain_envelopes(&mut self) -> Result<Vec<PayloadEnvelope>, WovenAdapterError> {
         self.drain_envelopes_bounded(MAX_DRAIN_MESSAGES)
     }
@@ -375,11 +578,14 @@ impl WovenAdapter {
         let client = self.client.as_mut().ok_or(WovenAdapterError::NotRunning)?;
         let runtime = self.runtime.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let mut payloads = Vec::new();
-        let mut entity_leaves = Vec::new();
-        for _ in 0..max_messages {
+        let started = std::time::Instant::now();
+        for _ in 0..max_messages.min(MAX_DRAIN_MESSAGES) {
+            if started.elapsed() >= MAX_DRAIN_TIME {
+                break;
+            }
             let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
                 client
-                    .recv_timeout(Duration::from_millis(1))
+                    .recv_timeout(DRAIN_TIMEOUT)
                     .await
                     .map_err(client_error)
             }))?
@@ -388,19 +594,18 @@ impl WovenAdapter {
             };
             if let MessagePayload::Control(ControlPayload::ProtocolError(error)) = &envelope.message
             {
+                if error.related_message_kind == MessageKind::ClientLog {
+                    tracing::warn!(code = ?error.code, "Woven client log rejected; continuing realtime connection");
+                    continue;
+                }
                 return Err(WovenAdapterError::ServerRejected(error.code));
             }
             let matches_scope = envelope.namespace_id == self.config.namespace_id
                 && envelope.session_id == self.config.session_id
                 && envelope.space_id == self.config.space_id
                 && envelope.space_epoch == self.config.space_epoch;
-            if matches!(
-                &envelope.message,
-                MessagePayload::Control(ControlPayload::EntityLeft(_))
-            ) {
-                if matches_scope && let Some(entity) = envelope.entity_id {
-                    entity_leaves.push(entity);
-                }
+            if let Some(event) = entity_lifecycle_event(&self.config, &envelope) {
+                queue_lifecycle_event(&mut self.entity_lifecycle, event)?;
                 continue;
             }
             let (body, delivery) = match envelope.message {
@@ -432,24 +637,46 @@ impl WovenAdapter {
                 persistence,
             });
         }
-        for entity in entity_leaves {
-            if self.entity_leaves.len() == MAX_PENDING_ENTITY_LEAVES {
-                self.entity_leaves.pop_front();
-            }
-            self.entity_leaves.push_back(entity);
-        }
         Ok(payloads)
     }
 
-    /// Drain entity IDs that Woven reported as having left the subscribed space.
+    /// Drain queued `EntityEntered`/`EntityLeft` events in reliable-stream order.
+    ///
+    /// This does not read the network: call [`Self::drain_envelopes`] first.
+    /// The queue holds at most 1,024 events and never silently evicts lifecycle changes.
+    /// Startup's own entry is represented by the connection's assigned entity ID;
+    /// no existing-peer roster is synthesized.
     #[must_use]
-    pub fn drain_entity_leaves(&mut self) -> Vec<u64> {
-        self.drain_entity_leaves_bounded(MAX_PENDING_ENTITY_LEAVES)
+    pub fn drain_entity_lifecycle(&mut self) -> Vec<RealtimeEvent> {
+        self.drain_entity_lifecycle_bounded(MAX_PENDING_LIFECYCLE_EVENTS)
     }
 
-    pub(crate) fn drain_entity_leaves_bounded(&mut self, max_messages: usize) -> Vec<u64> {
-        (0..max_messages)
-            .map_while(|_| self.entity_leaves.pop_front())
+    pub(crate) fn drain_entity_lifecycle_bounded(
+        &mut self,
+        max_messages: usize,
+    ) -> Vec<RealtimeEvent> {
+        (0..max_messages.min(MAX_PENDING_LIFECYCLE_EVENTS))
+            .map_while(|_| self.entity_lifecycle.pop_front())
+            .collect()
+    }
+
+    pub(crate) fn has_pending_entity_lifecycle(&self) -> bool {
+        !self.entity_lifecycle.is_empty()
+    }
+
+    /// Drain entity IDs that Woven reported as having left the subscribed space.
+    ///
+    /// Compatibility projection for leave-only consumers. It also consumes queued
+    /// entries; use [`Self::drain_entity_lifecycle`] instead when entries or lifecycle
+    /// ordering matter. Both methods consume the same queue and should not be mixed.
+    #[must_use]
+    pub fn drain_entity_leaves(&mut self) -> Vec<u64> {
+        self.drain_entity_lifecycle()
+            .into_iter()
+            .filter_map(|event| match event {
+                RealtimeEvent::EntityLeft { entity_id } => Some(entity_id),
+                _ => None,
+            })
             .collect()
     }
 
@@ -474,6 +701,70 @@ impl Drop for WovenAdapter {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn entity_lifecycle_event(
+    config: &WovenConfig,
+    envelope: &woven_protocol::Envelope,
+) -> Option<RealtimeEvent> {
+    if envelope.namespace_id != config.namespace_id
+        || envelope.session_id != config.session_id
+        || envelope.space_id != config.space_id
+        || envelope.space_epoch != config.space_epoch
+        || envelope.delivery_class != woven_protocol::DeliveryClass::ReliableOrdered
+    {
+        return None;
+    }
+    let entity_id = envelope.entity_id.filter(|entity| *entity != 0)?;
+    match &envelope.message {
+        MessagePayload::Control(ControlPayload::EntityEntered(_)) => {
+            Some(RealtimeEvent::EntityEntered { entity_id })
+        }
+        MessagePayload::Control(ControlPayload::EntityLeft(_)) => {
+            Some(RealtimeEvent::EntityLeft { entity_id })
+        }
+        _ => None,
+    }
+}
+
+fn queue_lifecycle_event(
+    queue: &mut VecDeque<RealtimeEvent>,
+    event: RealtimeEvent,
+) -> Result<(), WovenAdapterError> {
+    if queue.len() == MAX_PENDING_LIFECYCLE_EVENTS {
+        return Err(WovenAdapterError::ClientFailed(
+            "Woven lifecycle event queue overflow".to_owned(),
+        ));
+    }
+    queue.push_back(event);
+    Ok(())
+}
+
+fn unreliable_payload(
+    config: &WovenConfig,
+    envelope: woven_protocol::Envelope,
+) -> Option<UnreliablePayloadEnvelope> {
+    if envelope.namespace_id != config.namespace_id
+        || envelope.session_id != config.session_id
+        || envelope.space_id != config.space_id
+        || envelope.space_epoch != config.space_epoch
+        || envelope.channel_id != Some(UNRELIABLE_CHANNEL)
+        || envelope.delivery_class != woven_protocol::DeliveryClass::UnreliableSequenced
+    {
+        return None;
+    }
+    let entity_id = envelope.entity_id.filter(|entity| *entity != 0)?;
+    let MessagePayload::EntityState(payload) = envelope.message else {
+        return None;
+    };
+    if payload.type_id != APPLICATION_PAYLOAD_TYPE_ID {
+        return None;
+    }
+    Some(UnreliablePayloadEnvelope {
+        payload: payload.bytes,
+        sequence: envelope.sender_sequence,
+        entity_id,
+    })
 }
 
 fn shutdown_client(runtime: Runtime, client: Option<Client>) {
@@ -671,6 +962,14 @@ fn client_error(error: woven_client::ClientError) -> WovenAdapterError {
 #[cfg(test)]
 #[path = "shutdown_tests.rs"]
 mod shutdown_tests;
+
+#[cfg(test)]
+#[path = "datagram_tests.rs"]
+mod datagram_tests;
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {

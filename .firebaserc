@@ -1,0 +1,9 @@
+{
+  "targets": {
+    "demo-weaver-portfolio": {
+      "hosting": {
+        "portfolio": ["demo-weaver-portfolio"]
+      }
+    }
+  }
+}

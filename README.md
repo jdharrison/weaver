@@ -6,6 +6,41 @@ A next-generation, local-first Rust engine for interactive simulations, games, a
 
 This repository contains Weaver's initial vertical slice: renderer-neutral application state, native and browser WGPU shells, Worldline-backed simulation support, and optional Woven connectivity through the public `WVN1` protocol boundary.
 
+## 0.2.0 release scope
+
+Weaver's workspace version is **0.2.0**. This pre-1.0 minor release changes the
+public frame/input and realtime command/event contracts, adds shared guest-name
+and UUID helpers, and extends First-Person Lab with profiles, chat, and bounded
+browser lifecycle handling. First-Person poses now require positioned channel-4
+datagrams in a preconfigured spatial space; there is no reliable or broadcast
+fallback. Consumers of the previous Rust contracts must update their call sites.
+
+The compatible Woven source is **`2bc74d3298b2f317cc00a1508b09b54250c612d8`**:
+**runtime 0.4.0**, **protocol/Rust/npm clients 0.3.0**, and **wire version 1
+(`WVN1`)**. Both workspaces require **Rust 1.98**; the verified toolchain is
+**1.98.0**. Locked inputs are refreshed. CI pins this exact Woven revision, uses a
+real sibling checkout with credential persistence disabled, and builds, validates
+and uploads the web artifact with its legal notices. This describes configuration,
+not a successful GitHub Actions run.
+
+Weaver's source identity is the commit containing its **0.2.0 manifest and release
+handoff**; record that commit's ID in release/CI metadata after creating it, not
+as a self-referential hash inside its own contents. Future approved publication
+must push Woven first, then Weaver with the exact pinned CI dependency.
+
+The latest comprehensive local pass had **168 Rust tests**, **9 Node licensing
+tests**, **45 browser-shell tests**, and a validated **12-file web artifact**.
+Final confirmation against the exact Woven commit passed formatting, strict
+workspace Clippy and **33 adapter tests**. Prior demo Hosting **13 HTTP checks**
+and Firefox **14 startup checks** (`Weaver ready on Gl`) are historical evidence,
+not newly rerun checks or live multiplayer validation.
+
+This is not a deployed anonymous multiplayer release or a shipped scripted UI
+framework. See [the portfolio release scope and gates](docs/PORTFOLIO-RELEASE.md)
+and [the reviewed web dependency-notice inventory](docs/WEB-LICENSES.md). Web
+packaging now includes the reviewed Rust/WASM notices; native archives still
+require their own target-specific inventory.
+
 ## Workspace layout
 
 ```text
@@ -71,9 +106,13 @@ cargo xtask build render --platform web
 cargo xtask build space --platform web
 ```
 
-Web builds require `wasm32-unknown-unknown` and the `wasm-bindgen` CLI version
-locked by `Cargo.lock`. `xtask` checks that version before packaging. It does not
-run a web server; host the generated static output separately, for example:
+Web builds require `wasm32-unknown-unknown`, Node, and the `wasm-bindgen` CLI version
+locked by `Cargo.lock`. `xtask` checks that version, stages runtime-only output
+with licenses, verifies the reviewed target-specific normal dependency/feature
+inventory and exact upstream legal bytes, and validates it before replacing the
+previous successful build. Dependency/license drift requires explicit inventory
+review; the artifact cannot authorize extra filenames through its own manifest.
+It does not run a web server; host the generated static output separately, for example:
 
 ```bash
 python3 -m http.server 8000 --bind 127.0.0.1 --directory dist/first-person
@@ -86,11 +125,75 @@ or the Woven server into WASM: First-Person Lab bundles the sibling
 Lab and Space Lab remain offline until they opt into the same realtime seam.
 
 First-Person Lab captures the pointer on click, uses mouse look, and supports
-`WASD` or arrow-key movement bounded to the enclosed room. On coarse-pointer
-browsers, the left half of the canvas moves and the right half looks. The room
-shows no synthetic occupants: when connected to Woven, the lab publishes the
-local pose at 10 Hz and renders only bounded, interpolated remote visitors backed
-by live Woven entities from the same shared Rust application on desktop and web.
+`WASD` or arrow-key movement bounded to the enclosed room. `Enter` opens room
+chat and releases pointer lock; typing owns movement keys, `Enter` sends, and
+`Escape` cancels. New visitors start with a shared two-adjective name such as
+`BrightCalm`. Use `/name Your Name` to change this untrusted display name; the
+browser's expandable **WVR / FIRST-PERSON LAB** settings expose the same setting
+and advanced Woven connection controls. Connection/error/retry status remains
+visible while settings are closed. Browser guest names and UUIDv4 IDs are stored once in origin-local
+storage and reused across reloads/reconnects; if storage is blocked, they remain
+page-local. Neither is an authenticated account or a server-assigned Woven entity ID.
+On coarse-pointer browsers,
+the left half of the canvas moves and the right half looks. The room shows no
+synthetic occupants: when connected to Woven, the lab publishes the local pose at
+10 Hz and renders bounded interpolated remote capsules with projected names.
+Poses use **25-byte binary payloads** on channel **4**, provisioned as
+`UnreliableSequenced` / `Ephemeral`, over actual QUIC/WebTransport datagrams. Every
+pose also carries the camera eye as atomic Woven 3D routing metadata in an explicitly
+configured spatial subspace; there is no unpositioned or broadcast fallback.
+The layout is one version byte followed by position `x,y,z` and forward `x,y,z`
+as six little-endian IEEE-754 `f32` values. Entity IDs and sequences stay in the
+WVN1 envelope, not the pose body. Invalid lengths, versions, non-finite values,
+out-of-room positions, and invalid directions are rejected.
+
+Chat and display-name profiles stay bounded reliable JSON on channel **1**.
+Profiles announce on connection, name changes, and peer entry; names are not
+repeated in every pose. The two lanes have independent receive watermarks and
+pending queues: newer poses replace pending poses, never chat. Browser poses
+expire from transport queues after 250 ms. Datagram submission is not a delivery
+acknowledgement; there is no fragmentation, retransmission, or reliable fallback.
+Ephemeral poses have no late-join cache; the next periodic update supplies state.
+Legacy JSON poses remain receive-only compatibility traffic.
+
+Shared identity helpers live in `weaver-core`:
+
+```rust
+let name = weaver_core::generate_user_name(2, "", "")?;
+let user_id = weaver_core::generate_user_id(); // Fresh UUIDv4; persist it once for stability.
+```
+
+The browser platform exposes the same Rust implementation as
+`GenerateUserName(adjectives = 2, prefix = "", postfix = "")` and `GenerateUserID()`.
+Names contain distinct CamelCase adjectives (no noun), with configurable affixes;
+counts and affixes are bounded. Names can collide; UUIDv4 collision probability is
+negligible but not mathematically zero. Admission request IDs are separately generated
+for each attempt, never reused from the persisted guest ID. Native lab names default
+to the same two-adjective generator and retain `FIRST_PERSON_DISPLAY_NAME` overrides.
+
+Three seconds after a successful room connection, both desktop and browser shells
+attempt one `logger.info` message:
+
+> First-Person Lab: connected successfully; delayed client logging test (3 seconds after connection).
+
+On a Host-managed server, select that server in **Console → Logs** and use the
+**Info** level to find its `client.log` event. Allow a few additional seconds for
+Host collection and console polling. The log is not chat or a pose publication;
+it carries the node's trusted session/connection metadata. Disconnect cancels the
+pending log, and reconnect starts a fresh delay. It is not repeated periodically,
+and an unsupported logger or a full queue does not interrupt room traffic.
+Browser delay/cancellation tests run with `npm test` from
+`examples/first-person-lab/platforms/web`; native timing and real local QUIC log
+feed checks run with `cargo test -p first-person-lab -p weaver-woven`.
+
+Desktop and browser clients require an updated node provisioning channels 1 and
+4 plus positioned entity-state capability. The selected spatial subspace must already
+exist: clients cannot create ad-hoc spaces, and the server owns its 3D bounds, scale,
+grid size, and interest radius. Logical compatibility spaces 1/2 are rejected for
+First-Person poses. Managed Host descriptors expose channels 1/4; old nodes are
+rejected rather than silently sending reliable or broadcast poses. Browser sessions
+explicitly require unreliable support. Rebuild the Woven node, client package, and
+Weaver web bundle together before deploying; these local changes do not deploy anything.
 
 For a local development node with native QUIC and browser WebTransport, start the
 sibling Woven composition:
@@ -103,14 +206,16 @@ sh scripts/local/run-dev.sh
 Desktop remains offline unless an endpoint is explicit:
 
 ```bash
+FIRST_PERSON_DISPLAY_NAME=Ada \
 FIRST_PERSON_WOVEN_URL=quic://127.0.0.1:8081 \
   cargo xtask run first-person --platform desktop
 ```
 
-The browser's **Woven multiplayer** panel accepts the endpoint, development or
-managed-Bearer authentication, namespace/session/space/epoch, and an optional
-SHA-256 certificate hash for disposable development TLS. It is prefilled with
-the non-secret hosted FPS demo endpoint and scope `2/2/1/1`; the credential
+The browser's **Woven multiplayer** panel accepts a temporary display name, the
+endpoint, development or managed-Bearer authentication,
+namespace/session/spatial-space/epoch, and an optional SHA-256 certificate hash for
+disposable development TLS. It is prefilled with
+the non-secret hosted FPS demo endpoint and scope `2/2/3/1`; the credential
 field intentionally remains empty. Credentials stay in memory and are not
 accepted in endpoint URLs.
 
@@ -124,14 +229,16 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory dist/first-person
 
 The browser loads that file only at exactly `http://127.0.0.1:8000` or
 `http://localhost:8000`, selects managed Bearer authentication, and connects using
-the checked-in endpoint/scope defaults. A web rebuild clears `dist/`, so copy the
+the checked-in endpoint/scope defaults. A successful web rebuild replaces `dist/first-person`, so copy the
 file again after rebuilding. Never place `woven.local-token` under a lab source
-directory or deploy an output directory containing it; the task runner excludes
-that filename from source asset copies as a second guard.
+directory or deploy an output directory containing it. The runtime copy allowlist
+excludes it, and final artifact validation rejects it before reading its contents.
 
 Managed native runs use
 `FIRST_PERSON_WOVEN_TARGET=managed` plus `FIRST_PERSON_WOVEN_CA_PEM_FILE`,
-`FIRST_PERSON_WOVEN_TOKEN_FILE`, and explicit scope-ID environment variables.
+`FIRST_PERSON_WOVEN_TOKEN_FILE`, and explicit scope-ID environment variables. The
+`FIRST_PERSON_WOVEN_SPACE_ID` default is `3` and must identify a Host-preconfigured
+3D spatial subspace at epoch `1`.
 Public browser deployment requires HTTPS and a Woven WebTransport listener with
 browser-trusted TLS (or an explicitly approved development certificate hash). The
 listener must also allow the page's exact browser origin, including scheme and
@@ -139,6 +246,12 @@ non-default port. For example, local hosted-endpoint testing from this README us
 `http://127.0.0.1:8000`; allowing `https://woven.host` does not allow that local
 origin. Browsers commonly report an origin rejection only as `Opening handshake
 failed` before Woven authentication begins.
+
+For `jdharrison.com` release preparation, see [the portfolio release runbook](docs/PORTFOLIO-RELEASE.md).
+The optional anonymous bootstrap client is off until explicitly configured; no
+bootstrap backend or production deployment is included. Browser joining requires
+actual renderer readiness. Hidden tabs disconnect and require manual rejoin.
+Chat remains desktop-first; touch movement does not supply mobile text entry.
 
 Render Lab and Space Lab drag to orbit and scroll to zoom. Space toggles pause
 with `Space` and sets 0.5×, 1×, or 2× time with `1`, `2`, or `3`.
@@ -421,16 +534,16 @@ cargo test -p woven-lab
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features
-cargo test --workspace --all-targets --all-features
-cargo build --workspace --all-targets
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+cargo build --locked --workspace --all-targets --all-features
 ```
 
 ## Dependencies
 
 Key pinned source dependencies:
 
-- `woven-client`, `woven-protocol`, and `woven-server` from the sibling `../woven` checkout (its checked-out `main` revision is the integration source of truth)
+- `woven-client`, `woven-protocol`, and `woven-server` from the real sibling `../woven` checkout at `2bc74d3298b2f317cc00a1508b09b54250c612d8` (not a moving `main` HEAD)
 - `simengine` (Worldline) from `https://github.com/jdharrison/worldline.git` at revision `21ace68928345f8581f660bffd0e50f181348199`
 
 See `Cargo.lock` and individual `Cargo.toml` files for full dependency versions.

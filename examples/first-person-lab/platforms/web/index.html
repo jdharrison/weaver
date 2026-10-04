@@ -4,21 +4,34 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#080a0f">
+    <meta name="weaver-lobby-bootstrap" content="">
+    <meta name="weaver-lobby-target" content="">
     <link rel="icon" href="data:,">
     <title>WVR | First-Person Lab</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <canvas id="scene" tabindex="0" aria-label="Weaver first-person multiplayer room"></canvas>
-    <div class="brand">WVR / FIRST-PERSON LAB</div>
+
     <section class="instructions" aria-label="Controls">
-      <p id="status">Loading Weaver GPU backend…</p>
-      <p class="desktop-controls">Click for mouse look · <strong>WASD</strong> / arrows · Escape releases</p>
-      <p class="touch-controls">Left touch moves · right touch looks</p>
+      <p id="status" role="status">Loading Weaver GPU backend…</p>
+      <p class="desktop-controls">Click for mouse look · <strong>WASD</strong> / arrows · Enter chats · Escape releases</p>
+      <p class="touch-controls">Left touch moves · right touch looks · Chat is desktop-first (keyboard required)</p>
     </section>
-    <details class="network-panel">
-      <summary>Woven multiplayer</summary>
+    <section class="connection-panel" aria-label="Connection and settings">
+      <div class="connection-status">
+        <p id="network-status" role="status" aria-live="polite">Loading scene · if loading stalls, reload the page or check browser support.</p>
+        <div class="network-actions">
+          <button id="join-network" type="button" disabled>Connect / retry</button>
+          <button id="disconnect-network" type="button" disabled>Disconnect</button>
+          <a id="reload-scene" href="">Reload page</a>
+        </div>
+        <noscript>JavaScript is required for this room.</noscript>
+      </div>
+    <details id="multiplayer-settings" class="network-panel">
+      <summary title="Open or close advanced multiplayer settings" aria-label="WVR / FIRST-PERSON LAB — advanced multiplayer settings">WVR / FIRST-PERSON LAB · SETTINGS</summary>
       <form id="network-form" autocomplete="off">
+        <label>Display name <input id="display-name" name="display-name" placeholder="Generating name…" minlength="1" maxlength="24" required></label>
         <label>Endpoint <input id="woven-url" name="endpoint" value="https://api.woven.host:4434/webtransport" required></label>
         <label>Authentication
           <select id="woven-auth" name="authentication">
@@ -31,16 +44,16 @@
         <div class="scope-grid">
           <label>Namespace <input id="woven-namespace" name="namespace" type="number" min="1" max="18446744073709551615" value="2" required></label>
           <label>Session <input id="woven-session" name="session" type="number" min="1" max="18446744073709551615" value="2" required></label>
-          <label>Space <input id="woven-space" name="space" type="number" min="1" max="18446744073709551615" value="1" required></label>
+          <label>Spatial Space <input id="woven-space" name="spatial-space" type="number" min="3" max="18446744073709551615" value="3" required></label>
           <label>Epoch <input id="woven-epoch" name="epoch" type="number" min="1" max="18446744073709551615" value="1" required></label>
         </div>
         <div class="network-actions">
-          <button id="connect-network" type="submit" disabled>Connect</button>
-          <button id="disconnect-network" type="button" disabled>Disconnect</button>
+          <button id="connect-network" type="submit" disabled>Connect with settings</button>
         </div>
       </form>
-      <p id="network-status" role="status">Hosted endpoint loaded · enter the current product scope and credential</p>
+      <p class="settings-hint">Explicit operator settings · preconfigured spatial space required (poses: channel 4, chat: channel 1).</p>
     </details>
+    </section>
     <script type="module" src="main.js"></script>
   </body>
 </html>

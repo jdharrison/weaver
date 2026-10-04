@@ -18,9 +18,9 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.98"
 license = "Apache-2.0"
 repository = "https://github.com/jdharrison/weaver"
 
@@ -45,6 +45,7 @@ woven-server = { path = "../woven/crates/woven-server" }
 # Math and data
 bytemuck = { version = "1.22", features = ["derive"] }
 glam = "0.30"
+uuid = { version = "1", features = ["v4", "js"] }
 
 # Async / runtime
 tokio = { version = "1.53", features = ["rt-multi-thread", "sync", "time", "macros"] }

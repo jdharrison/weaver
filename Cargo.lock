@@ -803,7 +803,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "first-person-lab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "glam",
@@ -812,6 +812,7 @@ dependencies = [
  "tracing-subscriber",
  "wasm-bindgen",
  "weaver-app-core",
+ "weaver-core",
  "weaver-platform-desktop",
  "weaver-platform-web",
  "weaver-render",
@@ -2552,7 +2553,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render-lab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "wasm-bindgen",
@@ -3016,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "space-lab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "glam",
@@ -3593,6 +3594,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3795,7 +3807,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "glam",
@@ -3817,7 +3829,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-app-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "weaver-render",
@@ -3826,17 +3838,18 @@ dependencies = [
 
 [[package]]
 name = "weaver-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "serde",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "weaver-platform-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "pollster",
@@ -3851,13 +3864,14 @@ dependencies = [
 
 [[package]]
 name = "weaver-platform-web"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "thiserror 2.0.20",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "weaver-app-core",
+ "weaver-core",
  "weaver-render",
  "weaver-render-wgpu",
  "web-sys",
@@ -3867,7 +3881,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "serde",
@@ -3877,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-render-wgpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -3900,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-worldline"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
  "serde",
@@ -3912,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "weaver-woven"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde",
@@ -4476,7 +4490,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "woven-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "quinn",
  "rustls",
@@ -4489,7 +4503,7 @@ dependencies = [
 
 [[package]]
 name = "woven-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ring",
  "serde",
@@ -4498,7 +4512,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-coordinator"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "tokio",
  "woven-core",
@@ -4510,7 +4524,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "woven-core",
@@ -4518,7 +4532,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-test-provider"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "woven-inference-core",
@@ -4526,7 +4540,7 @@ dependencies = [
 
 [[package]]
 name = "woven-inference-tools"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "woven-core",
@@ -4536,7 +4550,7 @@ dependencies = [
 
 [[package]]
 name = "woven-lab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4556,7 +4570,7 @@ dependencies = [
 
 [[package]]
 name = "woven-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",
@@ -4565,7 +4579,7 @@ dependencies = [
 
 [[package]]
 name = "woven-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "libc",
@@ -4593,7 +4607,7 @@ dependencies = [
 
 [[package]]
 name = "woven-transport"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "tokio",
  "tracing",
@@ -4603,7 +4617,7 @@ dependencies = [
 
 [[package]]
 name = "woven-transport-quic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "quinn",
@@ -4741,7 +4755,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "yasna"

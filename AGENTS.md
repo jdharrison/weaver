@@ -58,7 +58,15 @@ realtime event/command seam. Desktop labs may drive it with `WovenRealtimeDriver
 native QUIC. First-Person Lab's browser shell uses the sibling
 `@signalweave/woven-client` over WebTransport and forwards opaque application payloads
 to the same shared Rust scene; it does not compile native QUIC or a Woven server into
-WASM. Its credentials are explicit and held in memory.
+WASM. First-Person poses are fixed 25-byte little-endian binary payloads on channel
+4 (`UnreliableSequenced`/`Ephemeral`) over actual datagrams. Every pose uses Woven's
+atomic positioned-state API in an explicitly preconfigured Cartesian3D spatial subspace;
+there is no reliable, unpositioned, or broadcast fallback. Clients cannot create ad-hoc
+spaces, and server-defined bounds are authoritative. Chat and display-name profiles
+remain reliable ephemeral JSON on channel 1 in the same spatial space. Both native and
+browser realtime seams expose positioned unreliable bytes alongside existing string/JSON
+paths. Managed Lite nodes/descriptors must permit channels 1/4 and negotiate positioned
+state. Credentials are explicit and held in memory.
 
 `woven-lab` is deprecated as an interactive example but retained for native protocol,
 soak, and managed-admission diagnostics. Its remote/cloud GUI selection requires a

@@ -2,7 +2,7 @@
 
 #![warn(missing_docs)]
 
-use glam::{Vec2, Vec3};
+use glam::{UVec2, Vec2, Vec3};
 use weaver_render::{Camera, MeshHandle, SceneSnapshot, SpriteHandle};
 use weaver_render_wgpu::Vertex;
 
@@ -58,6 +58,8 @@ pub struct FrameContext {
     pub delta_seconds: f32,
     /// Wall-clock seconds since application startup.
     pub elapsed_seconds: f64,
+    /// Current physical render-target size in pixels.
+    pub viewport_size: UVec2,
 }
 
 /// High-level actions shared by desktop and browser shells.
@@ -73,6 +75,33 @@ pub enum AppAction {
     ToggleTrajectoryHistory,
 }
 
+/// Text editing focus requested by an application.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextInputMode {
+    /// The application does not expose a text editor.
+    #[default]
+    Disabled,
+    /// Text entry is available but does not currently own keyboard input.
+    Available,
+    /// Text entry owns committed text and editing keys.
+    Focused,
+}
+
+/// A bounded, platform-normalized text editing event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TextInputEvent {
+    /// Request that the application's text editor gain focus.
+    Open,
+    /// Insert committed text at the editor's current insertion point.
+    Insert(String),
+    /// Delete the previous committed Unicode scalar value.
+    Backspace,
+    /// Submit the current value.
+    Submit,
+    /// Cancel editing without submitting.
+    Cancel,
+}
+
 /// Input accumulated by a platform shell for one frame.
 #[derive(Clone, Debug, Default)]
 pub struct InputFrame {
@@ -84,14 +113,17 @@ pub struct InputFrame {
     pub zoom_delta: f32,
     /// Discrete actions received since the previous frame.
     pub actions: Vec<AppAction>,
+    /// Committed text and editing events received since the previous frame.
+    pub text_events: Vec<TextInputEvent>,
 }
 
 impl InputFrame {
-    /// Clear transient fields while retaining allocated action capacity.
+    /// Clear transient fields while retaining allocated event capacity.
     pub fn clear_transient(&mut self) {
         self.look_delta = Vec2::ZERO;
         self.zoom_delta = 0.0;
         self.actions.clear();
+        self.text_events.clear();
     }
 }
 
@@ -120,6 +152,20 @@ pub enum RealtimeEvent {
         /// Server-assigned entity identifier.
         entity_id: u64,
     },
+    /// A realtime entity entered the subscribed space.
+    EntityEntered {
+        /// Server-assigned entity identifier.
+        entity_id: u64,
+    },
+    /// An unreliable sequenced byte payload was received.
+    UnreliablePayload {
+        /// Sending entity identifier.
+        entity_id: u64,
+        /// Application-defined message sequence.
+        sequence: u64,
+        /// Opaque application bytes; never implicitly decoded as UTF-8.
+        payload: Vec<u8>,
+    },
     /// An entity payload was received.
     Payload {
         /// Sending entity identifier.
@@ -137,15 +183,63 @@ pub enum RealtimeEvent {
 }
 
 /// Realtime work requested by a Weaver application.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RealtimeCommand {
-    /// Publish an opaque application payload.
-    Publish {
+    /// Publish a replaceable byte payload using unreliable sequenced datagrams.
+    PublishUnreliable {
+        /// Application-defined message sequence.
+        sequence: u64,
+        /// Opaque application bytes; never implicitly encoded as JSON.
+        payload: Vec<u8>,
+    },
+    /// Publish replaceable state with atomic 3D routing metadata over an unreliable datagram.
+    PublishPositionedUnreliable {
+        /// Application-defined message sequence.
+        sequence: u64,
+        /// Routing position in the configured spatial subspace.
+        position: [f64; 3],
+        /// Opaque application bytes; never implicitly encoded as JSON.
+        payload: Vec<u8>,
+    },
+    /// Publish replaceable state; an adapter may retain only the newest pending value.
+    PublishLatest {
         /// Application-defined message sequence.
         sequence: u64,
         /// Opaque application payload.
         payload: String,
     },
+    /// Publish an ordered event that must not be silently overwritten.
+    PublishReliable {
+        /// Application-defined message sequence.
+        sequence: u64,
+        /// Opaque application payload.
+        payload: String,
+    },
+}
+
+impl RealtimeCommand {
+    /// Return the application-defined message sequence.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        match self {
+            Self::PublishUnreliable { sequence, .. }
+            | Self::PublishPositionedUnreliable { sequence, .. }
+            | Self::PublishLatest { sequence, .. }
+            | Self::PublishReliable { sequence, .. } => *sequence,
+        }
+    }
+
+    /// Return the opaque application payload.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        match self {
+            Self::PublishUnreliable { payload, .. }
+            | Self::PublishPositionedUnreliable { payload, .. } => payload,
+            Self::PublishLatest { payload, .. } | Self::PublishReliable { payload, .. } => {
+                payload.as_bytes()
+            }
+        }
+    }
 }
 
 /// Transport-neutral realtime adapter driven by a platform shell.
@@ -167,6 +261,10 @@ pub trait WeaverApp {
     /// Requested pointer behavior.
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
+    }
+    /// Current text editing focus requested from the platform shell.
+    fn text_input_mode(&self) -> TextInputMode {
+        TextInputMode::Disabled
     }
     /// Handle one event from an optional realtime connection.
     fn handle_realtime_event(&mut self, _event: RealtimeEvent) {}
@@ -294,6 +392,23 @@ impl OrbitController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_input_clears_text_without_changing_movement() {
+        let mut input = InputFrame {
+            movement: Vec2::Y,
+            look_delta: Vec2::ONE,
+            zoom_delta: 1.0,
+            actions: vec![AppAction::TogglePause],
+            text_events: vec![TextInputEvent::Insert("hello".to_owned())],
+        };
+        input.clear_transient();
+        assert_eq!(input.movement, Vec2::Y);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(input.zoom_delta, 0.0);
+        assert!(input.actions.is_empty());
+        assert!(input.text_events.is_empty());
+    }
 
     #[test]
     fn first_person_movement_is_bounded() {

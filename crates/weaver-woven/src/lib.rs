@@ -17,5 +17,7 @@ pub use adapter::{WovenAdapter, WovenStatus};
 pub use config::WovenConfig;
 pub use error::WovenAdapterError;
 pub use mode::ConnectivityMode;
-pub use payload::{DeliveryClass, Payload, PayloadEnvelope, PersistenceClass};
+pub use payload::{
+    DeliveryClass, Payload, PayloadEnvelope, PersistenceClass, UnreliablePayloadEnvelope,
+};
 pub use realtime::WovenRealtimeDriver;
