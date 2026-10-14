@@ -111,6 +111,10 @@ pub struct InputFrame {
     pub look_delta: Vec2,
     /// Signed zoom delta.
     pub zoom_delta: f32,
+    /// Held sprint request; controllers opt in via their sprint multiplier.
+    pub sprint: bool,
+    /// One-frame request to toggle first/third-person presentation.
+    pub toggle_perspective: bool,
     /// Discrete actions received since the previous frame.
     pub actions: Vec<AppAction>,
     /// Committed text and editing events received since the previous frame.
@@ -122,6 +126,7 @@ impl InputFrame {
     pub fn clear_transient(&mut self) {
         self.look_delta = Vec2::ZERO;
         self.zoom_delta = 0.0;
+        self.toggle_perspective = false;
         self.actions.clear();
         self.text_events.clear();
     }
@@ -258,6 +263,11 @@ pub trait WeaverApp {
     fn scene_mut(&mut self) -> &mut SceneSnapshot;
     /// CPU-side resources referenced by the scene.
     fn assets(&self) -> &AppAssets;
+    /// Optional texture accepting a platform-owned external image override.
+    /// The original uploaded asset remains the idle/unsupported placeholder.
+    fn external_image_texture(&self) -> Option<SpriteHandle> {
+        None
+    }
     /// Requested pointer behavior.
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
@@ -298,6 +308,8 @@ pub struct FirstPersonController {
     pitch: f32,
     /// Movement speed in world units per second.
     pub move_speed: f32,
+    /// Held-sprint speed multiplier; defaults to 1 so existing labs are unchanged.
+    pub sprint_multiplier: f32,
     /// Look sensitivity in radians per input unit.
     pub look_sensitivity: f32,
     /// Optional camera bounds.
@@ -318,6 +330,7 @@ impl FirstPersonController {
             yaw,
             pitch,
             move_speed: 4.0,
+            sprint_multiplier: 1.0,
             look_sensitivity: 0.0025,
             bounds: None,
         }
@@ -334,6 +347,11 @@ impl FirstPersonController {
             let next = camera.eye
                 + (forward * movement.y + right * movement.x)
                     * self.move_speed.max(0.0)
+                    * if input.sprint {
+                        self.sprint_multiplier.max(0.0)
+                    } else {
+                        1.0
+                    }
                     * delta_seconds;
             camera.eye = self
                 .bounds
@@ -401,13 +419,48 @@ mod tests {
             zoom_delta: 1.0,
             actions: vec![AppAction::TogglePause],
             text_events: vec![TextInputEvent::Insert("hello".to_owned())],
+            sprint: true,
+            toggle_perspective: true,
         };
         input.clear_transient();
         assert_eq!(input.movement, Vec2::Y);
         assert_eq!(input.look_delta, Vec2::ZERO);
         assert_eq!(input.zoom_delta, 0.0);
+        assert!(input.sprint);
+        assert!(!input.toggle_perspective);
         assert!(input.actions.is_empty());
         assert!(input.text_events.is_empty());
+    }
+
+    #[test]
+    fn sprint_defaults_to_no_speed_change_and_is_opt_in() {
+        let original = Camera {
+            eye: Vec3::ZERO,
+            target: Vec3::NEG_Z,
+            ..Camera::default()
+        };
+        let mut controller = FirstPersonController::from_camera(&original);
+        let input = InputFrame {
+            movement: Vec2::Y,
+            sprint: true,
+            ..InputFrame::default()
+        };
+        let mut camera = original.clone();
+        controller.update(&mut camera, &input, 1.0);
+        assert_eq!(camera.eye, Vec3::new(0.0, 0.0, -4.0));
+        controller.sprint_multiplier = 2.0;
+        camera = original.clone();
+        controller.update(&mut camera, &input, 1.0);
+        assert_eq!(camera.eye, Vec3::new(0.0, 0.0, -8.0));
+        controller.update(
+            &mut camera,
+            &InputFrame {
+                sprint: false,
+                ..input
+            },
+            1.0,
+        );
+        assert_eq!(camera.eye, Vec3::new(0.0, 0.0, -12.0));
     }
 
     #[test]

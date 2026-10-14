@@ -8,6 +8,7 @@
 
 pub mod context;
 pub mod error;
+pub mod external_image;
 pub mod mesh;
 pub mod particle;
 pub mod pipeline;

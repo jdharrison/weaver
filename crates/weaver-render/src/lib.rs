@@ -19,7 +19,7 @@ pub mod ui;
 pub use camera::{Camera, Projection, Viewport};
 pub use error::RenderError;
 pub use id::RenderResourceId;
-pub use mesh::{MeshHandle, MeshInstance};
+pub use mesh::{MeshHandle, MeshInstance, MeshLighting, MeshTextureFit};
 pub use particle::{Particle, ParticleEmitter};
 pub use snapshot::SceneSnapshot;
 pub use sprite::{SpriteHandle, SpriteInstance, SpriteSpace};

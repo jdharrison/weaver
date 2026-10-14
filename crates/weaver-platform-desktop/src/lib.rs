@@ -134,17 +134,19 @@ fn poll_realtime(
 }
 
 #[derive(Default)]
-struct MovementKeys(u8);
+struct MovementKeys(u16);
 
 impl MovementKeys {
-    const KEY_W: u8 = 1;
-    const ARROW_UP: u8 = 2;
-    const KEY_S: u8 = 4;
-    const ARROW_DOWN: u8 = 8;
-    const KEY_A: u8 = 16;
-    const ARROW_LEFT: u8 = 32;
-    const KEY_D: u8 = 64;
-    const ARROW_RIGHT: u8 = 128;
+    const KEY_W: u16 = 1;
+    const ARROW_UP: u16 = 2;
+    const KEY_S: u16 = 4;
+    const ARROW_DOWN: u16 = 8;
+    const KEY_A: u16 = 16;
+    const ARROW_LEFT: u16 = 32;
+    const KEY_D: u16 = 64;
+    const ARROW_RIGHT: u16 = 128;
+    const SHIFT_LEFT: u16 = 256;
+    const SHIFT_RIGHT: u16 = 512;
 
     fn set(&mut self, key: PhysicalKey, pressed: bool) {
         let bit = match key {
@@ -156,6 +158,8 @@ impl MovementKeys {
             PhysicalKey::Code(KeyCode::ArrowLeft) => Self::ARROW_LEFT,
             PhysicalKey::Code(KeyCode::KeyD) => Self::KEY_D,
             PhysicalKey::Code(KeyCode::ArrowRight) => Self::ARROW_RIGHT,
+            PhysicalKey::Code(KeyCode::ShiftLeft) => Self::SHIFT_LEFT,
+            PhysicalKey::Code(KeyCode::ShiftRight) => Self::SHIFT_RIGHT,
             _ => return,
         };
         if pressed {
@@ -176,6 +180,10 @@ impl MovementKeys {
             f32::from(forward) - f32::from(backward),
         )
         .clamp_length_max(1.0)
+    }
+
+    fn sprint(&self) -> bool {
+        self.0 & (Self::SHIFT_LEFT | Self::SHIFT_RIGHT) != 0
     }
 
     fn clear(&mut self) {
@@ -269,6 +277,9 @@ impl DesktopShell {
         if focused {
             self.movement.clear();
             self.input.movement = Vec2::ZERO;
+            self.input.sprint = false;
+            self.input.toggle_perspective = false;
+            self.input.zoom_delta = 0.0;
             self.input.look_delta = Vec2::ZERO;
             self.dragging = false;
             self.release_cursor();
@@ -349,6 +360,7 @@ impl ApplicationHandler for DesktopShell {
                 }
             }
             WindowEvent::Focused(false) => {
+                self.input = InputFrame::default();
                 self.movement.clear();
                 self.dragging = false;
                 self.release_cursor();
@@ -363,7 +375,10 @@ impl ApplicationHandler for DesktopShell {
                     self.last_cursor = Some(position);
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, .. }
+                if self.app.pointer_mode() != PointerMode::None
+                    && self.app.text_input_mode() != TextInputMode::Focused =>
+            {
                 self.input.zoom_delta += match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(position) => position.y as f32 * 0.02,
@@ -373,6 +388,15 @@ impl ApplicationHandler for DesktopShell {
                 if self.app.text_input_mode() == TextInputMode::Focused =>
             {
                 self.push_committed_text(&text);
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Middle,
+                state: ElementState::Pressed,
+                ..
+            } if self.app.pointer_mode() == PointerMode::LockedLook
+                && self.app.text_input_mode() != TextInputMode::Focused =>
+            {
+                self.input.toggle_perspective = !self.input.toggle_perspective;
             }
             WindowEvent::MouseInput {
                 button: MouseButton::Left,
@@ -411,6 +435,9 @@ impl ApplicationHandler for DesktopShell {
                         TextInputMode::Available => {
                             self.movement.clear();
                             self.release_cursor();
+                            self.input.sprint = false;
+                            self.input.toggle_perspective = false;
+                            self.input.zoom_delta = 0.0;
                             self.push_text_event(TextInputEvent::Open);
                             return;
                         }
@@ -445,6 +472,7 @@ impl ApplicationHandler for DesktopShell {
                     return;
                 }
                 self.movement.set(physical_key, pressed);
+                self.input.sprint = self.movement.sprint();
                 if pressed {
                     let action = match logical_key.as_ref() {
                         Key::Named(NamedKey::Space) => Some(AppAction::TogglePause),
@@ -615,6 +643,23 @@ mod tests {
             event,
             RealtimeEvent::Disconnected { reason } if reason.contains("event limit")
         )));
+    }
+
+    #[test]
+    fn sprint_tracks_both_shift_keys_and_clears_with_movement_on_focus_reset() {
+        let mut movement = MovementKeys::default();
+        movement.set(PhysicalKey::Code(KeyCode::ShiftLeft), true);
+        movement.set(PhysicalKey::Code(KeyCode::ShiftRight), true);
+        movement.set(PhysicalKey::Code(KeyCode::ShiftLeft), false);
+        assert!(movement.sprint());
+        assert_eq!(movement.axis(), Vec2::ZERO);
+        movement.set(PhysicalKey::Code(KeyCode::ShiftRight), false);
+        assert!(!movement.sprint());
+        movement.set(PhysicalKey::Code(KeyCode::KeyW), true);
+        movement.set(PhysicalKey::Code(KeyCode::ShiftLeft), true);
+        movement.clear();
+        assert!(!movement.sprint());
+        assert_eq!(movement.axis(), Vec2::ZERO);
     }
 
     #[test]

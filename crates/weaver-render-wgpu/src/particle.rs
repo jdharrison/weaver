@@ -26,7 +26,7 @@ pub struct ParticlePipeline {
 }
 
 impl ParticlePipeline {
-    /// Create the particle pipeline.
+    /// Create the particle pipeline with effective background/scene samples.
     ///
     /// # Errors
     ///
@@ -34,6 +34,7 @@ impl ParticlePipeline {
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
+        sample_count: u32,
     ) -> Result<Self, WgpuRenderError> {
         let camera_layout = camera_bind_group_layout(device);
         let particle_layout = instance_uniform_layout(device);
@@ -74,7 +75,10 @@ impl ParticlePipeline {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                ..Default::default()
+            },
             multiview: None,
             cache: None,
         });

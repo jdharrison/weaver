@@ -17,6 +17,11 @@ pub struct WgpuContextConfig {
     pub desired_format: Option<wgpu::TextureFormat>,
     /// Present mode.
     pub present_mode: wgpu::PresentMode,
+    /// Requested scene samples: values below 4 select 1, otherwise 4.
+    /// Falls back to 1 unless surface color resolve and `Depth32Float` support 4x.
+    pub requested_sample_count: u32,
+    /// Requested static-texture anisotropy, clamped to 1..=8 and capability-gated.
+    pub requested_anisotropy: u16,
 }
 
 impl Default for WgpuContextConfig {
@@ -27,6 +32,8 @@ impl Default for WgpuContextConfig {
             required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
             desired_format: None,
             present_mode: wgpu::PresentMode::AutoVsync,
+            requested_sample_count: 4,
+            requested_anisotropy: 8,
         }
     }
 }
@@ -50,6 +57,10 @@ pub struct WgpuContext {
     /// Actual surface texture size in pixels, clamped to the device's maximum
     /// supported 2D texture dimension.
     pub surface_size: (u32, u32),
+    /// Effective scene samples (1 or 4); UI and text remain single-sample.
+    pub sample_count: u32,
+    /// Effective static-texture anisotropy (1..=8), or 1 without adapter support.
+    pub anisotropy: u16,
 }
 
 impl WgpuContext {
@@ -106,6 +117,17 @@ impl WgpuContext {
             Some(format) => format,
             None => return Err(WgpuRenderError::UnsupportedSurfaceFormat),
         };
+        let sample_count = select_sample_count(
+            config.requested_sample_count,
+            adapter.get_texture_format_features(format).flags,
+            adapter
+                .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
+                .flags,
+        );
+        let anisotropy = select_anisotropy(
+            config.requested_anisotropy,
+            adapter.get_downlevel_capabilities().flags,
+        );
         let surface_config = SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -127,6 +149,8 @@ impl WgpuContext {
             surface,
             size,
             surface_size,
+            sample_count,
+            anisotropy,
         })
     }
 
@@ -211,6 +235,31 @@ impl WgpuContext {
     }
 }
 
+// Keep quality selection independent of GPU initialization for fallback tests.
+fn select_sample_count(
+    requested: u32,
+    color: wgpu::TextureFormatFeatureFlags,
+    depth: wgpu::TextureFormatFeatureFlags,
+) -> u32 {
+    use wgpu::TextureFormatFeatureFlags as Flags;
+    if requested >= 4
+        && color.contains(Flags::MULTISAMPLE_X4 | Flags::MULTISAMPLE_RESOLVE)
+        && depth.contains(Flags::MULTISAMPLE_X4)
+    {
+        4
+    } else {
+        1
+    }
+}
+
+fn select_anisotropy(requested: u16, flags: wgpu::DownlevelFlags) -> u16 {
+    if flags.contains(wgpu::DownlevelFlags::ANISOTROPIC_FILTERING) {
+        requested.clamp(1, 8)
+    } else {
+        1
+    }
+}
+
 fn create_instance(
     descriptor: &InstanceDescriptor,
 ) -> impl std::future::Future<Output = wgpu::Instance> + '_ {
@@ -287,5 +336,49 @@ impl<'a> RenderSurface<'a> {
     #[must_use]
     pub const fn new(context: &'a WgpuContext) -> Self {
         Self { context }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modest_quality_defaults() {
+        let config = WgpuContextConfig::default();
+        assert_eq!(config.requested_sample_count, 4);
+        assert_eq!(config.requested_anisotropy, 8);
+    }
+
+    #[test]
+    fn msaa_requires_color_samples_resolve_and_depth_samples() {
+        use wgpu::TextureFormatFeatureFlags as Flags;
+        let x4 = Flags::MULTISAMPLE_X4;
+        let resolve = Flags::MULTISAMPLE_RESOLVE;
+        for color in [Flags::empty(), x4, resolve, x4 | resolve] {
+            for depth in [Flags::empty(), x4] {
+                let supported = color == x4 | resolve && depth == x4;
+                for requested in [0, 1, 2, 3, 4, 8, u32::MAX] {
+                    assert_eq!(
+                        select_sample_count(requested, color, depth),
+                        if supported && requested >= 4 { 4 } else { 1 }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn anisotropy_is_bounded_and_capability_gated() {
+        for requested in [0, 1, 2, 4, 8, 16, u16::MAX] {
+            assert_eq!(
+                select_anisotropy(requested, wgpu::DownlevelFlags::empty()),
+                1
+            );
+            assert_eq!(
+                select_anisotropy(requested, wgpu::DownlevelFlags::ANISOTROPIC_FILTERING),
+                requested.clamp(1, 8)
+            );
+        }
     }
 }

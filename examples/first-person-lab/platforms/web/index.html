@@ -6,8 +6,10 @@
     <meta name="theme-color" content="#080a0f">
     <meta name="weaver-lobby-bootstrap" content="">
     <meta name="weaver-lobby-target" content="">
+    <meta name="weaver-theater-schedule" content="/weaver/theater-schedule.json">
+    <meta name="weaver-theater-video" content="/weaver/assets/theater/Music_SpaceNoirJazz.mp4">
     <link rel="icon" href="data:,">
-    <title>WVR | First-Person Lab</title>
+    <title>jdharrison.com</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -53,6 +55,29 @@
       </form>
       <p class="settings-hint">Explicit operator settings · preconfigured spatial space required (poses: channel 4, chat: channel 1).</p>
     </details>
+    </section>
+    <!-- Decoder source only: Weaver renders the movie on the 3D theater screen. -->
+    <video id="theater-video" hidden muted loop playsinline preload="metadata"></video>
+
+    <section id="theater-controls" class="theater-controls" aria-label="Theater movie controls">
+      <div class="theater-actions">
+        <strong>Theater</strong>
+        <button id="theater-play" type="button" disabled>Play</button>
+        <button id="theater-restart" type="button" disabled>Restart</button>
+        <output id="theater-time">0:00 / 0:00</output>
+      </div>
+      <label class="theater-follow"><input id="theater-follow-schedule" type="checkbox" checked> Follow schedule</label>
+      <p id="theater-schedule-status" role="status">Loading UTC schedule…</p>
+      <div class="theater-audio">
+        <button id="theater-mute" type="button" disabled>Unmute</button>
+        <label>Volume <input id="theater-volume" type="range" min="0" max="1" step="0.01" value="0.4" disabled></label>
+      </div>
+      <label class="theater-seek">Seek <input id="theater-seek" type="range" min="0" max="0" step="0.01" value="0" disabled></label>
+      <div class="theater-lights">
+        <label>Lobby light <input id="theater-lobby-light" type="range" min="0" max="1" step="0.05" value="1" disabled></label>
+        <label>Auditorium light <input id="theater-auditorium-light" type="range" min="0" max="1" step="0.01" value="0.18" disabled></label>
+      </div>
+      <p id="theater-status" role="status">Loading movie metadata…</p>
     </section>
     <script type="module" src="main.js"></script>
   </body>

@@ -5,6 +5,325 @@ Enter and cancels with Escape. Existing touch movement/look remain available;
 mobile virtual-keyboard chat is not implemented. Room/presence/chat remain the
 MVP; portfolio content/layout is separate work.
 
+## Local scripted NPCs and host dialogue
+
+The shared Rust scene owns permanent `concession_support`, three ambient guest
+slots (`guest_01`, `guest_04`, `guest_05`) and two player-like guest slots
+(`guest_02`, `guest_03`). Seeded presence maintains 2–3 ambient and 1–2 player-like
+guests, plus support. The cinema is chair-free; no chair geometry or colliders
+remain. Legacy seat IDs are standing viewing marks, not seating behavior.
+Definitions are embedded from version-2 `../../assets/npcs.json`; guests use IDs
+from the unchanged nine-player avatar pool. The separately bundled concession
+art is not part of that player hash pool. There are no NPC Woven entities,
+pose/profile/chat publications, shared transcripts, AI calls or HTTP dialogue
+requests in this shell. A host may call its gateway only after explicit local
+submission acceptance, and only for support/player-like guests.
+
+Guest state uses bounded analytic routes and seeded presence windows, independent
+of movie playback and private player input. The validated theater manifest still
+supplies show metadata through `onScheduleLoaded`, but installing a new show cycle,
+pausing/muting/seeking, AI errors or networking does not rephase guest presence.
+`showState` is `unavailable` until a validated manifest is supplied, then `showing`;
+no intermission or watched intro is invented. `playerHasSeenIntro` remains false
+because no intro-completion signal exists. Invalid clocks retain safe visual
+population but invalidate interaction until recovery.
+
+Ambient guests visibly bob, use the door and never become interaction targets.
+Player-like guests use the same grounded upright cards as players, with no bob
+or gesture lean, 4 m/s walking, occasional 8 m/s sprinting, strafes, pauses and
+turns. They disappear in place on randomized simulated disconnects, not at the
+door. A local conversation holds only their route phase; the independent UTC
+presence deadline still disconnects them and rejects stale reincarnation replies.
+These are local card presentations, not skeletal poses. NPCs do not block real
+players; walls/counter remain solid. The current frame's collided `view.player.eye`,
+not the third-person camera or sprite center, supplies full 3D distance. Support
+wins within its radius/line of sight; otherwise the nearest eligible player-like
+guest wins, with stable ID ties. Selection never invokes inference.
+
+### Public bridge contract
+
+The loader exposes these synchronous globals, independent of Woven connectivity:
+
+- `weaverGetNpcInteractionContext(): string | null` → Rust
+  `get_npc_interaction_context(): Option<String>`.
+- `weaverSubmitNpcQuestion(npcId, requestId, text): boolean` → Rust
+  `submit_npc_question`. Acceptance validates the currently selected NPC, a fresh
+  engine frame (at most 250ms old), radius, request ID, and normalized text of
+  1–256 Unicode scalar values / at most 1024 UTF-8 bytes. IDs are nonempty ASCII
+  alphanumerics/underscore/hyphen; request IDs are at most 128 bytes and must be
+  unique per request. This is local acceptance, never reliable chat acceptance.
+- `weaverPresentNpcResponse(npcId, requestId, answer, gesture): boolean` → Rust
+  `present_npc_response`. The active scene/NPC/request binding must still match;
+  stale, cancelled, superseded, duplicate, or expired replies fail closed. Answers
+  allow at most 8000 Unicode scalar values and 24 KiB UTF-8; safe newline/tab are
+  allowed. Gestures are exactly `idle`, `welcome`, `thinking`, `explain`,
+  `point_left`, `point_right`, `shrug`. No model commands/actions execute.
+- `weaverClearNpcDialogue(): void` → Rust `clear_npc_dialogue`; invalidates requests
+  and subtitles without stopping NPC movement or resetting frame sequence.
+- `weaverGetNpcDefinitions(): ScriptedNpcDefinition[] | null` reads the embedded
+  data, including `permanent`, `spawnOffsetSeconds`, interaction, and typed schedule.
+
+The optional, host-installed `globalThis.weaverNpcInteraction(snapshot | null)`
+is preserved. Rust publishes each scene frame after collision/NPC resolution;
+the loader parses its internal JSON callback and forwards a plain object only
+when the initialized renderer is ready and visible. Missing/throwing hooks are
+safe. The getter returns a **JSON string** with exactly these twelve fields:
+
+```json
+{
+  "version": 1,
+  "npcId": "concession_support",
+  "profile": "npc_concession_support",
+  "displayName": "Concession Support",
+  "sceneGeneration": "unique-per-engine-instance",
+  "frameSequence": "1",
+  "distanceSquared": 6.25,
+  "radiusWorldUnits": 4,
+  "room": "lobby",
+  "showState": "showing",
+  "nearbyProject": null,
+  "playerHasSeenIntro": false
+}
+```
+
+Generation is a per-engine UUID (ASCII, under 64 bytes); frame sequence is a
+checked, monotonic decimal u64. The host additionally owns receipt freshness
+(up to 1000ms), origin/source validation, HTTP cancellation, per-NPC bounded
+session history, and a local accessible transcript. Do not send NPC submissions
+through `weaverSendChat`/`send_host_chat` or synthesize `weaverChatMessage` echoes.
+
+The engine draws TALK/pending/subtitle UI in both full and minimal modes. E opens
+the host composer when an NPC is selected; Enter retains the existing minimal
+host-chat opening behavior. The shell accepts `weaverRequestChatOpen`, falling
+back to the existing `weaverHostRequestChat`; the host reads the fresh NPC context
+and owns text/IME/touch activation. No new key handling overrides focused input
+or the existing sound/fullscreen panels. Pending request bindings expire 60 seconds
+from acceptance, allowing margin for the host's 40-second timeout and bounded
+55-second backend work. Fresh scene frames never extend that deadline. Answered
+subtitles still expire after 15 seconds, capped at six lines/320 scalars.
+The Flutter transcript can display the full validated answer. Leaving proximity,
+NPC despawn/replacement, hide, fatal, or host disposal clears request bindings;
+a new visible frame is required after restoration. Internal Rust loader exports
+`set_npc_interaction_active` and `set_npc_show_cycle(anchorUnixSeconds, cycleSeconds)`
+provide readiness/validated timing only, not external transform control.
+
+Focused checks: `cargo test --locked -p first-person-lab --lib`, browser `npm test`
+and `npm run typecheck`. Build using `cargo xtask build first-person --platform web`;
+its validated artifact is `dist/first-person`. Stage it separately in the host site;
+never edit generated JS/WASM or copy source JSON/PNGs into the release export.
+
+## Embedded load progress
+
+The browser shell emits JSON `weaver-host` v1 `progress` messages to its parent,
+with `stage`, integer `completed`, and `total: 14`, targeting only its own origin.
+Milestones are shell setup (1), module import (3), WASM initialization (7), local
+profile/presentation setup (10), scene start (12), and initialized renderer
+readiness (14). These are discrete initialization milestones, not download-byte
+percentages. Repeated/regressing milestones are suppressed and fatal startup
+stops progress. No credentials, diagnostics, or network admission state enter
+these events; multiplayer/movie loading does not gate scene reveal. The existing
+host adapter continues to own `ready`/`fatal` notifications. A parent must validate
+both origin and the active iframe source before accepting any bridge event.
+
+## Theater video proof of concept
+
+`TheaterVideoPlayer` in `theater-video-player.ts` owns a hidden decoder element
+**inside the engine iframe**. It is not a DOM movie overlay: Weaver consumes its
+frames on the 3D theater screen. The theater panel is hidden by default in minimal
+presentation, retaining its functional source controls for full presentation.
+Sound and fullscreen are in-world WASM-picked panels in both modes; the old HTML
+Enable sound prompt is removed entirely. Full diagnostic controls include
+Play / Pause, Restart (seek to zero without changing playback),
+Mute / Unmute, Volume, seek/time/status, and independent lobby/auditorium lighting. Control focus releases
+held movement keys and pointer lock; its input suppression is OR-combined with
+host-chat focus, so leaving one control cannot unlock input owned by the other.
+Lighting defaults match the scene (lobby 1, auditorium 0.18).
+
+Default movie URL (same-origin, root-absolute):
+`/weaver/assets/theater/Music_SpaceNoirJazz.mp4`. The parent site stages this
+long movie: 3981.386 seconds (about 66m21s), 638×360 at 30 fps, H.264 Main
+video with stereo HE-AAC at 44.1 kHz, approximately 91 MB, with faststart.
+Both earlier clips remain unchanged: `Jellyfish_1080_10s_10MB.mp4` (video-only)
+and `Jellyfish_1080_10s_audio_test.mp4` (synthetic AAC test audio). The standalone
+engine does not include these assets and can legitimately show a missing-media error.
+Override with `meta[name="weaver-theater-video"]` using another same-origin
+root-absolute path (empty uses the default). Remote/relative URLs are rejected.
+Loading may make same-origin HTTP media/range requests. Audio uses only the
+same browser video element: no separate audio player, AudioContext, or spatial
+audio. UTC schedule selection is local wall-clock presentation, not an authoritative
+multiplayer clock or sample-accurate A/V synchronization.
+
+The reusable component's `autoplay` option defaults to `false`; opting in starts
+muted. `main.ts` uses `scheduled: true`: the element starts **muted** at volume
+0.4, inline, with `preload="metadata"`. Constructor/readiness autoplay is disabled
+in this mode. There is no native `autoplay` attribute; the schedule controller
+authorizes a muted attempt only after attachment, initialized scene readiness,
+visibility, and schedule alignment (including completion of an asynchronous seek).
+This works under policies that block audible autoplay but permit muted playback.
+If even muted playback is denied, “Autoplay blocked/unavailable · press Play”
+leaves a manual retry available. Play preserves the current mute setting.
+The in-world sound panel calls schedule `play(true)` synchronously in the trusted
+canvas gesture: align the live slot, unmute, restore volume 0 to 0.4, and call
+`media.play()`. An ON hit mutes without pausing; ordinary diagnostic Mute/Volume
+controls never resume media. No fetch/await precedes play. Pending is bounded to
+one promise; a denied attempt reports structured retry rather than optimistic ON.
+ON requires observed `playing`, unmuted media, nonzero volume, and no pause/end
+or buffering; it does not verify physical speaker output. Repeated readiness/media events
+never retry an attempted autoplay, and explicit Pause before readiness cancels
+it for the current source. The controller allows one attempt per source/entry occurrence, while explicit
+Pause survives slot/source changes. Source replacement preserves explicit
+mute/volume preferences and waits for any old play promise to settle. Mute / Unmute works
+while playing; its explicit preference and volume survive pause, replay, and
+hide/restore. Volume accepts only finite numbers, clamped to 0–1, and never
+unmutes or starts playback. Audio controls never resume paused media. Browser
+`volumechange` events synchronize status and controls, including external changes;
+“audio enabled” describes media settings, not verified speaker output. Browser
+play rejection leaves the attachment ready for an explicit retry. Attachment happens once per
+source only after metadata **and** initialized renderer readiness. A decoded
+`requestVideoFrameCallback` marks a new frame dirty for the next Weaver redraw;
+it does not upload directly or run another renderer. WebGL2 copies the video
+source directly; WebGPU stages through a reusable detached 2D canvas before
+copying into the same renderer-owned texture. This avoids direct-import failures
+for software-decoded video frames without GPU backing; neither path performs
+`getImageData` readback. Browser-internal acceleration/copies remain platform-dependent.
+The cancellable fallback
+polls `currentTime` with RAF only during playback and never marks unchanged ticks.
+There is at most one frame callback and one outstanding play promise, with no
+queued play requests. Paused seeking marks the available frame after `seeked`.
+
+Hidden/pagehide pauses and silences the same video and cancels video work;
+restoration never resumes playback
+without another user gesture. Video Pause does **not** disconnect multiplayer
+(the existing page-hide network policy is unchanged). Fatal scene failure and
+`globalThis.weaverDisposeTheaterVideo()` detach, remove the media source, call
+`load()` to release decoding, and remove the element. The site host should call
+that idempotent hook before shutting down/removing the iframe. Late play promises
+and cancelled frame callbacks cannot restart disposed/hidden media.
+
+The manually intersected `FirstPersonWasm` type expects these Rust exports:
+`attach_theater_video(HTMLVideoElement): boolean`,
+`mark_theater_video_frame(): boolean`, `detach_theater_video(): void`, and
+`set_room_lighting(lobby: number, auditorium: number): boolean`,
+`pick_control_panel(x: number, y: number): number`,
+`set_control_panel_state(panel: number, state: number): boolean`, and
+`invalidate_control_panels(): void`.
+
+Panel IDs are 0 none, 1 sound, 2 fullscreen; states are 0 unavailable, 1 OFF,
+2 pending, 3 ON, 4 retry. Picking uses canvas-relative NDC [-1,1], Y up;
+pointer lock picks the crosshair (0,0). Capture handlers consume panel hits
+before pointer lock/input, leave misses untouched, and activate touch only on
+an undragged tap (8 CSS pixel movement threshold). Synthetic input cannot activate
+panels. Shutdown removes handlers/listeners and invalidates panels once.
+
+The parent installs `jdharrisonToggleFullscreen()` and
+`jdharrisonGetFullscreenState()` **on the child window**. The getter and child-window
+`CustomEvent("jdharrison-fullscreen-state")` detail share the runtime-validated
+`{available:boolean, active:boolean, pending:boolean, error:boolean}` contract.
+The shell calls the toggle directly in the gesture stack and projects observed
+state, never optimistic active state. Without the bridge it uses this document's
+Fullscreen API and fullscreenchange/fullscreenerror events. It never accesses the
+parent document. No site files or generated WASM assets are changed here.
+Matching WASM/generated bindings are required; these browser changes do not
+regenerate or stage them. Media/attachment failures are visible in the theater
+status without making a healthy network connection fail.
+
+Node fake-media/scheduler and browser-shell tests cover readiness, frame cadence,
+fallback, seeks, cancellation, stale promises, errors, disposal, chat focus,
+one-shot muted autoplay and rejection/manual retry, gesture-enabled audio, source
+replacement during pending playback, persistent explicit mute, bounded volume,
+and external audio changes.
+The parent site's bounded `tool/theater_video_smoke.mjs` checks actual H.264
+frames, texture reuse, pause/seek/restart/loop, lighting, lifecycle cancellation,
+and shutdown in offline Linux Chromium under both WebGL2 and WebGPU. It supplies
+compatible Vulkan/ANGLE/Dawn flags for this development environment and records
+GPU details rather than implying other systems are verified. Screenshots permit
+visual confirmation of the in-world screen. Touch/mobile/Safari QA, actual
+background-tab policy, audible output/AAC browser support, and real A/V timing
+remain unverified by these Node tests; lifecycle
+stimuli in the smoke are synthetic. No deployed validation is implied.
+
+### Subtitle limitation
+
+No caption/subtitle tracks, WebVTT/SRT files, or transcripts are supplied by this
+lab. Subtitles therefore cannot currently be displayed by default. The hidden
+video is a decoder source uploaded as a texture: browser-native `<track>` captions
+are not included in those pixels. No transcripts or empty caption controls are
+invented. Adding subtitles requires real timed caption assets and an explicit
+cue-text overlay (or renderer composition) synchronized to the media clock and
+source changes; simply enabling native tracks would not show captions in-world.
+
+## UTC theater schedule
+
+`theater-schedule-controller.ts` exports `loadTheaterSchedule`,
+`DEFAULT_THEATER_SCHEDULE`, and `TheaterScheduleController`. It consumes the
+shared `validateTheaterSchedule` / `resolveTheaterSchedule` model without changing
+that schema. `TheaterVideoPlayer.scheduledAutoplay()` is the small readiness/busy
+seam; the existing player still owns the only decoder and pending play promise.
+
+`meta[name="weaver-theater-schedule"]` defaults to `/weaver/theater-schedule.json`.
+The manifest is fetched **once** per shell instance, with a 32 KiB streaming bound
+and a 10-second deadline covering request and body. Only a canonical same-origin
+root-absolute path is accepted: no credentials, queries, fragments, percent aliases,
+or dot segments. Requests omit credentials/referrers, use `cache: "no-store"`,
+reject redirects, and require JSON. Failure is isolated from scene/network startup
+and visibly reports **Schedule unavailable**, without claiming synchronization or
+silently falling back. Uncheck **Follow schedule** for local manual diagnostics
+using the movie meta/default; there is no automatic local playback fallback.
+
+The parent site supplies/stages the manifest; this source checkout does not create
+or deploy it. The intended default is:
+
+```json
+{
+  "version": 1,
+  "revision": "space-noir-jazz-v1",
+  "anchorUnixSeconds": 0,
+  "cycleSeconds": 3600,
+  "driftToleranceSeconds": 5,
+  "entries": [{
+    "id": "space-noir-jazz",
+    "title": "Space Noir Jazz",
+    "startSeconds": 0,
+    "durationSeconds": 3600,
+    "source": "/weaver/assets/theater/Music_SpaceNoirJazz.mp4",
+    "sourceStartSeconds": 0,
+    "loop": false
+  }]
+}
+```
+
+Follow schedule defaults on. Its separate status shows slot title, current UTC
+hour/time, observed drift, revision, and short-source holding. Restart/seek are
+disabled in this mode; Play/Pause and local Mute/Volume remain usable. Manual mode
+restores restart/seek and the old asset looping behavior. Toggling back to Follow
+pauses and aligns before any new automatic attempt, unless the user paused or
+previously hid the page. Manual Play computes/seeks the live slot and calls the
+existing `play()` synchronously within the gesture; no fetch/await consumes it.
+
+Selection uses `Date.now() / 1000` once per second while visible, and media
+readiness events complete pending alignment. Initial join, entry/cycle rollover,
+follow toggle, restore, and detected clock jumps force alignment; otherwise only
+drift **greater than** the manifest tolerance seeks (exactly 5s does not for the
+default). Active `media.seeking` is ignored. Same-asset slot/offset changes do not
+reload the source. Looping maps elapsed time into the available duration after
+`sourceStartSeconds`; natural source end realigns/restarts an already-playing loop,
+not a blocked autoplay. Non-looping media shorter than its slot holds the last
+frame silently until the next slot. Audio preferences are never reset by scheduling.
+
+Hidden/pagehide cancels the timer and pauses audio. Restore computes the live
+position but requires a Play gesture, even across a subsequent slot change.
+Fatal/route disposal aborts the manifest request and cancels the controller before
+the player; stale callbacks cannot revive either. No hosted/Woven/time service is
+used by this integration. Device clock error, seek/decoder precision, buffering,
+and browser autoplay policy limit alignment; these tests do not verify audible
+output or sample-accurate synchronization. Parent browser QA/staging tooling must
+be updated separately for the new meta and schedule-controlled controls.
+
+Offline tests include fake clocks/timers/media, two-client selection, strict drift
+threshold, asynchronous alignment-before-muted-autoplay, source/offset transitions, cycle
+wrap, pause/restore/disposal, blocked autoplay, loop/short-source behavior, and
+bounded manifest rejection. Run `npm run typecheck` and `npm test` in this directory.
+
 ## Scene lifecycle contract
 
 `main.ts` defines these globals **before** importing/initializing WASM:

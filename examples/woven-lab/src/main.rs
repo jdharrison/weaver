@@ -512,6 +512,9 @@ fn setup(
         let id = world.spawn(Renderable {
             mesh: Some(MeshInstance {
                 mesh,
+                texture: None,
+                texture_fit: None,
+                lighting: None,
                 transform: RenderTransform {
                     translation: grid_position(slot),
                     ..RenderTransform::default()

@@ -321,6 +321,9 @@ fn spawn_body(
     bodies.push(body);
     scene.meshes.push(MeshInstance {
         mesh: sphere_mesh,
+        texture: None,
+        texture_fit: None,
+        lighting: None,
         transform: RenderTransform {
             translation: Vec3::ZERO,
             rotation: Quat::IDENTITY,

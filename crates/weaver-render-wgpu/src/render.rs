@@ -2,10 +2,10 @@
 
 use crate::context::{WgpuContext, WgpuContextConfig};
 use crate::error::WgpuRenderError;
-use crate::mesh::MeshPipeline;
+use crate::mesh::{MeshPipeline, group_mesh_instances};
 use crate::particle::ParticlePipeline;
 use crate::resource::{GpuMesh, GpuTexture, Vertex};
-use crate::sprite::SpritePipeline;
+use crate::sprite::{SpritePipeline, ordered_sprites};
 use crate::text::TextPipeline;
 use crate::ui::UiPipeline;
 use bytemuck::{Pod, Zeroable};
@@ -29,12 +29,18 @@ pub struct RenderFrame {
 }
 
 /// WGPU renderer for Weaver.
+///
+/// Background and scene share optional 4x color and matching depth attachments,
+/// resolved once before single-sample UI/text. No fullscreen filtering is applied.
+/// For 4-byte color and `Depth32Float`, 4x adds about 28 bytes per surface pixel
+/// over single-sample depth (excluding the unchanged swapchain and GPU padding).
 pub struct WgpuRenderer {
     context: WgpuContext,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     _camera_layout: wgpu::BindGroupLayout,
-    depth_texture: wgpu::TextureView,
+    depth_texture: SceneAttachment,
+    msaa_color: Option<SceneAttachment>,
     depth_format: wgpu::TextureFormat,
     mesh_pipeline: MeshPipeline,
     sprite_pipeline: SpritePipeline,
@@ -43,7 +49,11 @@ pub struct WgpuRenderer {
     ui_pipeline: UiPipeline,
     meshes: HashMap<weaver_render::MeshHandle, GpuMesh>,
     textures: HashMap<weaver_render::SpriteHandle, GpuTexture>,
+    texture_overrides: HashMap<weaver_render::SpriteHandle, GpuTexture>,
+    #[cfg(target_arch = "wasm32")]
+    video_staging: HashMap<weaver_render::SpriteHandle, crate::external_image::VideoCanvas>,
     default_texture: GpuTexture,
+    default_mesh_texture: GpuTexture,
 }
 
 impl WgpuRenderer {
@@ -95,12 +105,24 @@ impl WgpuRenderer {
             });
 
         let depth_format = wgpu::TextureFormat::Depth32Float;
-        let depth_texture = create_depth_view(&context.device, depth_format, context.surface_size);
+        let depth_texture = create_scene_attachment(
+            &context.device,
+            depth_format,
+            context.surface_size,
+            context.sample_count,
+        );
+        let msaa_color = create_msaa_color(&context);
 
         let format = context.surface_config.format;
-        let mesh_pipeline = MeshPipeline::new(&context.device, format)?;
-        let sprite_pipeline = SpritePipeline::new(&context.device, format)?;
-        let particle_pipeline = ParticlePipeline::new(&context.device, format)?;
+        let mesh_pipeline = MeshPipeline::new(
+            &context.device,
+            format,
+            context.sample_count,
+            context.anisotropy,
+        )?;
+        let sprite_pipeline = SpritePipeline::new(&context.device, format, context.sample_count)?;
+        let particle_pipeline =
+            ParticlePipeline::new(&context.device, format, context.sample_count)?;
         let text_pipeline = TextPipeline::new(
             &context.device,
             &context.queue,
@@ -115,7 +137,16 @@ impl WgpuRenderer {
             context.surface_size.1,
         )?;
 
-        let default_texture = create_checker_texture(&context.device, &context.queue, 64);
+        let default_texture =
+            create_checker_texture(&context.device, &context.queue, 64, context.anisotropy);
+        let default_mesh_texture = GpuTexture::from_rgba_with_anisotropy(
+            &context.device,
+            &context.queue,
+            1,
+            1,
+            &[255; 4],
+            context.anisotropy,
+        )?;
 
         Ok(Self {
             context,
@@ -123,6 +154,7 @@ impl WgpuRenderer {
             camera_bind_group,
             _camera_layout: camera_layout,
             depth_texture,
+            msaa_color,
             depth_format,
             mesh_pipeline,
             sprite_pipeline,
@@ -131,7 +163,11 @@ impl WgpuRenderer {
             ui_pipeline,
             meshes: HashMap::new(),
             textures: HashMap::new(),
+            texture_overrides: HashMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            video_staging: HashMap::new(),
             default_texture,
+            default_mesh_texture,
         })
     }
 
@@ -147,7 +183,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// Register a texture with the renderer.
+    /// Register a static texture with mipmaps and effective anisotropic filtering.
     pub fn upload_texture_rgba(
         &mut self,
         handle: weaver_render::SpriteHandle,
@@ -155,25 +191,132 @@ impl WgpuRenderer {
         height: u32,
         data: &[u8],
     ) -> Result<(), WgpuRenderError> {
-        let texture = GpuTexture::from_rgba(
+        let texture = GpuTexture::from_rgba_with_anisotropy(
             &self.context.device,
             &self.context.queue,
             width,
             height,
             data,
+            self.context.anisotropy,
         )?;
         self.textures.insert(handle, texture);
         Ok(())
     }
 
+    /// Remove a dynamic override, releasing its GPU resource and restoring the asset.
+    pub fn remove_texture_override(&mut self, handle: weaver_render::SpriteHandle) {
+        self.texture_overrides.remove(&handle);
+        #[cfg(target_arch = "wasm32")]
+        self.video_staging.remove(&handle);
+    }
+
+    /// Whether browser external-image copies have the required backend and format.
+    #[cfg(target_arch = "wasm32")]
+    pub fn supports_external_images(&self) -> bool {
+        matches!(
+            self.context.adapter.get_info().backend,
+            wgpu::Backend::BrowserWebGpu | wgpu::Backend::Gl
+        ) && self
+            .context
+            .adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba8UnormSrgb)
+            .allowed_usages
+            .contains(
+                wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+    }
+
+    /// Copy a decoded browser video into a reusable, renderer-owned texture.
+    /// UV origin is top-left; sRGB, straight alpha, one mip, no CPU readback.
+    /// WebGPU stages through a reusable 2D canvas because software-decoded video
+    /// frames may lack direct-import GPU backing; WebGL copies video directly.
+    /// The uploaded idle asset remains resident and is restored on removal.
+    /// Returns false when decoding/seek temporarily has no copyable frame; any
+    /// existing GPU override remains unchanged and the caller can retry its slot.
+    #[cfg(target_arch = "wasm32")]
+    pub fn update_external_video(
+        &mut self,
+        handle: weaver_render::SpriteHandle,
+        video: &web_sys::HtmlVideoElement,
+    ) -> Result<bool, WgpuRenderError> {
+        let (width, height) = (video.video_width(), video.video_height());
+        if !self.supports_external_images() || !self.textures.contains_key(&handle) {
+            return Err(WgpuRenderError::Texture(
+                "external video backend is unsupported or its target texture is unavailable".into(),
+            ));
+        }
+        if !crate::external_image::video_frame_available(video.ready_state(), width, height) {
+            return Ok(false);
+        }
+        if !crate::external_image::valid_external_image_size(
+            width,
+            height,
+            self.context.device.limits().max_texture_dimension_2d,
+        ) {
+            return Err(WgpuRenderError::Texture(format!(
+                "external video decoded dimensions {width}x{height} exceed bounds"
+            )));
+        }
+        let source = if crate::external_image::video_uses_canvas_staging(
+            self.context.adapter.get_info().backend,
+        ) {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                self.video_staging.entry(handle)
+            {
+                entry.insert(crate::external_image::VideoCanvas::new(width, height)?);
+            }
+            let canvas = self
+                .video_staging
+                .get_mut(&handle)
+                .unwrap()
+                .draw(video, width, height)?;
+            wgpu::ExternalImageSource::HTMLCanvasElement(canvas)
+        } else {
+            wgpu::ExternalImageSource::HTMLVideoElement(video.clone())
+        };
+        let texture = &crate::external_image::ensure_texture(
+            &mut self.texture_overrides,
+            &self.context.device,
+            handle,
+            width,
+            height,
+        )?
+        .texture;
+        self.context.queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source,
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        Ok(true)
+    }
+
     /// Resize the renderer surface.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.context.resize(width, height);
-        self.depth_texture = create_depth_view(
+        self.depth_texture = create_scene_attachment(
             &self.context.device,
             self.depth_format,
             self.context.surface_size,
+            self.context.sample_count,
         );
+        self.msaa_color = create_msaa_color(&self.context);
         self.text_pipeline.resize(
             &self.context.queue,
             self.context.surface_size.0,
@@ -226,12 +369,19 @@ impl WgpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let scene_view = self
+            .msaa_color
+            .as_ref()
+            .map_or(&surface_view, |color| &color.view);
+        let resolve_target = self.msaa_color.as_ref().map(|_| &surface_view);
+
+        // Background preserves multisample color/depth; only the main pass resolves.
         // Background pass: clear color/depth and render distant background particles.
         if !snapshot.background_particles.is_empty() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("background-render-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
+                    view: scene_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(background_color(&snapshot.background_color)),
@@ -239,7 +389,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture,
+                    view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -263,8 +413,8 @@ impl WgpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main-render-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
+                    view: scene_view,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: if snapshot.background_particles.is_empty() {
                             wgpu::LoadOp::Clear(background_color(&snapshot.background_color))
@@ -275,7 +425,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture,
+                    view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: if snapshot.background_particles.is_empty() {
                             wgpu::LoadOp::Clear(1.0)
@@ -290,22 +440,18 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
             });
 
-            // Group mesh instances by mesh handle.
-            let mut mesh_groups: HashMap<
-                weaver_render::MeshHandle,
-                Vec<weaver_render::MeshInstance>,
-            > = HashMap::new();
-            for instance in &snapshot.meshes {
-                mesh_groups
-                    .entry(instance.mesh)
-                    .or_default()
-                    .push(instance.clone());
-            }
-
-            let mut mesh_draws: Vec<(GpuMesh, Vec<weaver_render::MeshInstance>)> = Vec::new();
-            for (handle, instances) in mesh_groups {
+            let mesh_groups = group_mesh_instances(&snapshot.meshes);
+            let mut mesh_draws = Vec::new();
+            for ((handle, texture_handle, _sampling_mode), instances) in mesh_groups {
                 if let Some(mesh) = self.meshes.get(&handle) {
-                    mesh_draws.push((mesh.clone(), instances));
+                    let texture = texture_handle
+                        .and_then(|handle| {
+                            self.texture_overrides
+                                .get(&handle)
+                                .or_else(|| self.textures.get(&handle))
+                        })
+                        .unwrap_or(&self.default_mesh_texture);
+                    mesh_draws.push((mesh.clone(), texture, instances));
                 }
             }
             self.mesh_pipeline.render(
@@ -316,22 +462,26 @@ impl WgpuRenderer {
                 &mesh_draws,
             )?;
 
-            // Sprites: for simplicity, batch all sprites with the first registered texture.
-            if !snapshot.sprites.is_empty() {
-                let texture = self
-                    .textures
-                    .values()
-                    .next()
-                    .unwrap_or(&self.default_texture);
-                self.sprite_pipeline.render(
-                    &mut pass,
-                    &self.context.device,
-                    &self.context.queue,
-                    &self.camera_bind_group,
-                    texture,
-                    &snapshot.sprites,
-                )?;
-            }
+            // Sort globally before selecting textures; texture grouping must not
+            // reorder alpha-blended world sprites. Screen sprites keep input order.
+            let sprites = ordered_sprites(&snapshot.sprites, view_matrix);
+            let sprite_draws: Vec<_> = sprites
+                .into_iter()
+                .map(|sprite| {
+                    let texture = self
+                        .texture_overrides
+                        .get(&sprite.sprite)
+                        .or_else(|| self.textures.get(&sprite.sprite))
+                        .unwrap_or(&self.default_texture);
+                    (texture, sprite)
+                })
+                .collect();
+            self.sprite_pipeline.render(
+                &mut pass,
+                &self.context.device,
+                &self.camera_bind_group,
+                &sprite_draws,
+            )?;
 
             // Foreground particles from emitters.
             let mut all_particles: Vec<weaver_render::Particle> = Vec::new();
@@ -349,7 +499,7 @@ impl WgpuRenderer {
             }
         }
 
-        // UI and text in a separate pass without depth.
+        // UI and text stay single-sample on the resolved surface, without depth.
         self.text_pipeline
             .prepare(&self.context.device, &self.context.queue, &snapshot.text)?;
         let ui_rects: Vec<weaver_render::UiRect> = snapshot
@@ -424,29 +574,56 @@ fn background_color(color: &[f32; 4]) -> wgpu::Color {
     }
 }
 
-fn create_depth_view(
+// Retain raw textures as well as views for the lifetime of the sized attachments.
+struct SceneAttachment {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+fn create_msaa_color(context: &WgpuContext) -> Option<SceneAttachment> {
+    (context.sample_count > 1).then(|| {
+        create_scene_attachment(
+            &context.device,
+            context.surface_config.format,
+            context.surface_size,
+            context.sample_count,
+        )
+    })
+}
+
+fn create_scene_attachment(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     size: (u32, u32),
-) -> wgpu::TextureView {
+    sample_count: u32,
+) -> SceneAttachment {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("depth-texture"),
+        label: Some("scene-attachment"),
         size: wgpu::Extent3d {
             width: size.0.max(1),
             height: size.1.max(1),
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    SceneAttachment {
+        _texture: texture,
+        view,
+    }
 }
 
-fn create_checker_texture(device: &wgpu::Device, queue: &wgpu::Queue, size: u32) -> GpuTexture {
+fn create_checker_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    size: u32,
+    anisotropy: u16,
+) -> GpuTexture {
     let mut data = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
@@ -454,5 +631,6 @@ fn create_checker_texture(device: &wgpu::Device, queue: &wgpu::Queue, size: u32)
             data.extend_from_slice(&[c, c, c, 255]);
         }
     }
-    GpuTexture::from_rgba(device, queue, size, size, &data).expect("default texture upload")
+    GpuTexture::from_rgba_with_anisotropy(device, queue, size, size, &data, anisotropy)
+        .expect("default texture upload")
 }

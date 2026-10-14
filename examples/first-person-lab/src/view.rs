@@ -1,0 +1,121 @@
+//! Local camera presentation, independent of the player's transported eye pose.
+
+use weaver_app_core::InputFrame;
+use weaver_render::Camera;
+
+use crate::theater::{self, Collider};
+
+pub(crate) const DEFAULT_DISTANCE: f32 = 3.0;
+pub(crate) const MAX_DISTANCE: f32 = 6.0;
+pub(crate) const ZOOM_STEP: f32 = 0.5;
+const ZOOM_RESPONSE: f32 = 12.0;
+pub(crate) const CAMERA_CLEARANCE: f32 = 0.2;
+
+pub(crate) struct ViewRig {
+    pub(crate) player: Camera,
+    distance: f32,
+    target_distance: f32,
+    remembered_distance: f32,
+}
+
+impl ViewRig {
+    pub(crate) fn new(player: Camera) -> Self {
+        Self {
+            player,
+            distance: 0.0,
+            target_distance: 0.0,
+            remembered_distance: DEFAULT_DISTANCE,
+        }
+    }
+
+    pub(crate) fn third_person(&self) -> bool {
+        self.target_distance > 0.0
+    }
+
+    pub(crate) fn apply_input(&mut self, input: &InputFrame) {
+        if input.toggle_perspective {
+            if self.third_person() {
+                self.remembered_distance = self.target_distance;
+                self.target_distance = 0.0;
+            } else {
+                self.target_distance = self.remembered_distance;
+            }
+        }
+        if input.zoom_delta.is_finite() {
+            self.target_distance =
+                (self.target_distance - input.zoom_delta * ZOOM_STEP).clamp(0.0, MAX_DISTANCE);
+            if self.third_person() {
+                self.remembered_distance = self.target_distance;
+            }
+        }
+        // Zero explicitly selects first person, with no residual camera offset.
+        if !self.third_person() {
+            self.distance = 0.0;
+        }
+    }
+
+    pub(crate) fn camera(&mut self, delta_seconds: f32, colliders: &[Collider]) -> Camera {
+        let blend = 1.0 - (-ZOOM_RESPONSE * delta_seconds.max(0.0)).exp();
+        self.distance += (self.target_distance - self.distance) * blend;
+        let mut camera = self.player.clone();
+        if self.third_person() {
+            let forward = (self.player.target - self.player.eye).normalize_or_zero();
+            let desired = self.player.eye - forward * self.distance;
+            camera.eye =
+                theater::clip_camera(self.player.eye, desired, CAMERA_CLEARANCE, colliders);
+            // Keep the player's aim direction, not the camera's position, authoritative.
+            camera.target = self.player.target;
+        }
+        camera
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_is_bounded_smooth_and_toggle_remembers_distance() {
+        let mut rig = ViewRig::new(Camera::default());
+        assert!(!rig.third_person());
+        rig.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, DEFAULT_DISTANCE);
+        let camera = rig.camera(0.01, &[]);
+        assert!(camera.eye.distance(rig.player.eye) > 0.0);
+        assert!(camera.eye.distance(rig.player.eye) < DEFAULT_DISTANCE);
+        rig.apply_input(&InputFrame {
+            zoom_delta: -100.0,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, MAX_DISTANCE);
+        rig.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        assert!(!rig.third_person());
+        assert_eq!(rig.camera(0.1, &[]).eye, rig.player.eye);
+        rig.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, MAX_DISTANCE);
+        rig.apply_input(&InputFrame {
+            zoom_delta: 100.0,
+            ..InputFrame::default()
+        });
+        assert!(!rig.third_person());
+        rig.apply_input(&InputFrame {
+            zoom_delta: f32::NAN,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, 0.0);
+        rig.apply_input(&InputFrame {
+            zoom_delta: -1.0,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, ZOOM_STEP);
+    }
+}

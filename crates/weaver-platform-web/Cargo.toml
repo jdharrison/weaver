@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 weaver-core.workspace = true
+weaver-render.workspace = true
 weaver-app-core.workspace = true
 weaver-render-wgpu.workspace = true
 winit.workspace = true
@@ -19,9 +20,6 @@ thiserror.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
-
-[dev-dependencies]
-weaver-render.workspace = true
 
 [lints]
 workspace = true

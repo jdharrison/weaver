@@ -1,0 +1,331 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { build } from "esbuild";
+import { TheaterVideoPlayer } from "./theater-video-player.ts";
+const bundle = await build({ entryPoints: ["theater-schedule-controller.ts"], bundle: true, write: false, format: "esm", platform: "browser" });
+const { TheaterScheduleController, loadTheaterSchedule } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+const entry = (id, start, duration, source = "/a.mp4", offset = 0, loop = false) => ({ id, title: id, startSeconds: start, durationSeconds: duration, source, sourceStartSeconds: offset, loop });
+const schedule = (entries = [entry("a", 0, 3600)], cycle = 3600) => ({ version: 1, revision: "r1", anchorUnixSeconds: 0, cycleSeconds: cycle, driftToleranceSeconds: 5, entries });
+const response = (data) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+class Media extends EventTarget {
+  src = ""; muted = false; volume = 1; loop = true; currentTime = 0; duration = 4000;
+  readyState = 0; paused = true; seeking = false; ended = false; error = null;
+  loads = 0; plays = []; blocked = false; asyncSeek = false;
+  load() { this.loads++; this.readyState = 0; }
+  removeAttribute() { this.src = ""; }
+  pause() { this.paused = true; this.dispatchEvent(new Event("pause")); }
+  play() { this.plays.push(this.currentTime); if (this.blocked) return Promise.reject(new Error("blocked")); this.paused = false; this.dispatchEvent(new Event("playing")); return Promise.resolve(); }
+  event(type) { this.dispatchEvent(new Event(type)); }
+}
+async function fixture(data = schedule(), now = 123, blocked = false, onScheduleLoaded) {
+  const media = new Media(); media.blocked = blocked;
+  const timers = new Map(); let timerId = 0, controller; const seeks = []; const statuses = [];
+  const player = new TheaterVideoPlayer({ media, scheduled: true, autoplay: true,
+    attach: () => true, markFrame: () => true, detach: () => {}, requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {}, onChange: () => controller?.playerChanged(),
+  }, "/a.mp4");
+  const seek = player.seek.bind(player);
+  player.seek = (value) => { seeks.push(value); seek(value); if (media.asyncSeek) media.seeking = true; };
+  player.setSceneReady(true);
+  controller = new TheaterScheduleController({ player, media, path: "/schedule.json", origin: "https://local.test",
+    fetcher: async () => response(data), now: () => now,
+    setTimeout: (callback) => { timers.set(++timerId, callback); return timerId; }, clearTimeout: (id) => timers.delete(id),
+    onChange: (status) => statuses.push(status), onScheduleLoaded,
+  });
+  await controller.loaded;
+  const ready = () => { media.readyState = 2; media.event("loadedmetadata"); media.event("canplay"); };
+  const tick = (time) => { now = time; const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach((callback) => callback()); };
+  const dispose = () => { controller.dispose(); player.dispose(); };
+  return { media, player, controller, timers, seeks, statuses, ready, tick, dispose, setNow: (time) => { now = time; } };
+}
+
+test("world observer receives one validated frozen manifest, independently of decoder controls", async () => {
+  const manifests = [];
+  const f = await fixture(schedule(), 123, false, (manifest) => manifests.push(manifest));
+  assert.equal(manifests.length, 1);
+  assert.equal(manifests[0].anchorUnixSeconds, 0);
+  assert.equal(manifests[0].cycleSeconds, 3600);
+  assert.ok(Object.isFrozen(manifests[0]));
+  assert.ok(Object.isFrozen(manifests[0].entries));
+  f.ready(); f.controller.pause(); f.controller.setFollowing(false);
+  f.controller.setVisible(false); f.controller.setVisible(true); f.tick(3600);
+  assert.equal(manifests.length, 1);
+  f.dispose();
+  const invalid = await fixture({ ...schedule(), cycleSeconds: 0 }, 123, false, () => manifests.push("invalid"));
+  assert.equal(manifests.length, 1);
+  invalid.dispose();
+});
+
+test("throwing world observers do not disable theater playback or polling", async () => {
+  const f = await fixture(schedule(), 123, false, () => { throw new Error("observer failure"); });
+  assert.equal(f.timers.size, 1);
+  f.ready(); await flush();
+  assert.deepEqual(f.media.plays, [123]);
+  assert.doesNotMatch(f.statuses.at(-1), /unavailable/);
+  f.dispose();
+});
+
+test("Enable sound realigns and plays in the gesture; pause and visibility never resume on their own", async () => {
+  const f = await fixture();
+  let gesture = false;
+  const play = f.media.play.bind(f.media);
+  f.media.play = () => {
+    assert.ok(f.media.muted || gesture, "audible autoplay denied");
+    return play();
+  };
+  f.ready(); await flush();
+  assert.deepEqual(f.media.plays, [123]); assert.equal(f.media.muted, true);
+  f.player.setVolume(0.25); f.setNow(130);
+  gesture = true; f.controller.play(true); gesture = false;
+  assert.deepEqual(f.media.plays, [123, 130]); assert.equal(f.media.muted, false);
+  assert.equal(f.media.volume, 0.25); await flush();
+  f.controller.pause(); f.player.setMuted(true); f.tick(131);
+  assert.equal(f.media.plays.length, 2); assert.equal(f.media.paused, true);
+  f.controller.setVisible(false); f.player.setVisible(false);
+  f.setNow(140); f.player.setVisible(true); f.controller.setVisible(true);
+  assert.equal(f.media.plays.length, 2); assert.equal(f.media.currentTime, 140);
+  f.setNow(141); gesture = true; f.controller.play(true); gesture = false;
+  assert.deepEqual(f.media.plays, [123, 130, 141]);
+  await flush(); f.dispose();
+});
+
+test("two clients join the same live slot, align before muted playback, and use strict >5 drift", async () => {
+  const a = await fixture(), b = await fixture();
+  for (const f of [a, b]) {
+    assert.equal(f.media.plays.length, 0); f.ready(); await flush();
+    assert.deepEqual(f.media.plays, [123]); assert.equal(f.media.loop, false);
+    f.media.currentTime = 119; f.tick(124); assert.equal(f.seeks.length, 1);
+    f.media.currentTime = 119; f.tick(125); assert.deepEqual(f.seeks, [123, 125]);
+    f.dispose();
+  }
+});
+
+test("decoded frame and UI clocks do not create a second schedule polling loop", async () => {
+  const f = await fixture(); f.ready(); await flush(); const count = f.statuses.length;
+  for (let i = 0; i < 100; i++) f.media.event("timeupdate");
+  assert.equal(f.statuses.length, count); f.dispose();
+});
+
+test("Enable sound during asynchronous alignment invokes play before seek completion", async () => {
+  const f = await fixture(); f.media.asyncSeek = true; f.ready();
+  assert.equal(f.media.seeking, true); assert.equal(f.media.plays.length, 0);
+  f.setNow(125); f.controller.play(true);
+  assert.deepEqual(f.media.plays, [125]); assert.equal(f.media.muted, false);
+  assert.equal(f.media.seeking, true); await flush();
+  f.media.seeking = false; f.media.event("seeked"); await flush();
+  assert.deepEqual(f.media.plays, [125]); f.dispose();
+});
+
+test("metadata seek completes before autoplay; seeking events cannot recursively align", async () => {
+  const f = await fixture(); f.media.asyncSeek = true; f.ready();
+  assert.equal(f.media.plays.length, 0); assert.deepEqual(f.seeks, [123]);
+  f.media.seeking = false; f.media.event("seeked"); await flush();
+  assert.deepEqual(f.media.plays, [123]); f.dispose();
+});
+
+test("same asset slot offsets and cycle wrap seek without reload, new source uses setSource", async () => {
+  const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/a.mp4", 50), entry("c", 20, 10, "/c.mp4", 7)], 30), 9);
+  f.ready(); await flush(); const loads = f.media.loads;
+  f.tick(10); assert.equal(f.media.currentTime, 50); assert.equal(f.media.loads, loads);
+  f.tick(20); assert.equal(f.media.src, "/c.mp4"); assert.ok(f.media.loads > loads);
+  assert.equal(f.media.paused, true); f.ready(); await flush(); assert.equal(f.media.plays.at(-1), 7);
+  f.tick(30); f.ready(); await flush(); assert.equal(f.media.currentTime, 0); f.dispose();
+});
+
+test("hour rollover and clock jumps force live alignment", async () => {
+  const f = await fixture(schedule(), 3599); f.ready(); await flush(); const loads = f.media.loads;
+  f.tick(3600); assert.equal(f.media.currentTime, 0); assert.equal(f.media.loads, loads);
+  f.tick(3601); f.media.currentTime = 1; f.tick(3599); assert.equal(f.media.currentTime, 3599);
+  f.dispose();
+});
+
+test("pause survives entries, sources, hide; restore aligns but needs gesture; local mode restores seek", async () => {
+  const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20), 1);
+  f.ready(); await flush(); f.controller.pause(); const plays = f.media.plays.length;
+  f.tick(11); f.ready(); await flush(); assert.equal(f.media.plays.length, plays);
+  f.controller.setVisible(false); f.player.setVisible(false); assert.equal(f.timers.size, 0);
+  f.setNow(15); f.player.setVisible(true); f.controller.setVisible(true); assert.equal(f.media.currentTime, 5);
+  assert.equal(f.media.plays.length, plays);
+  f.setNow(16); f.controller.play(); assert.equal(f.media.plays.at(-1), 6); await flush();
+  f.controller.setFollowing(false); f.player.seek(2); f.tick(17); assert.equal(f.media.currentTime, 2);
+  f.controller.setFollowing(true); assert.equal(f.media.currentTime, 7);
+  f.dispose(); const count = f.media.plays.length; f.tick(18); f.controller.play(); f.media.event("canplay"); assert.equal(f.media.plays.length, count);
+});
+
+test("blocked autoplay does not poll play; explicit mute and volume stay local", async () => {
+  const f = await fixture(schedule(), 100, true); f.player.setMuted(true); f.player.setVolume(0.2); f.ready(); await flush();
+  for (let i = 101; i < 110; i++) { f.tick(i); f.media.event("canplay"); }
+  assert.equal(f.media.plays.length, 1); assert.match(f.player.state.status, /blocked/);
+  assert.equal(f.media.muted, true); assert.equal(f.media.volume, 0.2);
+  f.media.blocked = false; f.setNow(110); f.controller.play(); assert.equal(f.media.plays.at(-1), 110);
+  await flush(); f.dispose();
+});
+
+test("denied scheduled autoplay survives same/new assets, cycle rollover and Follow toggles until gesture Play", async () => {
+  const data = schedule([entry("a", 0, 10), entry("b", 10, 10, "/a.mp4", 50), entry("c", 20, 10, "/c.mp4", 7)], 30);
+  const f = await fixture(data, 1, true); f.ready(); await flush();
+  assert.equal(f.player.state.autoplayBlocked, true); assert.equal(f.media.plays.length, 1);
+  // Simulate unrelated browser activation granting audio permission. It must not
+  // resurrect the denied attempt through any scheduler boundary or ready event.
+  f.media.blocked = false; const initialLoads = f.media.loads;
+  f.tick(10); await flush(); assert.equal(f.media.currentTime, 50); assert.equal(f.media.loads, initialLoads);
+  f.tick(20); f.ready(); await flush(); assert.equal(f.media.src, "/c.mp4");
+  f.tick(30); f.ready(); await flush(); assert.equal(f.media.currentTime, 0);
+  f.controller.setFollowing(false); f.controller.setFollowing(true); f.media.event("canplay"); await flush();
+  assert.equal(f.media.plays.length, 1); assert.equal(f.media.paused, true);
+  assert.equal(f.player.state.autoplayBlocked, true);
+  f.setNow(31); f.controller.play(); // No flush: seek and play must happen in this gesture.
+  assert.equal(f.media.plays.length, 2); assert.equal(f.media.plays.at(-1), 1);
+  assert.equal(f.player.state.autoplayBlocked, false);
+  await flush(); f.tick(50); f.ready(); await flush(); assert.equal(f.media.plays.length, 3);
+  f.dispose();
+});
+
+test("denial settling after a source transition still prevents future scheduled attempts", async () => {
+  const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20), 1);
+  let reject;
+  const pending = new Promise((_resolve, no) => { reject = no; });
+  const originalPlay = f.media.play;
+  f.media.play = () => { f.media.plays.push(f.media.currentTime); return pending; };
+  f.ready(); assert.equal(f.media.plays.length, 1);
+  f.tick(11); f.ready(); assert.equal(f.media.plays.length, 1);
+  reject(new DOMException("Autoplay denied", "NotAllowedError")); await flush();
+  assert.equal(f.player.state.autoplayBlocked, true);
+  f.media.play = originalPlay;
+  for (const time of [12, 21, 31]) { f.tick(time); f.ready(); await flush(); }
+  assert.equal(f.media.plays.length, 1); assert.equal(f.media.paused, true);
+  f.setNow(32); f.controller.play(); assert.equal(f.media.plays.length, 2); assert.equal(f.media.plays.at(-1), 2);
+  await flush(); f.dispose();
+});
+
+test("source-reset AbortError and unknown stale errors allow replacement schedule autoplay", async () => {
+  for (const reason of [new DOMException("Play interrupted by source reset", "AbortError"), new Error("Old play cancelled")]) {
+    const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20), 1);
+    let reject;
+    const pending = new Promise((_resolve, no) => { reject = no; });
+    const originalPlay = f.media.play;
+    f.media.play = () => { f.media.plays.push(f.media.currentTime); return pending; };
+    f.ready(); assert.equal(f.media.plays.length, 1);
+    f.tick(11); f.ready(); assert.equal(f.media.plays.length, 1); assert.equal(f.media.src, "/b.mp4");
+    f.media.play = originalPlay; reject(reason); await flush();
+    assert.equal(f.player.state.autoplayBlocked, false);
+    f.tick(12); await flush();
+    assert.equal(f.media.plays.length, 2); assert.equal(f.media.plays.at(-1), 1);
+    assert.equal(f.media.paused, false); assert.equal(f.player.state.autoplayBlocked, false);
+    f.dispose();
+  }
+});
+
+test("controller retains denial even when a fake player clears its source-local blocked state", async () => {
+  let controller, now = 1, attempts = 0, gestures = 0;
+  const timers = new Map(); let id = 0;
+  const media = { src: "/a.mp4", loop: false, seeking: false, ended: false };
+  const state = { status: "Ready", ready: true, playing: false, autoplayBlocked: false,
+    muted: false, volume: 0.4, currentTime: 0, duration: 4000, disposed: false };
+  const player = {
+    state,
+    setSource(source) { media.src = source; state.autoplayBlocked = false; controller.playerChanged(); },
+    seek(time) { state.currentTime = time; controller.playerChanged(); },
+    pause() { state.playing = false; controller.playerChanged(); },
+    play() { gestures++; state.autoplayBlocked = false; state.playing = true; controller.playerChanged(); },
+    scheduledAutoplay() { attempts++; state.autoplayBlocked = true; controller.playerChanged(); return true; },
+  };
+  controller = new TheaterScheduleController({ player, media, path: "/schedule.json", origin: "https://local.test",
+    fetcher: async () => response(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20)), now: () => now,
+    setTimeout: (callback) => { timers.set(++id, callback); return id; }, clearTimeout: (timer) => timers.delete(timer), onChange: () => {},
+  });
+  await controller.loaded; assert.equal(attempts, 1);
+  for (const time of [11, 21]) {
+    now = time; const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach((callback) => callback());
+    assert.equal(state.autoplayBlocked, false); assert.equal(attempts, 1);
+  }
+  controller.setFollowing(false); controller.setFollowing(true); assert.equal(attempts, 1);
+  now = 22; controller.play(); assert.equal(gestures, 1); assert.equal(state.currentTime, 2);
+  controller.dispose(); assert.equal(timers.size, 0);
+});
+
+const invalidClocks = [NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1,
+  -Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER, 8_640_000_000_001, -8_640_000_000_001];
+
+test("invalid clock during manifest load stays a clock error, keeps timer alive and recovers without audio", async () => {
+  for (const clock of invalidClocks) {
+    const f = await fixture(schedule(), clock);
+    assert.match(f.statuses.at(-1), /^Clock unavailable/); assert.equal(f.timers.size, 1);
+    f.ready(); await flush(); assert.equal(f.media.plays.length, 0);
+    assert.doesNotThrow(() => f.tick(clock)); assert.equal(f.timers.size, 1);
+    assert.match(f.statuses.at(-1), /^Clock unavailable/);
+    assert.doesNotThrow(() => f.tick(120)); await flush();
+    assert.equal(f.media.currentTime, 120); assert.equal(f.media.plays.length, 0); assert.equal(f.timers.size, 1);
+    assert.match(f.statuses.at(-1), /UTC/);
+    f.tick(3601); assert.equal(f.media.plays.length, 0); // Safety pause survives cycle boundaries.
+    f.setNow(3602); f.controller.play(); assert.equal(f.media.plays.at(-1), 2);
+    await flush(); f.dispose(); assert.equal(f.timers.size, 0);
+  }
+});
+
+test("invalid periodic clock safely pauses audio, rearms and forces recovery even within drift tolerance", async () => {
+  for (const clock of invalidClocks) {
+    const f = await fixture(schedule(), 123); f.ready(); await flush(); assert.equal(f.media.plays.length, 1);
+    const loads = f.media.loads, seeks = f.seeks.length;
+    assert.doesNotThrow(() => f.tick(clock)); await flush();
+    assert.match(f.statuses.at(-1), /^Clock unavailable/); assert.equal(f.media.paused, true);
+    assert.equal(f.timers.size, 1); assert.equal(f.media.loads, loads); assert.equal(f.seeks.length, seeks);
+    // Explicit Play with an invalid clock also stays safely paused.
+    assert.doesNotThrow(() => f.controller.play()); assert.equal(f.media.plays.length, 1);
+    assert.doesNotThrow(() => f.tick(124)); await flush();
+    assert.equal(f.media.currentTime, 124); assert.equal(f.seeks.length, seeks + 1);
+    assert.equal(f.media.plays.length, 1); assert.equal(f.timers.size, 1);
+    f.controller.setFollowing(false); f.controller.setFollowing(true); assert.equal(f.media.plays.length, 1);
+    f.setNow(125); f.controller.play(); assert.equal(f.media.plays.at(-1), 125);
+    await flush(); f.dispose(); assert.equal(f.timers.size, 0);
+    const count = f.statuses.length; f.tick(clock); f.controller.playerChanged(); assert.equal(f.statuses.length, count);
+  }
+});
+
+test("short non-loop holds silent final frame; looping uses available duration after offset", async () => {
+  const short = await fixture(schedule(), 20); short.media.duration = 10; short.ready();
+  assert.equal(short.media.currentTime, 9.999); assert.equal(short.media.plays.length, 0);
+  short.tick(21); assert.equal(short.media.paused, true); short.dispose();
+  const loop = await fixture(schedule([entry("loop", 0, 3600, "/a.mp4", 3, true)]), 16);
+  loop.media.duration = 10; loop.ready(); await flush(); assert.equal(loop.media.currentTime, 5);
+  loop.media.currentTime = 10; loop.media.ended = true; loop.media.paused = true;
+  loop.media.event("ended"); await flush(); assert.equal(loop.media.plays.at(-1), 5); assert.equal(loop.media.plays.length, 2); loop.dispose();
+});
+
+test("loader rejects invalid paths, redirects, invalid schema, oversized/offline responses", async () => {
+  const signal = new AbortController().signal;
+  for (const path of ["https://other.test/x", "//other.test/x", "/a/../b", "/a?b", "/a%2fb", "/a#b"]) {
+    await assert.rejects(loadTheaterSchedule(path, "https://local.test", signal, () => { throw new Error("must not fetch"); }));
+  }
+  let init;
+  await loadTheaterSchedule("/schedule.json", "https://local.test", signal, async (_url, options) => { init = options; return response(schedule()); });
+  assert.equal(init.credentials, "omit"); assert.equal(init.cache, "no-store"); assert.equal(init.redirect, "error");
+  for (const fetcher of [async () => response({ token: "bootstrap fixture" }), async () => { throw new Error("offline"); },
+    async () => response("x".repeat(32769)), async () => { const r = response(schedule()); Object.defineProperty(r, "redirected", { value: true }); return r; }]) {
+    await assert.rejects(loadTheaterSchedule("/schedule.json", "https://local.test", signal, fetcher));
+  }
+  const f = await fixture({}); f.ready(); assert.match(f.statuses.at(-1), /unavailable/); assert.equal(f.media.plays.length, 0);
+  f.controller.play(); assert.equal(f.media.plays.length, 0);
+  f.controller.setFollowing(false); f.controller.play(); assert.equal(f.media.plays.length, 1); f.dispose();
+});
+
+test("loader deadline covers a stalled body and cancels it at 10 seconds", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let cancelled = false;
+  const pending = loadTheaterSchedule("/schedule.json", "https://local.test", new AbortController().signal,
+    async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-type": "application/json" } }));
+  const rejected = assert.rejects(pending, /timed out/); await flush();
+  t.mock.timers.tick(9999); await flush(); assert.equal(cancelled, false);
+  t.mock.timers.tick(1); await rejected; await flush(); assert.equal(cancelled, true);
+});
+
+test("dispose aborts pending manifest; late fetch resolution cannot revive scheduler", async () => {
+  let resolve, signal, calls = 0;
+  const pending = new Promise((yes) => { resolve = yes; });
+  const controller = new TheaterScheduleController({ player: {}, media: {}, path: "/schedule.json", origin: "https://local.test",
+    fetcher: async (_url, options) => { signal = options.signal; return pending; }, onChange: () => calls++,
+  });
+  controller.dispose(); assert.equal(signal.aborted, true); resolve(response(schedule())); await controller.loaded;
+  assert.equal(calls, 1);
+});

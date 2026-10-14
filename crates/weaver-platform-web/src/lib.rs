@@ -2,6 +2,11 @@
 
 #![warn(missing_docs)]
 
+mod video;
+
+#[cfg(target_arch = "wasm32")]
+pub use video::{attach_external_video, detach_external_video, mark_external_video_frame};
+
 use weaver_app_core::WeaverApp;
 
 /// Generate a shared two-adjective display name unless other options are supplied.
@@ -312,7 +317,7 @@ mod browser {
     };
     use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
     use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-    use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
+    use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys};
     use winit::window::{CursorGrabMode, Window, WindowId};
 
     #[wasm_bindgen]
@@ -419,17 +424,19 @@ mod browser {
     }
 
     #[derive(Default)]
-    struct MovementKeys(u8);
+    struct MovementKeys(u16);
 
     impl MovementKeys {
-        const KEY_W: u8 = 1;
-        const ARROW_UP: u8 = 2;
-        const KEY_S: u8 = 4;
-        const ARROW_DOWN: u8 = 8;
-        const KEY_A: u8 = 16;
-        const ARROW_LEFT: u8 = 32;
-        const KEY_D: u8 = 64;
-        const ARROW_RIGHT: u8 = 128;
+        const KEY_W: u16 = 1;
+        const ARROW_UP: u16 = 2;
+        const KEY_S: u16 = 4;
+        const ARROW_DOWN: u16 = 8;
+        const KEY_A: u16 = 16;
+        const ARROW_LEFT: u16 = 32;
+        const KEY_D: u16 = 64;
+        const ARROW_RIGHT: u16 = 128;
+        const SHIFT_LEFT: u16 = 256;
+        const SHIFT_RIGHT: u16 = 512;
 
         fn set(&mut self, key: PhysicalKey, pressed: bool) {
             let bit = match key {
@@ -441,6 +448,8 @@ mod browser {
                 PhysicalKey::Code(KeyCode::ArrowLeft) => Self::ARROW_LEFT,
                 PhysicalKey::Code(KeyCode::KeyD) => Self::KEY_D,
                 PhysicalKey::Code(KeyCode::ArrowRight) => Self::ARROW_RIGHT,
+                PhysicalKey::Code(KeyCode::ShiftLeft) => Self::SHIFT_LEFT,
+                PhysicalKey::Code(KeyCode::ShiftRight) => Self::SHIFT_RIGHT,
                 _ => return,
             };
             if pressed {
@@ -461,6 +470,10 @@ mod browser {
                 f32::from(forward) - f32::from(backward),
             )
             .clamp_length_max(1.0)
+        }
+
+        fn sprint(&self) -> bool {
+            self.0 & (Self::SHIFT_LEFT | Self::SHIFT_RIGHT) != 0
         }
 
         fn clear(&mut self) {
@@ -548,6 +561,9 @@ mod browser {
                 self.movement.clear();
                 self.touches.clear();
                 self.input.movement = Vec2::ZERO;
+                self.input.sprint = false;
+                self.input.toggle_perspective = false;
+                self.input.zoom_delta = 0.0;
                 self.input.look_delta = Vec2::ZERO;
                 self.dragging = false;
                 self.release_cursor();
@@ -595,6 +611,13 @@ mod browser {
                 }
             }
             let backend = renderer.context().adapter.get_info().backend;
+            super::video::initialize(&renderer, self.app.external_image_texture().is_some());
+            renderer
+                .context()
+                .device
+                .on_uncaptured_error(Box::new(|error| {
+                    super::video::fail(format!("GPU texture/render error: {error}"));
+                }));
             self.renderer = Some(renderer);
             set_status(&format!("Weaver ready on {backend:?}"));
             // Offline lab shells may omit these optional lifecycle callbacks.
@@ -602,6 +625,12 @@ mod browser {
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
+        }
+    }
+
+    impl Drop for WebShell {
+        fn drop(&mut self) {
+            super::video::reset();
         }
     }
 
@@ -688,6 +717,7 @@ mod browser {
                     }
                 }
                 WindowEvent::Focused(false) => {
+                    self.input = InputFrame::default();
                     self.movement.clear();
                     self.touches.clear();
                     self.dragging = false;
@@ -703,7 +733,10 @@ mod browser {
                         self.last_cursor = Some(position);
                     }
                 }
-                WindowEvent::MouseWheel { delta, .. } => {
+                WindowEvent::MouseWheel { delta, .. }
+                    if self.app.pointer_mode() != PointerMode::None
+                        && self.app.text_input_mode() != TextInputMode::Focused =>
+                {
                     self.input.zoom_delta += match delta {
                         MouseScrollDelta::LineDelta(_, y) => y,
                         MouseScrollDelta::PixelDelta(position) => position.y as f32 * 0.02,
@@ -727,6 +760,15 @@ mod browser {
                     if self.app.text_input_mode() == TextInputMode::Focused =>
                 {
                     self.push_committed_text(&text);
+                }
+                WindowEvent::MouseInput {
+                    button: MouseButton::Middle,
+                    state: ElementState::Pressed,
+                    ..
+                } if self.app.pointer_mode() == PointerMode::LockedLook
+                    && self.app.text_input_mode() != TextInputMode::Focused =>
+                {
+                    self.input.toggle_perspective = !self.input.toggle_perspective;
                 }
                 WindowEvent::MouseInput {
                     button: MouseButton::Left,
@@ -766,6 +808,9 @@ mod browser {
                                 self.movement.clear();
                                 self.touches.clear();
                                 self.release_cursor();
+                                self.input.sprint = false;
+                                self.input.toggle_perspective = false;
+                                self.input.zoom_delta = 0.0;
                                 self.push_text_event(TextInputEvent::Open);
                                 return;
                             }
@@ -796,6 +841,7 @@ mod browser {
                         return;
                     }
                     self.movement.set(physical_key, pressed);
+                    self.input.sprint = self.movement.sprint();
                     if pressed {
                         let action = match logical_key.as_ref() {
                             Key::Named(NamedKey::Space) => Some(AppAction::TogglePause),
@@ -846,6 +892,13 @@ mod browser {
                     if let (Some(window), Some(renderer)) =
                         (self.window.as_ref(), self.renderer.as_mut())
                     {
+                        if let Err(error) =
+                            super::video::before_render(renderer, self.app.external_image_texture())
+                        {
+                            report_error(&format!("external video/render failed: {error}"));
+                            event_loop.exit();
+                            return;
+                        }
                         match renderer.render(self.app.scene()) {
                             Ok(frame) => {
                                 window.pre_present_notify();
@@ -877,6 +930,21 @@ mod browser {
             _device_id: winit::event::DeviceId,
             event: DeviceEvent,
         ) {
+            // The host can acquire pointer lock without a winit left click, and
+            // browser Escape can release it without updating our cached flag.
+            self.cursor_captured = self.app.pointer_mode() == PointerMode::LockedLook
+                && self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.canvas())
+                    .is_some_and(|canvas| {
+                        web_sys::window()
+                            .and_then(|window| window.document())
+                            .and_then(|document| document.pointer_lock_element())
+                            .is_some_and(|element| {
+                                element == canvas.unchecked_into::<web_sys::Element>()
+                            })
+                    });
             if self.cursor_captured
                 && let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             {
@@ -910,6 +978,7 @@ mod browser {
     }
 
     fn report_error(message: &str) {
+        super::video::reset();
         web_sys::console::error_1(&JsValue::from_str(message));
         set_status(message);
         let _ = weaver_scene_fatal(message);

@@ -1,0 +1,110 @@
+{
+  "version": 3,
+  "schedulePeriodSeconds": 600,
+  "definitions": [
+    {
+      "id": "guest_01",
+      "displayName": "Rust Drifter",
+      "avatarId": "avatar_01",
+      "profile": "npc_casual_guest",
+      "behavior": "ambient",
+      "interaction": { "enabled": false },
+      "schedule": { "type": "resident", "point": "lobby_center" }
+    },
+    {
+      "id": "guest_02",
+      "displayName": "Chrome Usher",
+      "avatarId": "avatar_02",
+      "profile": "npc_casual_guest",
+      "behavior": "ambient",
+      "interaction": { "enabled": false },
+      "schedule": { "type": "resident", "point": "auditorium_left" }
+    },
+    {
+      "id": "guest_03",
+      "displayName": "Moth Mechanic",
+      "avatarId": "avatar_03",
+      "profile": "npc_casual_guest",
+      "behavior": "ambient",
+      "interaction": { "enabled": false },
+      "schedule": { "type": "resident", "point": "auditorium_center" }
+    },
+    {
+      "id": "guest_04",
+      "displayName": "Velvet Bones",
+      "avatarId": "avatar_04",
+      "profile": "npc_casual_guest",
+      "behavior": "ambient",
+      "interaction": { "enabled": false },
+      "schedule": {
+        "type": "door_visit",
+        "offsetSeconds": 0,
+        "actions": [
+          { "type": "move", "point": "lobby_entry", "speed": 1.4 },
+          { "type": "move", "point": "lobby_east", "speed": 1.4 },
+          { "type": "wait", "seconds": 18 },
+          { "type": "move", "point": "lobby_aisle", "speed": 1.4 },
+          { "type": "move", "point": "passage_lobby", "speed": 1.4 },
+          { "type": "move", "point": "corridor_turn", "speed": 1.4 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.4 },
+          { "type": "move", "point": "auditorium_back", "speed": 1.4 },
+          { "type": "wait", "seconds": 20 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.4 },
+          { "type": "move", "point": "row_a", "speed": 1.4 },
+          { "type": "move", "point": "row_b", "speed": 1.4 },
+          { "type": "move", "point": "auditorium_right", "speed": 1.4 },
+          { "type": "wait", "seconds": 24 },
+          { "type": "move", "point": "row_b", "speed": 1.4 },
+          { "type": "move", "point": "row_a", "speed": 1.4 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.4 },
+          { "type": "move", "point": "corridor_turn", "speed": 1.4 },
+          { "type": "move", "point": "passage_lobby", "speed": 1.4 },
+          { "type": "move", "point": "lobby_aisle", "speed": 1.4 },
+          { "type": "move", "point": "lobby_east", "speed": 1.4 },
+          { "type": "move", "point": "lobby_entry", "speed": 1.4 },
+          { "type": "move", "point": "lobby_door", "speed": 1.4 },
+          { "type": "wait", "seconds": 2 }
+        ]
+      }
+    },
+    {
+      "id": "guest_05",
+      "displayName": "Spore Scout",
+      "avatarId": "avatar_05",
+      "profile": "npc_casual_guest",
+      "behavior": "ambient",
+      "interaction": { "enabled": false },
+      "schedule": {
+        "type": "door_visit",
+        "offsetSeconds": 300,
+        "actions": [
+          { "type": "move", "point": "lobby_entry", "speed": 1.3 },
+          { "type": "move", "point": "lobby_west", "speed": 1.3 },
+          { "type": "wait", "seconds": 22 },
+          { "type": "move", "point": "lobby_center", "speed": 1.3 },
+          { "type": "move", "point": "lobby_aisle", "speed": 1.3 },
+          { "type": "move", "point": "passage_lobby", "speed": 1.3 },
+          { "type": "move", "point": "corridor_turn", "speed": 1.3 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.3 },
+          { "type": "move", "point": "auditorium_back", "speed": 1.3 },
+          { "type": "wait", "seconds": 28 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.3 },
+          { "type": "move", "point": "row_a", "speed": 1.3 },
+          { "type": "move", "point": "row_b", "speed": 1.3 },
+          { "type": "move", "point": "auditorium_right", "speed": 1.3 },
+          { "type": "wait", "seconds": 26 },
+          { "type": "move", "point": "row_b", "speed": 1.3 },
+          { "type": "move", "point": "row_a", "speed": 1.3 },
+          { "type": "move", "point": "auditorium_entry", "speed": 1.3 },
+          { "type": "move", "point": "corridor_turn", "speed": 1.3 },
+          { "type": "move", "point": "passage_lobby", "speed": 1.3 },
+          { "type": "move", "point": "lobby_aisle", "speed": 1.3 },
+          { "type": "move", "point": "lobby_center", "speed": 1.3 },
+          { "type": "move", "point": "lobby_entry", "speed": 1.3 },
+          { "type": "move", "point": "lobby_door", "speed": 1.3 },
+          { "type": "wait", "seconds": 2 }
+        ]
+      }
+    }
+  ]
+}

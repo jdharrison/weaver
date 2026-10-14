@@ -36,13 +36,20 @@ struct Instance {
     model_3: vec4<f32>,
     color: vec4<f32>,
     emissive: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    ambient: f32,
+    intensity: f32,
+    lighting_enabled: f32,
+    light_position: vec4<f32>,
+    texture_fit: vec4<f32>,
 };
-const MAX_INSTANCES: u32 = 160u;
+const MAX_INSTANCES: u32 = 128u;
 @group(1) @binding(0)
 var<uniform> instances: array<Instance, MAX_INSTANCES>;
+
+@group(2) @binding(0)
+var mesh_texture: texture_2d<f32>;
+@group(2) @binding(1)
+var mesh_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -58,6 +65,9 @@ struct VertexOutput {
     @location(2) color: vec4<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) emissive: f32,
+    @location(5) light_position: vec3<f32>,
+    @location(6) lighting: vec3<f32>,
+    @location(7) @interpolate(flat) texture_fit: vec3<f32>,
 };
 
 @vertex
@@ -72,18 +82,42 @@ fn vs_main(input: VertexInput, @builtin(instance_index) instance_index: u32) -> 
     out.color = input.color * inst.color;
     out.uv = input.uv;
     out.emissive = inst.emissive;
+    out.light_position = inst.light_position.xyz;
+    out.lighting = vec3<f32>(inst.ambient, inst.intensity, inst.lighting_enabled);
+    out.texture_fit = inst.texture_fit.xyz;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // The Sun is at the origin; light radiates outward from (0, 0, 0).
-    let to_light = normalize(-in.world_pos);
+    // Preserve origin lighting for instances without an independent point light.
+    var light_direction = -in.world_pos;
+    var ambient = 0.08;
+    var intensity = 1.0;
+    if (in.lighting.z > 0.5) {
+        light_direction = in.light_position - in.world_pos;
+        ambient = in.lighting.x;
+        intensity = in.lighting.y;
+    }
+    var to_light = vec3<f32>(0.0);
+    if (dot(light_direction, light_direction) > 0.0) {
+        to_light = normalize(light_direction);
+    }
     let diff = max(dot(in.normal, to_light), 0.0);
-    let ambient = 0.08;
-    let lit = in.color.rgb * (ambient + diff);
-    let glow = in.color.rgb * in.emissive;
-    return vec4<f32>(lit + glow, in.color.a);
+    var image_uv = in.uv;
+    if (in.texture_fit.z > 0.5) {
+        image_uv = (in.uv - vec2<f32>(0.5)) / in.texture_fit.xy + vec2<f32>(0.5);
+        // This draw binds ClampToEdge for mip and anisotropic filtering footprints.
+    }
+    // Sample before the per-fragment bar branch to keep implicit derivatives valid.
+    let color = textureSample(mesh_texture, mesh_sampler, image_uv) * in.color;
+    if (in.texture_fit.z > 0.5 &&
+        (any(image_uv < vec2<f32>(0.0)) || any(image_uv > vec2<f32>(1.0)))) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let lit = color.rgb * (ambient + diff * intensity);
+    let glow = color.rgb * in.emissive;
+    return vec4<f32>(lit + glow, color.a);
 }
 ";
 
