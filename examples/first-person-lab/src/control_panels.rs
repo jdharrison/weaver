@@ -476,6 +476,7 @@ mod tests {
             bridge.borrow().snapshot.as_ref().unwrap().camera,
             app.scene.camera
         );
+        assert_ne!(app.scene.camera.eye, app.view.player.eye);
         assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
         assert_eq!(
             app.scene.meshes[app.control_panels.mesh_indices[0]].texture,
@@ -488,7 +489,7 @@ mod tests {
                 ..InputFrame::default()
             },
         );
-        assert_ne!(app.scene.camera.eye, app.view.player.eye);
+        assert_eq!(app.scene.camera.eye, app.view.player.eye);
         assert_eq!(
             bridge.borrow().snapshot.as_ref().unwrap().camera,
             app.scene.camera

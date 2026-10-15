@@ -1262,7 +1262,7 @@ mod tests {
             (25, Vec3::new(-6.75, 11.7, -14.0), true),
         ] {
             let light = scene.instances[index].lighting.unwrap();
-            assert!(light.position.abs_diff_eq(position, 0.000001));
+            assert!(light.position.abs_diff_eq(position, 0.000_001));
             let expected = if auditorium {
                 AUDITORIUM_LIGHT_LEVEL
             } else {

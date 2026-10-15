@@ -1,111 +1,56 @@
 # First-Person Lab browser release seam
 
 This shell is desktop-first for chat: a physical keyboard opens/submits chat with
-Enter and cancels with Escape. Existing touch movement/look remain available;
-mobile virtual-keyboard chat is not implemented. Room/presence/chat remain the
-MVP; portfolio content/layout is separate work.
+Enter and cancels with Escape. In minimal presentation, Enter requests the host's
+on-demand composer; the host owns text/IME/mobile keyboard input. An accepted send
+closes the host composer. Messages appear briefly above player avatars, with the
+local player's message at the top-center HUD in first person instead. There is
+no visible transcript in minimal presentation. Existing touch movement/look remain
+available; the standalone shell does not supply a mobile virtual-keyboard composer.
 
-## Local scripted NPCs and host dialogue
+The camera starts at a 2 m third-person setback, collision-clipped before its first
+snapshot (1.8 m at spawn). Wheel zoom spans 0–6 m; zero selects first person, and
+middle-click toggles the remembered third-person distance. Player and NPC names
+remain visible in minimal presentation, independently of hover or interaction.
+The local name appears only in third person. Name/speech anchors respect physical
+visibility and projection bounds; names follow the NPC portraits' scripted bob.
+Speech is offset above each name, and retains its four-second hold/two-second fade.
 
-The shared Rust scene owns permanent `concession_support`, three ambient guest
-slots (`guest_01`, `guest_04`, `guest_05`) and two player-like guest slots
-(`guest_02`, `guest_03`). Seeded presence maintains 2–3 ambient and 1–2 player-like
-guests, plus support. The cinema is chair-free; no chair geometry or colliders
-remain. Legacy seat IDs are standing viewing marks, not seating behavior.
-Definitions are embedded from version-2 `../../assets/npcs.json`; guests use IDs
-from the unchanged nine-player avatar pool. The separately bundled concession
-art is not part of that player hash pool. There are no NPC Woven entities,
-pose/profile/chat publications, shared transcripts, AI calls or HTTP dialogue
-requests in this shell. A host may call its gateway only after explicit local
-submission acceptance, and only for support/player-like guests.
+## Scripted ambient NPCs; no interaction or inference
 
-Guest state uses bounded analytic routes and seeded presence windows, independent
-of movie playback and private player input. The validated theater manifest still
-supplies show metadata through `onScheduleLoaded`, but installing a new show cycle,
-pausing/muting/seeking, AI errors or networking does not rephase guest presence.
-`showState` is `unavailable` until a validated manifest is supplied, then `showing`;
-no intermission or watched intro is invented. `playerHasSeenIntro` remains false
-because no intro-completion signal exists. Invalid clocks retain safe visual
-population but invalidate interaction until recovery.
+The shared Rust scene embeds version-3 `../../assets/npcs.json`: five ambient
+slots (`guest_01`–`guest_05`), all with authored display names and interaction
+disabled. One lobby resident, two theater residents and two non-overlapping door
+visits use a bounded, static 600-second UTC schedule. Portraits visibly bob;
+NPCs do not react to players, block them, or become interaction targets.
 
-Ambient guests visibly bob, use the door and never become interaction targets.
-Player-like guests use the same grounded upright cards as players, with no bob
-or gesture lean, 4 m/s walking, occasional 8 m/s sprinting, strafes, pauses and
-turns. They disappear in place on randomized simulated disconnects, not at the
-door. A local conversation holds only their route phase; the independent UTC
-presence deadline still disconnects them and rejects stale reincarnation replies.
-These are local card presentations, not skeletal poses. NPCs do not block real
-players; walls/counter remain solid. The current frame's collided `view.player.eye`,
-not the third-person camera or sprite center, supplies full 3D distance. Support
-wins within its radius/line of sight; otherwise the nearest eligible player-like
-guest wins, with stable ID ties. Selection never invokes inference.
+There is no concession counter/support NPC, player-like guest simulation,
+randomized disconnect behavior, TALK/hover prompt, AI call, private conversation,
+or NPC Woven entity. Routes are compiled once and sampled analytically, independent
+of movie playback, player input and networking. Invalid/backward UTC freezes the
+last safe poses until recovery; large forward jumps sample the new phase directly.
 
-### Public bridge contract
+The chair-free auditorium is 31.5 × 28 m with viewing levels at 0, 1.2 and 2.4 m,
+joined by ramps. Legacy seat IDs are standing marks only. The 25 × 10 m lobby and
+hallway have 4.5 m of vertical headroom; the hallway ceiling follows its ramp and
+opens into the theater's world-Y=12 m ceiling at Z `-12..-9`. A lintel seals the
+void above the hallway. Rendering, camera clearance and visibility share the same
+floor/ceiling profiles.
 
-The loader exposes these synchronous globals, independent of Woven connectivity:
+### Inert compatibility bridge
 
-- `weaverGetNpcInteractionContext(): string | null` → Rust
-  `get_npc_interaction_context(): Option<String>`.
-- `weaverSubmitNpcQuestion(npcId, requestId, text): boolean` → Rust
-  `submit_npc_question`. Acceptance validates the currently selected NPC, a fresh
-  engine frame (at most 250ms old), radius, request ID, and normalized text of
-  1–256 Unicode scalar values / at most 1024 UTF-8 bytes. IDs are nonempty ASCII
-  alphanumerics/underscore/hyphen; request IDs are at most 128 bytes and must be
-  unique per request. This is local acceptance, never reliable chat acceptance.
-- `weaverPresentNpcResponse(npcId, requestId, answer, gesture): boolean` → Rust
-  `present_npc_response`. The active scene/NPC/request binding must still match;
-  stale, cancelled, superseded, duplicate, or expired replies fail closed. Answers
-  allow at most 8000 Unicode scalar values and 24 KiB UTF-8; safe newline/tab are
-  allowed. Gestures are exactly `idle`, `welcome`, `thinking`, `explain`,
-  `point_left`, `point_right`, `shrug`. No model commands/actions execute.
-- `weaverClearNpcDialogue(): void` → Rust `clear_npc_dialogue`; invalidates requests
-  and subtitles without stopping NPC movement or resetting frame sequence.
-- `weaverGetNpcDefinitions(): ScriptedNpcDefinition[] | null` reads the embedded
-  data, including `permanent`, `spawnOffsetSeconds`, interaction, and typed schedule.
+The existing exports remain for older hosts, but cannot enable dialogue:
 
-The optional, host-installed `globalThis.weaverNpcInteraction(snapshot | null)`
-is preserved. Rust publishes each scene frame after collision/NPC resolution;
-the loader parses its internal JSON callback and forwards a plain object only
-when the initialized renderer is ready and visible. Missing/throwing hooks are
-safe. The getter returns a **JSON string** with exactly these twelve fields:
+- `weaverGetNpcInteractionContext()` / `get_npc_interaction_context()` returns null.
+- `weaverSubmitNpcQuestion(...)` / `submit_npc_question(...)` returns false.
+- `weaverPresentNpcResponse(...)` / `present_npc_response(...)` returns false.
+- `weaverClearNpcDialogue()` / `clear_npc_dialogue()` is inert.
+- `weaverGetNpcDefinitions()` exposes the embedded ambient catalog, not interaction
+  authorization. Readiness/show-cycle compatibility setters cannot reactivate NPCs.
 
-```json
-{
-  "version": 1,
-  "npcId": "concession_support",
-  "profile": "npc_concession_support",
-  "displayName": "Concession Support",
-  "sceneGeneration": "unique-per-engine-instance",
-  "frameSequence": "1",
-  "distanceSquared": 6.25,
-  "radiusWorldUnits": 4,
-  "room": "lobby",
-  "showState": "showing",
-  "nearbyProject": null,
-  "playerHasSeenIntro": false
-}
-```
-
-Generation is a per-engine UUID (ASCII, under 64 bytes); frame sequence is a
-checked, monotonic decimal u64. The host additionally owns receipt freshness
-(up to 1000ms), origin/source validation, HTTP cancellation, per-NPC bounded
-session history, and a local accessible transcript. Do not send NPC submissions
-through `weaverSendChat`/`send_host_chat` or synthesize `weaverChatMessage` echoes.
-
-The engine draws TALK/pending/subtitle UI in both full and minimal modes. E opens
-the host composer when an NPC is selected; Enter retains the existing minimal
-host-chat opening behavior. The shell accepts `weaverRequestChatOpen`, falling
-back to the existing `weaverHostRequestChat`; the host reads the fresh NPC context
-and owns text/IME/touch activation. No new key handling overrides focused input
-or the existing sound/fullscreen panels. Pending request bindings expire 60 seconds
-from acceptance, allowing margin for the host's 40-second timeout and bounded
-55-second backend work. Fresh scene frames never extend that deadline. Answered
-subtitles still expire after 15 seconds, capped at six lines/320 scalars.
-The Flutter transcript can display the full validated answer. Leaving proximity,
-NPC despawn/replacement, hide, fatal, or host disposal clears request bindings;
-a new visible frame is required after restoration. Internal Rust loader exports
-`set_npc_interaction_active` and `set_npc_show_cycle(anchorUnixSeconds, cycleSeconds)`
-provide readiness/validated timing only, not external transform control.
+Enter requests ordinary player chat through the existing host bridge. Hosts must
+continue to reject unexpected private intent rather than route it into public chat.
+The theater sound/fullscreen controls remain separate from NPC interaction.
 
 Focused checks: `cargo test --locked -p first-person-lab --lib`, browser `npm test`
 and `npm run typecheck`. Build using `cargo xtask build first-person --platform web`;

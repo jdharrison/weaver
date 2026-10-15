@@ -471,6 +471,22 @@ impl NpcRuntime {
         }
     }
 
+    /// Only live portraits supply names, at their current bobbed eye positions.
+    pub(crate) fn nameplates(&self) -> impl Iterator<Item = (&str, Vec3)> {
+        config()
+            .definitions
+            .iter()
+            .zip(&self.poses)
+            .filter_map(|(definition, pose)| {
+                pose.map(|pose| {
+                    (
+                        definition.display_name.as_str(),
+                        pose.eye + Vec3::Y * pose.bob_height,
+                    )
+                })
+            })
+    }
+
     #[cfg(test)]
     pub(crate) fn visible_count(&self) -> usize {
         self.poses.iter().flatten().count()
@@ -1000,6 +1016,61 @@ mod tests {
         }
         assert!(minimum_lifts.iter().all(|lift| *lift < 0.01));
         assert!(maximum_lifts.iter().all(|lift| *lift > 0.17));
+    }
+
+    #[test]
+    fn nameplates_follow_live_bobbed_portraits_and_exact_departure_boundaries() {
+        let (mut runtime, colliders) = runtime();
+        let textures = std::array::from_fn(|_| SpriteHandle::new());
+        for (visitor, start, duration) in visit_windows(&runtime) {
+            for time in [
+                start,
+                start + 0.125,
+                start + duration - 0.001,
+                start + duration,
+            ] {
+                sample(&mut runtime, time, &colliders);
+                let mut scene = SceneSnapshot::default();
+                runtime.append_sprites(&mut scene, &textures, 1.0, 1.0);
+                let labels: Vec<_> = runtime.nameplates().collect();
+                assert_eq!(labels.len(), scene.sprites.len());
+                for ((name, eye), sprite) in labels.iter().zip(&scene.sprites) {
+                    let index = textures
+                        .iter()
+                        .position(|texture| *texture == sprite.sprite)
+                        .unwrap();
+                    let pose = runtime.poses[index].unwrap();
+                    assert_eq!(*name, config().definitions[index].display_name);
+                    assert_eq!(*eye, pose.eye + Vec3::Y * pose.bob_height);
+                    let expected_center =
+                        *eye - Vec3::Y * (crate::EYE_HEIGHT - crate::PLAYER_BILLBOARD_HEIGHT * 0.5);
+                    assert!(
+                        sprite
+                            .transform
+                            .translation
+                            .abs_diff_eq(expected_center, 0.000_001)
+                    );
+                }
+                assert_eq!(
+                    labels
+                        .iter()
+                        .any(|(name, _)| *name == config().definitions[visitor].display_name),
+                    time < start + duration,
+                );
+                let frozen: Vec<_> = labels
+                    .iter()
+                    .map(|(name, eye)| ((*name).to_owned(), *eye))
+                    .collect();
+                sample(&mut runtime, f64::NAN, &colliders);
+                assert_eq!(
+                    runtime
+                        .nameplates()
+                        .map(|(name, eye)| (name.to_owned(), eye))
+                        .collect::<Vec<_>>(),
+                    frozen
+                );
+            }
+        }
     }
 
     #[test]
