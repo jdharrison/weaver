@@ -1876,7 +1876,7 @@ mod tests {
     #[test]
     fn scene_starts_with_the_theater_and_retains_avatar_assets() {
         let app = FirstPersonLab::new();
-        assert_eq!(app.scene.meshes.len(), 44);
+        assert_eq!(app.scene.meshes.len(), 46);
         assert_eq!(app.colliders.len(), 10);
         assert_eq!(app.base_mesh_count, app.scene.meshes.len());
         assert_eq!(app.assets.meshes.len(), app.base_mesh_count);

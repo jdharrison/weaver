@@ -43,6 +43,34 @@ const CORRIDOR_FLOOR: [(f32, f32); 3] = [
     (SIDE_ENTRY_MAX_Z, REAR_PLATFORM_HEIGHT),
     (0.0, 0.0),
 ];
+const LOW_CEILING_CLEARANCE: f32 = 4.5;
+const LOBBY_CEILING: [(f32, f32); 2] = raised_profile(LOBBY_FLOOR);
+const CORRIDOR_CEILING: [(f32, f32); 3] = raised_profile(CORRIDOR_FLOOR);
+const AUDITORIUM_CEILING: [(f32, f32); 2] = [(MIN_Z, HEIGHT), (0.0, HEIGHT)];
+
+const fn raised_profile<const N: usize>(mut profile: [(f32, f32); N]) -> [(f32, f32); N] {
+    let mut i = 0;
+    while i < N {
+        profile[i].1 += LOW_CEILING_CLEARANCE;
+        i += 1;
+    }
+    profile
+}
+
+const fn ceiling_profile(position: Vec3) -> &'static [(f32, f32)] {
+    if position.z >= 0.0 {
+        &LOBBY_CEILING
+    } else if position.x < PASSAGE_MIN {
+        &AUDITORIUM_CEILING
+    } else {
+        &CORRIDOR_CEILING
+    }
+}
+
+const fn ceiling_height(position: Vec3) -> f32 {
+    profile_height(position.z, ceiling_profile(position))
+}
+
 const SCREEN_CENTER_X: f32 = (AUDITORIUM_MIN.x + AUDITORIUM_MAX.x) * 0.5;
 pub(crate) const DEFAULT_VIDEO_ASPECT: f32 = 16.0 / 9.0;
 const SCREEN_ASPECT: f32 = 2.39;
@@ -331,9 +359,9 @@ impl Theater {
             &AUDITORIUM_FLOOR,
         );
         scene.floor(CORRIDOR_MIN, CORRIDOR_MAX, lobby, &CORRIDOR_FLOOR);
-        scene.ceiling(LOBBY_MIN, LOBBY_MAX);
-        scene.ceiling(AUDITORIUM_MIN, AUDITORIUM_MAX);
-        scene.ceiling(CORRIDOR_MIN, CORRIDOR_MAX);
+        scene.ceiling(LOBBY_MIN, LOBBY_MAX, &LOBBY_CEILING);
+        scene.ceiling(AUDITORIUM_MIN, AUDITORIUM_MAX, &AUDITORIUM_CEILING);
+        scene.ceiling(CORRIDOR_MIN, CORRIDOR_MAX, &CORRIDOR_CEILING);
 
         for (a, b) in outer_walls {
             scene.wall(a, b, wall);
@@ -342,6 +370,29 @@ impl Theater {
             scene.wall(a, b, wall);
             scene.wall(b, a, wall);
         }
+
+        // Face the theater to seal the void above the lower corridor. The ceiling
+        // profile discontinuity blocks sight/camera sweeps, not walking routes.
+        let lintel_bottom = ceiling_height(Vec3::new(PASSAGE_MIN, 0.0, SIDE_ENTRY_MIN_Z));
+        scene.quad(
+            [
+                Vec3::new(PASSAGE_MIN, lintel_bottom, SIDE_ENTRY_MIN_Z),
+                Vec3::new(PASSAGE_MIN, lintel_bottom, SIDE_ENTRY_MAX_Z),
+                Vec3::new(PASSAGE_MIN, HEIGHT, SIDE_ENTRY_MAX_Z),
+                Vec3::new(PASSAGE_MIN, HEIGHT, SIDE_ENTRY_MIN_Z),
+            ],
+            [
+                [0.0, (HEIGHT - lintel_bottom) / 3.0],
+                [
+                    (SIDE_ENTRY_MAX_Z - SIDE_ENTRY_MIN_Z) / 3.0,
+                    (HEIGHT - lintel_bottom) / 3.0,
+                ],
+                [(SIDE_ENTRY_MAX_Z - SIDE_ENTRY_MIN_Z) / 3.0, 0.0],
+                [0.0, 0.0],
+            ],
+            [1.0; 4],
+            wall,
+        );
 
         // Sealed entrance artwork sits just inside the solid south wall. The
         // square PNG is mapped once, top at v=0, without a mirrored double door.
@@ -493,6 +544,9 @@ impl Theater {
             ambient: 0.35,
             intensity: 0.65,
         });
+        if let Some(light) = &mut instance.lighting {
+            light.position.y = ceiling_height(light.position) - 0.3;
+        }
         self.instances.push(instance);
     }
 
@@ -565,18 +619,20 @@ impl Theater {
         }
     }
 
-    fn ceiling(&mut self, min: Vec2, max: Vec2) {
-        self.quad(
-            [
-                Vec3::new(min.x, HEIGHT, max.y),
-                Vec3::new(min.x, HEIGHT, min.y),
-                Vec3::new(max.x, HEIGHT, min.y),
-                Vec3::new(max.x, HEIGHT, max.y),
-            ],
-            [[0.0; 2]; 4],
-            [0.055, 0.055, 0.065, 1.0],
-            None,
-        );
+    fn ceiling(&mut self, min: Vec2, max: Vec2, profile: &[(f32, f32)]) {
+        for pair in profile.windows(2) {
+            self.quad(
+                [
+                    Vec3::new(min.x, pair[1].1, pair[1].0),
+                    Vec3::new(min.x, pair[0].1, pair[0].0),
+                    Vec3::new(max.x, pair[0].1, pair[0].0),
+                    Vec3::new(max.x, pair[1].1, pair[1].0),
+                ],
+                [[0.0; 2]; 4],
+                [0.055, 0.055, 0.065, 1.0],
+                None,
+            );
+        }
     }
 
     fn wall(&mut self, a: Vec2, b: Vec2, texture: Option<SpriteHandle>) {
@@ -683,10 +739,18 @@ impl Collider {
     }
 }
 
-// A ray crosses only finitely many linear ground pieces. Splitting at every
+// A ray crosses only finitely many linear floor/ceiling pieces. Splitting at every
 // profile/room boundary finds first contact even when both endpoints are clear
 // but the intervening raised flat blocks the ray. No frame-size sampling is used.
 fn floor_contact(start: Vec3, end: Vec3, clearance: f32) -> Option<f64> {
+    surface_contact(start, end, clearance, false)
+}
+
+fn ceiling_contact(start: Vec3, end: Vec3, clearance: f32) -> Option<f64> {
+    surface_contact(start, end, clearance, true)
+}
+
+fn surface_contact(start: Vec3, end: Vec3, clearance: f32, ceiling: bool) -> Option<f64> {
     let origin = start.as_dvec3();
     let direction = end.as_dvec3() - origin;
     let radius = f64::from(clearance);
@@ -719,9 +783,24 @@ fn floor_contact(start: Vec3, end: Vec3, clearance: f32) -> Option<f64> {
         for interval in splits.windows(2) {
             let from = origin + direction * interval[0];
             let to = origin + direction * interval[1];
-            let profile = floor_profile(((from + to) * 0.5).as_vec3());
-            let from_gap = from.y - f64::from(profile_height(from.z as f32, profile)) - radius;
-            let to_gap = to.y - f64::from(profile_height(to.z as f32, profile)) - radius;
+            // Select by interval interior so both sides of a height discontinuity
+            // are tested. This also closes the lintel when entering horizontally.
+            let midpoint = ((from + to) * 0.5).as_vec3();
+            let profile = if ceiling {
+                ceiling_profile(midpoint)
+            } else {
+                floor_profile(midpoint)
+            };
+            let gap = |point: glam::DVec3| {
+                let height = f64::from(profile_height(point.z as f32, profile));
+                if ceiling {
+                    height - point.y - radius
+                } else {
+                    point.y - height - radius
+                }
+            };
+            let from_gap = gap(from);
+            let to_gap = gap(to);
             let hit = if from_gap < -1.0e-6 {
                 Some(interval[0])
             } else if to_gap < -1.0e-6 {
@@ -741,11 +820,12 @@ fn floor_contact(start: Vec3, end: Vec3, clearance: f32) -> Option<f64> {
     contact
 }
 
-/// Visibility uses physical walls and ground, never player-radius-expanded boxes.
+/// Visibility uses physical walls, ground and ceilings, never player-radius-expanded boxes.
 pub(crate) fn has_line_of_sight(start: Vec3, end: Vec3, colliders: &[Collider]) -> bool {
     start.is_finite()
         && end.is_finite()
         && floor_contact(start, end, 0.0).is_none()
+        && ceiling_contact(start, end, 0.0).is_none()
         && !colliders
             .iter()
             .any(|collider| collider.intersects_segment(start, end))
@@ -784,10 +864,9 @@ pub(crate) fn clip_camera(
     let direction = desired.as_dvec3() - start.as_dvec3();
     let origin = start.as_dvec3();
     let radius = f64::from(clearance);
-    let mut limit = floor_contact(start, desired, clearance).unwrap_or(1.0);
-    if direction.y > 0.0 {
-        limit = limit.min(((f64::from(HEIGHT) - radius - origin.y) / direction.y).max(0.0));
-    }
+    let mut limit = floor_contact(start, desired, clearance)
+        .unwrap_or(1.0)
+        .min(ceiling_contact(start, desired, clearance).unwrap_or(1.0));
     for collider in colliders {
         let min =
             Vec3::new(collider.min.x, 0.0, collider.min.y).as_dvec3() - glam::DVec3::splat(radius);
@@ -872,7 +951,7 @@ mod tests {
     fn legacy_seats_are_chair_free_standing_marks_with_clear_paths() {
         let scene = Theater::new();
         assert_eq!(scene.colliders.len(), 10);
-        assert_eq!(scene.instances.len(), 42);
+        assert_eq!(scene.instances.len(), 44);
         assert_eq!(CHAIR_MESH_COUNT, 0);
         assert_eq!(SEAT_HEIGHT, 0.0);
         for seat in SEATS {
@@ -920,6 +999,126 @@ mod tests {
     }
 
     #[test]
+    fn rendered_ceilings_and_lintel_match_shared_profiles_and_lights_stay_below() {
+        let scene = Theater::new();
+        let ceilings: Vec<_> = scene
+            .assets
+            .meshes
+            .iter()
+            .filter(|mesh| mesh.vertices[0].normal[1] < -0.9)
+            .collect();
+        assert_eq!(ceilings.len(), 4);
+        for mesh in ceilings {
+            let center = mesh
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position))
+                .sum::<Vec3>()
+                / 4.0;
+            let profile = ceiling_profile(center);
+            for vertex in &mesh.vertices {
+                let p = Vec3::from(vertex.position);
+                assert!((p.y - profile_height(p.z, profile)).abs() < 0.00001);
+            }
+            assert!((center.y - ceiling_height(center)).abs() < 0.00001);
+            if in_auditorium(center) {
+                assert_eq!(center.y, HEIGHT);
+            } else {
+                assert!((center.y - floor_height(center) - LOW_CEILING_CLEARANCE).abs() < 0.00001);
+            }
+        }
+        let lintel = &scene.assets.meshes[25];
+        assert_eq!(lintel.vertices[0].normal, Vec3::NEG_X.to_array());
+        assert_eq!(
+            lintel.vertices[0].position,
+            [PASSAGE_MIN, 6.9, SIDE_ENTRY_MIN_Z]
+        );
+        assert_eq!(
+            lintel.vertices[2].position,
+            [PASSAGE_MIN, HEIGHT, SIDE_ENTRY_MAX_Z]
+        );
+        for instance in &scene.instances {
+            if instance.texture == Some(scene.assets.textures[4].handle) {
+                continue;
+            }
+            let light = instance.lighting.unwrap();
+            assert!((light.position.y - (ceiling_height(light.position) - 0.3)).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn local_ceiling_camera_sweeps_cover_raised_hallway_ramp_and_horizontal_lintel() {
+        let scene = Theater::new();
+        let radius = crate::view::CAMERA_CLEARANCE;
+        for (x, z, height) in [
+            (0.0, 5.0, 4.5),
+            (10.75, -20.0, 6.9),
+            (10.75, -4.5, 5.7),
+            (0.0, -10.5, HEIGHT),
+        ] {
+            let start = eye(x, z);
+            let result = clip_camera(start, Vec3::new(x, 20.0, z), radius, &scene.colliders);
+            let expected = height
+                - radius
+                - if x > PASSAGE_MIN && z > SIDE_ENTRY_MAX_Z {
+                    radius * REAR_PLATFORM_HEIGHT / -SIDE_ENTRY_MAX_Z
+                } else {
+                    0.0
+                };
+            assert!(
+                (result.y - expected).abs() < 0.00001,
+                "{result:?} != {expected}"
+            );
+        }
+        let start = Vec3::new(8.0, 8.0, -10.5);
+        let end = Vec3::new(11.0, 8.0, -10.5);
+        let result = clip_camera(start, end, radius, &scene.colliders);
+        assert!((result.x - (PASSAGE_MIN - radius)).abs() < 0.00001);
+        assert_eq!(result.y, start.y);
+        let ramp = clip_camera(
+            Vec3::new(10.75, 6.0, -10.5),
+            Vec3::new(10.75, 6.0, -1.0),
+            radius,
+            &scene.colliders,
+        );
+        let expected_z =
+            -(6.0 + radius - LOW_CEILING_CLEARANCE) * 9.0 / REAR_PLATFORM_HEIGHT - radius;
+        assert!((ramp.z - expected_z).abs() < 0.00001);
+        for (start, end) in [
+            (eye(8.0, -10.5), eye(11.0, -10.5)),
+            (eye(11.0, -10.5), eye(8.0, -10.5)),
+        ] {
+            assert_eq!(clip_camera(start, end, radius, &scene.colliders), end);
+            assert!(npc_path_clear(start, end, &scene.colliders));
+            assert!(resolve_movement(start, end, &scene.colliders).abs_diff_eq(end, 0.0001));
+        }
+    }
+
+    #[test]
+    fn visibility_blocks_ceilings_and_lintel_but_preserves_normal_entry() {
+        let scene = Theater::new();
+        for (start, end) in [
+            (Vec3::new(0.0, 4.0, 5.0), Vec3::new(0.0, 5.0, 5.0)),
+            (Vec3::new(10.75, 6.0, -20.0), Vec3::new(10.75, 7.0, -20.0)),
+            (Vec3::new(10.75, 6.0, -10.5), Vec3::new(10.75, 6.0, -1.0)),
+            (Vec3::new(8.0, 8.0, -10.5), Vec3::new(11.0, 8.0, -10.5)),
+            (Vec3::new(0.0, 11.0, -10.5), Vec3::new(0.0, 13.0, -10.5)),
+        ] {
+            assert!(!has_line_of_sight(start, end, &scene.colliders));
+            assert!(!has_line_of_sight(end, start, &scene.colliders));
+        }
+        for (start, end) in [
+            (eye(8.0, -10.5), eye(11.0, -10.5)),
+            (Vec3::new(8.0, 6.8, -10.5), Vec3::new(11.0, 6.8, -10.5)),
+            (eye(10.75, 3.0), eye(10.75, -5.0)),
+            (Vec3::new(0.0, 11.0, -10.5), Vec3::new(8.0, 11.0, -10.5)),
+        ] {
+            assert!(has_line_of_sight(start, end, &scene.colliders));
+            assert!(has_line_of_sight(end, start, &scene.colliders));
+        }
+    }
+
+    #[test]
     fn camera_sweep_stops_before_walls_floor_ceiling_and_removed_counter_is_clear() {
         let scene = Theater::new();
         let radius = crate::view::CAMERA_CLEARANCE;
@@ -930,7 +1129,7 @@ mod tests {
         let passage = clip_camera(eye(9.5, 3.0), eye(9.5, -3.0), radius, &scene.colliders);
         assert_eq!(passage, eye(9.5, -3.0));
         let start = eye(0.0, 5.0);
-        for (desired_y, expected_y) in [(-5.0, radius), (20.0, HEIGHT - radius)] {
+        for (desired_y, expected_y) in [(-5.0, radius), (20.0, LOW_CEILING_CLEARANCE - radius)] {
             let result = clip_camera(
                 start,
                 Vec3::new(0.0, desired_y, 5.0),
@@ -1002,7 +1201,7 @@ mod tests {
             Vec3::new(0.5, 0.5, 1.5),
             &low
         ));
-        assert!(has_line_of_sight(
+        assert!(!has_line_of_sight(
             Vec3::new(0.0, HEIGHT + 0.01, 2.0),
             Vec3::new(0.0, HEIGHT + 0.01, -2.0),
             &scene.colliders
@@ -1050,19 +1249,20 @@ mod tests {
     fn room_lights_are_independent_including_the_two_divider_faces() {
         let mut scene = Theater::new();
         for (index, position, auditorium) in [
-            (0, Vec3::new(0.0, 11.7, 5.0), false),
+            (0, Vec3::new(0.0, 4.2, 5.0), false),
             (1, Vec3::new(-6.75, 11.7, -14.0), true),
-            (6, Vec3::new(10.75, 11.7, -14.0), false),
-            (17, Vec3::new(-6.75, 11.7, -14.0), true),
-            (18, Vec3::new(0.0, 11.7, 5.0), false),
-            (19, Vec3::new(-6.75, 11.7, -14.0), true),
+            (6, Vec3::new(10.75, 6.6, -14.0), false),
+            (18, Vec3::new(-6.75, 11.7, -14.0), true),
+            (19, Vec3::new(0.0, 4.2, 5.0), false),
             (20, Vec3::new(-6.75, 11.7, -14.0), true),
-            (21, Vec3::new(10.75, 11.7, -14.0), false),
-            (22, Vec3::new(-6.75, 11.7, -14.0), true),
-            (23, Vec3::new(10.75, 11.7, -14.0), false),
+            (21, Vec3::new(-6.75, 11.7, -14.0), true),
+            (22, Vec3::new(10.75, 6.6, -14.0), false),
+            (23, Vec3::new(-6.75, 11.7, -14.0), true),
+            (24, Vec3::new(10.75, 6.6, -14.0), false),
+            (25, Vec3::new(-6.75, 11.7, -14.0), true),
         ] {
             let light = scene.instances[index].lighting.unwrap();
-            assert_eq!(light.position, position);
+            assert!(light.position.abs_diff_eq(position, 0.000001));
             let expected = if auditorium {
                 AUDITORIUM_LIGHT_LEVEL
             } else {
@@ -1560,26 +1760,29 @@ mod tests {
             (8, Vec3::NEG_Y),
             (9, Vec3::NEG_Y),
             (10, Vec3::NEG_Y),
-            (11, Vec3::NEG_Z),
-            (12, Vec3::X),
-            (13, Vec3::NEG_X),
-            (14, Vec3::Z),
-            (15, Vec3::X),
-            (16, Vec3::NEG_X),
-            (17, Vec3::NEG_Z),
-            (18, Vec3::Z),
-            (19, Vec3::NEG_Z),
-            (20, Vec3::NEG_X),
-            (21, Vec3::X),
-            (22, Vec3::NEG_X),
-            (23, Vec3::X),
+            (11, Vec3::new(0.0, -1.0, -2.4 / 9.0).normalize()),
+            (12, Vec3::NEG_Z),
+            (13, Vec3::X),
+            (14, Vec3::NEG_X),
+            (15, Vec3::Z),
+            (16, Vec3::X),
+            (17, Vec3::NEG_X),
+            (18, Vec3::NEG_Z),
+            (19, Vec3::Z),
+            (20, Vec3::NEG_Z),
+            (21, Vec3::NEG_X),
+            (22, Vec3::X),
+            (23, Vec3::NEG_X),
+            (24, Vec3::X),
+            (25, Vec3::NEG_X),
         ] {
             assert!(
                 Vec3::from(scene.assets.meshes[index].vertices[0].normal)
                     .abs_diff_eq(normal, 0.000001)
             );
         }
-        assert_eq!(scene.instances.len(), 42);
+        // One extra ramp ceiling piece and the side-entry lintel.
+        assert_eq!(scene.instances.len(), 44);
         assert_eq!(scene.colliders.len(), 10);
         for mesh in scene.assets.meshes.iter().filter(|mesh| {
             scene.instances.iter().any(|instance| {
@@ -1587,7 +1790,8 @@ mod tests {
                     && instance.texture == Some(scene.assets.textures[0].handle)
             })
         }) {
-            assert_eq!(mesh.vertices[0].uv, [0.0, HEIGHT / 3.0]);
+            let height = mesh.vertices[3].position[1] - mesh.vertices[0].position[1];
+            assert_eq!(mesh.vertices[0].uv, [0.0, height / 3.0]);
             assert_eq!(mesh.vertices[3].uv, [0.0, 0.0]);
             let width = Vec3::from(mesh.vertices[0].position)
                 .distance(Vec3::from(mesh.vertices[1].position));
@@ -1754,7 +1958,7 @@ mod tests {
     #[test]
     fn every_rendered_floor_piece_matches_ground_queries_and_keeps_uv_tiles_continuous() {
         let scene = Theater::new();
-        assert_eq!(scene.assets.meshes.len(), 42);
+        assert_eq!(scene.assets.meshes.len(), 44);
         for (index, mesh) in scene.assets.meshes[..8].iter().enumerate() {
             for triangle in mesh.indices.as_chunks::<3>().0 {
                 let points = triangle.map(|i| Vec3::from(mesh.vertices[usize::from(i)].position));
