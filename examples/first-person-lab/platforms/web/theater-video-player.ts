@@ -26,6 +26,10 @@ export interface TheaterVideoMedia extends EventTarget {
 export interface TheaterVideoState {
   status: string;
   ready: boolean;
+  failed: boolean;
+  /** A decoded current frame has been accepted by the renderer bridge. */
+  frameReady: boolean;
+  buffering: boolean;
   playing: boolean;
   /** Scheduled denial persists through source changes until explicit play(). */
   autoplayBlocked: boolean;
@@ -50,7 +54,7 @@ export interface TheaterVideoOptions {
   visible?: boolean;
   /** Standalone autoplay is opt-in and starts muted. */
   autoplay?: boolean;
-  /** External scheduling owns alignment and autoplay; constructor must not race it. */
+  /** External scheduling owns source selection and autoplay; construction never loads a movie. */
   scheduled?: boolean;
 }
 
@@ -68,6 +72,7 @@ export class TheaterVideoPlayer {
   private autoplayBlocked = false;
   private soundError = false;
   private observedPlaying = false;
+  private buffering = false;
 
   private generation = 0;
   private frameGeneration = 0;
@@ -89,6 +94,7 @@ export class TheaterVideoPlayer {
     this.listen("loadedmetadata", () => this.tryAttach());
     for (const event of ["loadeddata", "canplay", "seeked", "timeupdate"]) {
       this.listen(event, () => {
+        if (event === "canplay") this.buffering = false;
         this.tryAttach();
         // timeupdate is only a UI clock; decoded callbacks own playback uploads.
         if (event !== "timeupdate") this.dirty(media.currentTime);
@@ -102,6 +108,7 @@ export class TheaterVideoPlayer {
         return;
       }
       this.observedPlaying = true;
+      this.buffering = false;
       this.status = this.playingStatus();
       this.scheduleFrame();
       this.emit();
@@ -130,16 +137,26 @@ export class TheaterVideoPlayer {
     });
     this.listen("volumechange", () => this.audioChanged());
     this.listen("seeking", () => this.emit());
-    this.listen("waiting", () => { this.observedPlaying = false; this.status = "Buffering…"; this.emit(); });
-    this.listen("error", () => this.fail(`Movie unavailable (media error ${media.error?.code ?? "unknown"}). Check the same-origin asset and H.264 support.`));
-    this.setSource(source);
+    this.listen("waiting", () => { this.observedPlaying = false; this.buffering = true; this.status = "Buffering…"; this.emit(); });
+    this.listen("error", () => {
+      // A source reset can leave a queued error event from the retired resource.
+      if (media.error && media.src) this.fail(`Movie unavailable (media error ${media.error.code}). Retry the current clip; check the connection and H.264/AAC support if it persists.`);
+    });
+    if (options.scheduled) {
+      this.status = "Waiting for scheduled movie…";
+      this.emit();
+    } else this.setSource(source);
   }
 
   get state(): TheaterVideoState {
     const media = this.options.media;
+    const ready = this.attached && this.sceneReady && this.visible && !this.failed && !this.disposed;
     return {
       status: this.status,
-      ready: this.attached && this.sceneReady && this.visible && !this.failed && !this.disposed,
+      ready,
+      failed: this.failed,
+      frameReady: ready && media.readyState >= 2 && !media.seeking && Number.isFinite(this.lastFrameTime),
+      buffering: this.wantsPlay && (this.buffering || media.seeking || media.readyState < 3),
       playing: this.wantsPlay && (this.pendingPlay || !media.paused),
       autoplayBlocked: this.autoplayBlocked,
       muted: media.muted,
@@ -158,6 +175,7 @@ export class TheaterVideoPlayer {
     this.stopPlayback();
     this.release();
     this.failed = false;
+    this.soundError = false;
     this.autoplayAttempted = false;
     if (!this.options.scheduled) this.autoplayBlocked = false;
     if (source.length > 2_048 || !/^\/(?!\/)/.test(source) || /[\s\\]/.test(source)) {
@@ -249,6 +267,7 @@ export class TheaterVideoPlayer {
     this.generation += 1;
     this.wantsPlay = false;
     this.observedPlaying = false;
+    this.buffering = false;
     this.cancelFrame();
     this.options.media.pause();
     if (!this.failed && !this.disposed) this.status = this.visible ? "Paused · press Play" : "Hidden · press Play when back";
@@ -304,7 +323,7 @@ export class TheaterVideoPlayer {
   }
 
   private tryAttach(): void {
-    if (this.disposed || this.failed || !this.sceneReady || !this.visible || this.options.media.readyState < 1) return;
+    if (this.disposed || this.failed || !this.sceneReady || !this.visible || !this.options.media.src || this.options.media.readyState < 1) return;
     if (this.attached) { this.tryAutoplay(); return; }
     try {
       if (!this.options.attach()) { this.fail("Movie attachment rejected by Weaver. Reload with matching WASM assets."); return; }
@@ -395,8 +414,10 @@ export class TheaterVideoPlayer {
         // Release the decoder even when the host has already torn down WASM.
       }
     }
-    this.options.media.removeAttribute("src");
-    this.options.media.load();
+    if (this.options.media.src) {
+      this.options.media.removeAttribute("src");
+      this.options.media.load();
+    }
   }
 
   private playingStatus(): string {

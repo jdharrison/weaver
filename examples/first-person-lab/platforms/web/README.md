@@ -10,32 +10,71 @@ available; the standalone shell does not supply a mobile virtual-keyboard compos
 
 The camera starts at a 2 m third-person setback, collision-clipped before its first
 snapshot (1.8 m at spawn). Wheel zoom spans 0–6 m; zero selects first person, and
-middle-click toggles the remembered third-person distance. Player and NPC names
+middle-click toggles the remembered third-person distance. Two fingers starting on
+the right half pinch to zoom (apart to zoom in, together to zoom out), without
+changing the existing left-move/right-look gesture. Look pauses during a pinch;
+ending/cancelling it does not replay accumulated look motion. Player and NPC names
 remain visible in minimal presentation, independently of hover or interaction.
 The local name appears only in third person. Name/speech anchors respect physical
-visibility and projection bounds; names follow the NPC portraits' scripted bob.
+visibility and projection bounds. NPC names share the local player's color and
+label formatting; their portraits stay grounded along the scripted routes.
 Speech is offset above each name, and retains its four-second hold/two-second fade.
+Remote speech additionally requires a finite 3D distance of at most 10 m between
+the physical local player's eye and the remote displayed eye; camera zoom cannot
+change the radius. Out-of-range messages keep their original expiry clock. Names
+and local overhead/HUD echo are not distance-gated. This is a client-side display
+rule, not private routing: reliable chat still uses the existing space-wide channel.
 
 ## Scripted ambient NPCs; no interaction or inference
 
 The shared Rust scene embeds version-3 `../../assets/npcs.json`: five ambient
 slots (`guest_01`–`guest_05`), all with authored display names and interaction
 disabled. One lobby resident, two theater residents and two non-overlapping door
-visits use a bounded, static 600-second UTC schedule. Portraits visibly bob;
-NPCs do not react to players, block them, or become interaction targets.
+visits use a bounded, static 600-second UTC schedule. Walking stays grounded
+without bobbing. Theater residents sit in `seat_b7` and `seat_b2`; both visitors
+walk to `seat_b12`, sit for 24/26 seconds, then stand and continue their exits.
+The lobby resident stays in the lobby. Seated NPCs use the same cropped billboard
+presentation and eye-relative labels as seated players. NPCs remain noninteractive.
 
 There is no concession counter/support NPC, player-like guest simulation,
 randomized disconnect behavior, TALK/hover prompt, AI call, private conversation,
 or NPC Woven entity. Routes are compiled once and sampled analytically, independent
-of movie playback, player input and networking. Invalid/backward UTC freezes the
-last safe poses until recovery; large forward jumps sample the new phase directly.
+of movie playback and player input. Explicit `resident_seat` schedules and `sit`
+actions validate chair IDs, approach access and non-overlapping allocations.
+NPC claims make seated chairs unavailable to new player entry. Already-seated
+local/remote players take priority: guests wait at the approach and retry while
+their scheduled sitting interval remains active. This is local advisory contention,
+not a server reservation. Invalid/backward UTC freezes the schedule until recovery;
+contention still reconciles, and large forward jumps sample the new phase directly.
 
-The chair-free auditorium is 31.5 × 28 m with viewing levels at 0, 1.2 and 2.4 m,
-joined by ramps. Legacy seat IDs are standing marks only. The 25 × 10 m lobby and
+The auditorium is 31.5 × 28 m with viewing levels at 0, 1.2 and 2.4 m,
+joined by ramps. Twenty-four low-backed chairs sit on the middle/rear flats in
+two rows, each with six seats left and six right of the 3.1 m center aisle.
+Ramps remain clear; visiting NPCs use the rear cross-aisle around the wider banks.
+The original eight seat IDs/indices remain stable; sixteen seats extend outward.
+The 25 × 10 m lobby and
 hallway have 4.5 m of vertical headroom; the hallway ceiling follows its ramp and
 opens into the theater's world-Y=12 m ceiling at Z `-12..-9`. A lintel seals the
 void above the hallway. Rendering, camera clearance and visibility share the same
 floor/ceiling profiles.
+
+### Player seating
+
+A visible unoccupied chair within 2.5 m of the physical player can be clicked or
+tapped. Seating forces first person, faces the screen, and suppresses movement,
+sprint and perspective/zoom changes while retaining look/chat. A scene click/tap
+stands at a validated exit and restores prior view preferences with current look.
+The combined interaction dispatcher preserves synchronous wall-control actions,
+exact-target touch release, drag/hold/multitouch rejection, and capture-only mouse
+resume. The contextual sit hint remains available in minimal presentation;
+there is no stand prompt while seated, but click/tap still exits the chair.
+`pick_scene_interaction` returns panels 1–3, seats 100–123 or seated exit 200;
+`activate_seat_interaction` queues one revalidated intent. Temporary lifecycle
+invalidation clears intents and snapshots; permanent disposal cannot revive them.
+
+Seating works offline. Known occupied chairs are unavailable; simultaneous claims
+converge to the lowest entity ID, without an authoritative reservation guarantee.
+Remote seated billboards crop the lower body rather than animating a skeleton.
 
 ### Inert compatibility bridge
 
@@ -70,19 +109,40 @@ these events; multiplayer/movie loading does not gate scene reveal. The existing
 host adapter continues to own `ready`/`fatal` notifications. A parent must validate
 both origin and the active iframe source before accepting any bridge event.
 
+`wasm-loading.ts` also observes the single response passed to the WASM initializer,
+without buffering/cloning the binary or replacing streaming compilation. It emits
+`download` messages with `loadedBytes` and `totalBytes` (integer or `null`), followed
+by `initializing` once the response body is consumed. Download reports are throttled
+to about 100 ms, with unconditional initial/final reports. Counts are decoded body
+bytes, not compressed wire traffic: gzip/br, absent, or contradictory lengths do
+not supply a total. The response is bounded to 512 MiB. Neither these messages nor
+WASM initialization alone authorize scene readiness; the host still owns `ready`.
+
 ## Theater video proof of concept
 
 `TheaterVideoPlayer` in `theater-video-player.ts` owns a hidden decoder element
 **inside the engine iframe**. It is not a DOM movie overlay: Weaver consumes its
 frames on the 3D theater screen. The theater panel is hidden by default in minimal
 presentation, retaining its functional source controls for full presentation.
-Sound and fullscreen are in-world WASM-picked panels in both modes; the old HTML
-Enable sound prompt is removed entirely. Full diagnostic controls include
+Sound and fullscreen are in-world WASM-picked panels in both modes. A startup
+confirmation remains visible after scene readiness while only the current movie's
+metadata is prepared. **Play with sound** synchronously aligns, unmutes and calls
+`play()` in the trusted click; the confirmation closes only after observed audible
+playback and a decoded frame accepted by the bridge. **Continue without sound**
+(or Escape) enters immediately and permits muted playback when ready. No movie
+collection or diagnostic fallback is preloaded. Preparation/starting that takes
+12 seconds offers Retry and the silent fallback; manifest/media failures have
+explicit retries, not polling download loops. Retry reloads only the selected
+clip (or the failed manifest) and requires a fresh Play gesture for audio. A UTC
+boundary during that click prepares the new clip and offers Play again rather
+than replaying audible intent after an await. The dialog traps focus, releases
+pointer lock, blocks game input and cancels its timer while hidden/disposed.
+Full diagnostic controls include
 Play / Pause, Restart (seek to zero without changing playback),
 Mute / Unmute, Volume, seek/time/status, and independent lobby/auditorium lighting. Control focus releases
 held movement keys and pointer lock; its input suppression is OR-combined with
 host-chat focus, so leaving one control cannot unlock input owned by the other.
-Lighting defaults match the scene (lobby 1, auditorium 0.18).
+Lighting defaults match the scene (lobby 1, auditorium 0.20).
 
 Default movie URL (same-origin, root-absolute):
 `/weaver/assets/theater/Music_SpaceNoirJazz.mp4`. The parent site stages this
@@ -101,15 +161,17 @@ multiplayer clock or sample-accurate A/V synchronization.
 The reusable component's `autoplay` option defaults to `false`; opting in starts
 muted. `main.ts` uses `scheduled: true`: the element starts **muted** at volume
 0.4, inline, with `preload="metadata"`. Constructor/readiness autoplay is disabled
-in this mode. There is no native `autoplay` attribute; the schedule controller
-authorizes a muted attempt only after attachment, initialized scene readiness,
-visibility, and schedule alignment (including completion of an asynchronous seek).
-This works under policies that block audible autoplay but permit muted playback.
+in this mode. There is no native `autoplay` attribute. The shell sets the schedule
+controller's `waitForGesture` option: playback waits for the startup choice, while
+metadata attachment and UTC alignment can proceed. Continue without sound permits
+a muted attempt after attachment, visibility and alignment (including completion
+of an asynchronous seek). It does not wait for the whole clip to download.
 If even muted playback is denied, “Autoplay blocked/unavailable · press Play”
 leaves a manual retry available. Play preserves the current mute setting.
-The in-world sound panel calls schedule `play(true)` synchronously in the trusted
-canvas gesture: align the live slot, unmute, restore volume 0 to 0.4, and call
-`media.play()`. An ON hit mutes without pausing; ordinary diagnostic Mute/Volume
+The in-world sound panel reopens the same confirmation and, if metadata is ready,
+calls schedule `play(true)` synchronously in the trusted canvas gesture: align the
+live slot, unmute, restore volume 0 to 0.4, and call `media.play()`. Loading and
+failure states open preparation/retry rather than silently ignoring the click. An ON hit mutes without pausing; ordinary diagnostic Mute/Volume
 controls never resume media. No fetch/await precedes play. Pending is bounded to
 one promise; a denied attempt reports structured retry rather than optimistic ON.
 ON requires observed `playing`, unmuted media, nonzero volume, and no pause/end
@@ -154,11 +216,17 @@ The manually intersected `FirstPersonWasm` type expects these Rust exports:
 `invalidate_control_panels(): void`.
 
 Panel IDs are 0 none, 1 sound, 2 fullscreen; states are 0 unavailable, 1 OFF,
-2 pending, 3 ON, 4 retry. Picking uses canvas-relative NDC [-1,1], Y up;
-pointer lock picks the crosshair (0,0). Capture handlers consume panel hits
-before pointer lock/input, leave misses untouched, and activate touch only on
-an undragged tap (8 CSS pixel movement threshold). Synthetic input cannot activate
-panels. Shutdown removes handlers/listeners and invalidates panels once.
+2 pending, 3 ON, 4 retry, 5 LOADING. Sound remains clickable while loading/pending
+to reopen its confirmation; fullscreen ignores repeat clicks while pending. Picking uses canvas-relative NDC [-1,1], Y up;
+pointer lock picks the crosshair (0,0). Capture handlers consume mouse panel hits
+before pointer lock/input and leave misses untouched. Touch sequences always reach
+Winit, including drags starting on a panel, preserving the full left-half move /
+right-half look split and simultaneous thumbs. Only an undragged, single-finger tap
+activates on release (8 CSS pixel movement threshold, at most 500 ms). Mouse
+compatibility events are suppressed after a hit, never native touch events.
+Cancellation, capture/focus loss, or a hidden page cancels pending taps. Synthetic
+input cannot activate panels. Shutdown removes handlers/listeners and invalidates
+panels once.
 
 The parent installs `jdharrisonToggleFullscreen()` and
 `jdharrisonGetFullscreenState()` **on the child window**. The getter and child-window
@@ -179,7 +247,10 @@ replacement during pending playback, persistent explicit mute, bounded volume,
 and external audio changes.
 The parent site's bounded `tool/theater_video_smoke.mjs` checks actual H.264
 frames, texture reuse, pause/seek/restart/loop, lighting, lifecycle cancellation,
-and shutdown in offline Linux Chromium under both WebGL2 and WebGPU. It supplies
+and shutdown in offline Linux Chromium, with separate WebGL2/WebGPU runs. Its
+startup, silent-continue, failed-clip retry, failed-manifest retry and lifetime
+cases are separately bounded; `--web-root build/hosting` selects the prepared
+release artifact rather than staged `web/`. It supplies
 compatible Vulkan/ANGLE/Dawn flags for this development environment and records
 GPU details rather than implying other systems are verified. Screenshots permit
 visual confirmation of the in-world screen. Touch/mobile/Safari QA, actual
@@ -281,9 +352,12 @@ bounded manifest rejection. Run `npm run typecheck` and `npm test` in this direc
   disables joining, and exposes a page reload action. A later ready callback
   cannot revive a fatal scene.
 
-The browser also fails startup after 20 seconds without full readiness. The Rust
-web platform now supplies these hooks; First-Person's panic hook reports fatal
-failures immediately. Regenerate the WASM build after changing either side.
+The browser fails startup after 20 seconds without download or initialization
+activity and aborts the pending WASM fetch. Advancing response chunks and new
+initialization milestones reset this idle watchdog, so a healthy slow download
+can exceed 20 seconds. The Rust web platform supplies the ready/fatal hooks;
+First-Person's panic hook reports fatal failures immediately. Regenerate the
+web release after changing either side.
 
 `visibilitychange` to hidden and `pagehide` fully disconnect, abort bootstrap or
 admission, invalidate pending receives/handshakes, clear pending publishes, and
@@ -359,9 +433,13 @@ read. No local-token fetch runs on public origins. Public artifacts must exclude
 Reliable channel-1/type-1 application payloads exceeding 2,048 bytes or containing
 invalid UTF-8 are individually dropped before entering WASM. Rust remains
 responsible for JSON/name/chat semantics. Actual transport/protocol failures and
-bounded-inbox overflow remain connection failures. Poses still use positioned
-25-byte channel-4 datagrams; no delivery fallback or channel-policy override is
-introduced. Local chat echo is not a peer delivery acknowledgement.
+bounded-inbox overflow remain connection failures. Poses use positioned channel-4
+datagrams: legacy v1/25 bytes for standing, v2/26 bytes for seating. V2 byte 1 is
+0 for standing or 1–24 for an authored seat; six little-endian f32 values begin at
+byte 2. Rust validates seated positions against exact seat anchors and rejects
+invalid directions. The browser validates version/length/seat-code combinations.
+Older clients cannot display seated updates; reload the updated scene. No delivery
+fallback or channel-policy override is introduced. Local chat echo is not a peer delivery acknowledgement.
 
 ## Local validation and remaining gates
 

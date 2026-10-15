@@ -321,6 +321,7 @@ fn spawn_body(
     bodies.push(body);
     scene.meshes.push(MeshInstance {
         mesh: sphere_mesh,
+        render_mode: weaver_render::MeshRenderMode::Surface,
         texture: None,
         texture_fit: None,
         lighting: None,

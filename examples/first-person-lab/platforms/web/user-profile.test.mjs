@@ -3,7 +3,7 @@ import test from "node:test";
 import { USER_PROFILE_KEY, loadUserProfile, saveUserProfile } from "./user-profile.ts";
 
 const ID = "a8712050-f10b-4d38-93b1-556fab8633d2";
-const NAME = "BrightCalm";
+const NAME = "Bright Otter";
 
 function fixture(initial = null) {
   const values = new Map(initial === null ? [] : [[USER_PROFILE_KEY, initial]]);
@@ -14,7 +14,9 @@ function fixture(initial = null) {
       setItem: (key, value) => values.set(key, value),
     },
     generators: {
-      generateUserName: () => { calls.name += 1; return NAME; },
+      generateGuestName: () => { calls.name += 1; return NAME; },
+      // Dictionary recognition is exhaustively tested in Rust; this is the injected WASM seam.
+      isLegacyUserName: (name) => ["BrightCalm", "AgileSunny"].includes(name),
       generateUserId: () => { calls.id += 1; return ID; },
     },
     calls,
@@ -38,6 +40,25 @@ test("renaming keeps the stored UUID stable", () => {
   assert.deepEqual(f.calls, { name: 1, id: 1 });
 });
 
+test("legacy dictionary pairs migrate once, preserving the UUID", () => {
+  for (const displayName of ["BrightCalm", "AgileSunny"]) {
+    const f = fixture(JSON.stringify({ userId: ID, displayName }));
+    const profile = loadUserProfile(f.storage, f.generators);
+    assert.deepEqual(profile, { userId: ID, displayName: NAME });
+    assert.equal(JSON.parse(f.values.get(USER_PROFILE_KEY)).nameFormatVersion, 2);
+    assert.deepEqual(loadUserProfile(f.storage, f.generators), profile);
+    assert.deepEqual(f.calls, { name: 1, id: 0 });
+  }
+});
+
+test("unversioned custom handles and already spaced names are preserved", () => {
+  for (const displayName of ["SuperCoder", "BrightBright", "BrightCalmSunny", "Bright Calm", "Ada", NAME]) {
+    const f = fixture(JSON.stringify({ userId: ID, displayName }));
+    assert.deepEqual(loadUserProfile(f.storage, f.generators), { userId: ID, displayName });
+    assert.deepEqual(f.calls, { name: 0, id: 0 });
+  }
+});
+
 test("invalid names regenerate without changing a valid ID", () => {
   for (const displayName of ["", " Guest", "bad\nname", "x".repeat(25), 42, null]) {
     const f = fixture(JSON.stringify({ userId: ID, displayName }));
@@ -48,8 +69,8 @@ test("invalid names regenerate without changing a valid ID", () => {
 
 test("invalid IDs regenerate without changing a valid name", () => {
   for (const userId of ["", ID.toUpperCase(), ID.replace("-4d38-", "-1d38-"), "entity-7", null]) {
-    const f = fixture(JSON.stringify({ userId, displayName: "AgileSunny" }));
-    assert.deepEqual(loadUserProfile(f.storage, f.generators), { userId: ID, displayName: "AgileSunny" });
+    const f = fixture(JSON.stringify({ userId, displayName: "SuperCoder" }));
+    assert.deepEqual(loadUserProfile(f.storage, f.generators), { userId: ID, displayName: "SuperCoder" });
     assert.deepEqual(f.calls, { name: 0, id: 1 });
   }
 });

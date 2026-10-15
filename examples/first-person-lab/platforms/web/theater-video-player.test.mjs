@@ -55,10 +55,65 @@ function fixture({ videoFrames = true, visible = true, attachResult = true, mark
     callback(0, { mediaTime: media.currentTime });
   };
   const metadata = () => { media.readyState = 1; media.event("loadedmetadata"); };
-  const ready = () => { player.setSceneReady(true); metadata(); media.readyState = 2; media.event("loadeddata"); };
+  const ready = () => {
+    if (scheduled && !media.src) player.setSource("/scheduled.mp4");
+    player.setSceneReady(true); metadata(); media.readyState = 2; media.event("loadeddata");
+  };
   return { media, player, frames, rafs, states, metadata, ready, fire,
     get attaches() { return attaches; }, get marks() { return marks; }, get detaches() { return detaches; } };
 }
+
+test("scheduled construction and readiness never load the fallback or attach a sourceless video", () => {
+  const f = fixture({ scheduled: true, autoplay: true });
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  f.player.setSceneReady(true); f.metadata(); f.player.setVisible(true);
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  assert.equal(f.attaches, 0); assert.equal(f.player.state.ready, false);
+  assert.equal(f.player.scheduledAutoplay(), false); assert.equal(f.media.plays, 0);
+  f.player.setSource("/selected.mp4"); f.metadata();
+  assert.equal(f.media.src, "/selected.mp4"); assert.equal(f.media.loads, 1);
+  assert.equal(f.attaches, 1); assert.equal(f.media.plays, 0);
+  f.player.dispose();
+});
+
+test("disposing an unstarted scheduled player never loads media, even after late readiness", () => {
+  const f = fixture({ scheduled: true });
+  f.player.dispose(); f.player.dispose();
+  f.player.setSceneReady(true); f.player.setVisible(true); f.metadata();
+  f.player.setSource(DEFAULT_THEATER_VIDEO); f.player.play();
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  assert.equal(f.attaches, 0); assert.equal(f.media.plays, 0);
+});
+
+test("loading, decoded frame readiness, buffering and terminal failure are distinct", async () => {
+  const f = fixture({ scheduled: true });
+  assert.equal(f.player.state.failed, false); assert.equal(f.player.state.ready, false);
+  assert.equal(f.player.state.frameReady, false);
+  f.player.setSource("/current.mp4"); f.player.setSceneReady(true); f.metadata();
+  assert.equal(f.player.state.ready, true); assert.equal(f.player.state.frameReady, false);
+  f.media.readyState = 2; f.media.event("loadeddata");
+  assert.equal(f.player.state.frameReady, true);
+  f.player.enableSound(); await flush(); f.media.event("waiting");
+  assert.equal(f.player.state.buffering, true); assert.equal(f.player.state.audible, false);
+  f.media.readyState = 4; f.media.event("canplay"); f.media.event("playing");
+  assert.equal(f.player.state.buffering, false); assert.equal(f.player.state.audible, true);
+  f.media.seeking = true; f.media.event("seeking"); assert.equal(f.player.state.frameReady, false);
+  f.media.seeking = false; f.media.event("seeked"); assert.equal(f.player.state.frameReady, true);
+  f.media.error = { code: 2 }; f.media.event("error");
+  assert.equal(f.player.state.failed, true); assert.equal(f.player.state.frameReady, false);
+  assert.equal(f.player.state.ready, false); assert.equal(f.media.src, "");
+  f.media.readyState = 0; f.media.error = null; f.player.setSource("/current.mp4");
+  assert.equal(f.player.state.failed, false); assert.equal(f.player.state.soundError, false);
+  assert.equal(f.player.state.frameReady, false); f.player.dispose();
+});
+
+test("a queued error from a retired resource cannot poison the replacement source", () => {
+  const f = fixture({ scheduled: true }); f.ready();
+  f.media.error = { code: 2 }; f.media.event("error"); assert.equal(f.player.state.failed, true);
+  f.media.error = null; f.player.setSource("/replacement.mp4");
+  f.media.event("error"); assert.equal(f.player.state.failed, false);
+  assert.equal(f.media.src, "/replacement.mp4"); f.player.dispose();
+});
 
 test("sound pending, denial, observed playback, zero-volume recovery and external changes are structured", async () => {
   const f = fixture({ scheduled: true }); f.ready();

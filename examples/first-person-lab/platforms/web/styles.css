@@ -1,4 +1,47 @@
 
+/* Local subtitle faces only; no font download or third-party dependency. */
+@font-face {
+  font-family: "Theater Captions";
+  src: local("Atkinson Hyperlegible"), local("Verdana"), local("DejaVu Sans");
+  font-display: swap;
+}
+.theater-subtitle-hud {
+  position: fixed;
+  z-index: 4;
+  left: 50%;
+  bottom: max(2rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(48rem, calc(100vw - 2rem));
+  max-height: 30vh;
+  overflow: hidden;
+  padding: 0.35em 0.65em;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 85%);
+  color: #fff;
+  font: 600 clamp(1rem, 2.3vw, 1.65rem)/1.4 "Theater Captions", Verdana, sans-serif;
+  text-shadow: 0 1px 2px #000;
+  text-align: center;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.subtitle-controls {
+  position: fixed;
+  z-index: 4;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: max(0.75rem, env(safe-area-inset-right));
+  width: min(18rem, calc(100vw - 1.5rem));
+  padding: 0.5rem;
+  border-radius: 0.3rem;
+  background: rgb(8 10 15 / 88%);
+  color: #fff;
+  font-size: 0.75rem;
+}
+#theater-subtitles { padding: 0.4rem 0.6rem; }
+#theater-subtitles:focus-visible { outline: 2px solid #9fc3ff; outline-offset: 2px; }
+#theater-subtitle-explanation { margin: 0.3rem 0; }
+
 .theater-follow {
   display: flex;
   align-items: center;
@@ -58,6 +101,36 @@ canvas {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.connection-badge {
+  position: fixed;
+  z-index: 4;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: max(0.75rem, env(safe-area-inset-right));
+  padding: 0.6rem 0.8rem;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 0.75rem;
+  background: rgb(24 26 29 / 84%);
+  color: rgb(244 247 251 / 90%);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  pointer-events: none;
+  user-select: none;
+}
+.connection-badge * { pointer-events: none; }
+.connection-badge-row { display: flex; align-items: center; gap: 0.45rem; }
+.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #92969d; }
+.connection-badge[data-state="connected"] .connection-dot { background: #72c99a; }
+.connection-badge[data-state="connecting"] .connection-dot { background: #d8b46b; }
+.connection-badge[data-state="disconnected"] .connection-dot,
+.connection-badge[data-state="unavailable"] .connection-dot { background: #bd8585; }
+.connection-brand {
+  margin-top: 0.25rem;
+  color: rgb(244 247 251 / 48%);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .instructions,
@@ -289,6 +362,48 @@ canvas {
 
 
 html[data-weaver-presentation="minimal"] .theater-controls { display: none; }
+html[data-weaver-presentation="minimal"] :is(.instructions, .connection-panel) { display: none; }
+
+.theater-startup {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  overflow: auto;
+  background: rgb(8 10 15 / 70%);
+  touch-action: auto;
+}
+
+.theater-startup-card {
+  width: min(28rem, 100%);
+  padding: clamp(1.25rem, 4vw, 2rem);
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 0.6rem;
+  background: #10151e;
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 35%);
+}
+
+.theater-startup h1 { margin: 0 0 0.75rem; font-size: 1.4rem; font-weight: 600; }
+.theater-startup p { line-height: 1.5; color: rgb(244 247 251 / 78%); }
+#theater-startup-status { min-height: 3em; color: #9fc3ff; }
+.theater-startup[data-state="failed"] #theater-startup-status { color: #ff9b9b; }
+.theater-startup-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.theater-startup button {
+  min-height: 2.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 0.35rem;
+  background: #1b293e;
+  color: #f4f7fb;
+  font: inherit;
+  cursor: pointer;
+}
+#theater-startup-continue { background: transparent; }
+.theater-startup button:disabled { opacity: 0.5; cursor: default; }
+.theater-startup button:focus-visible { outline: 2px solid #9fc3ff; outline-offset: 3px; }
 
 
 #network-status.failed,

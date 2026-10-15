@@ -18,27 +18,151 @@ class Media extends EventTarget {
   play() { this.plays.push(this.currentTime); if (this.blocked) return Promise.reject(new Error("blocked")); this.paused = false; this.dispatchEvent(new Event("playing")); return Promise.resolve(); }
   event(type) { this.dispatchEvent(new Event(type)); }
 }
-async function fixture(data = schedule(), now = 123, blocked = false, onScheduleLoaded) {
+async function fixture(data = schedule(), now = 123, blocked = false, onScheduleLoaded, waitForGesture = false) {
   const media = new Media(); media.blocked = blocked;
   const timers = new Map(); let timerId = 0, controller; const seeks = []; const statuses = [];
   const player = new TheaterVideoPlayer({ media, scheduled: true, autoplay: true,
     attach: () => true, markFrame: () => true, detach: () => {}, requestAnimationFrame: () => 1,
     cancelAnimationFrame: () => {}, onChange: () => controller?.playerChanged(),
-  }, "/a.mp4");
+  });
   const seek = player.seek.bind(player);
   player.seek = (value) => { seeks.push(value); seek(value); if (media.asyncSeek) media.seeking = true; };
   player.setSceneReady(true);
-  controller = new TheaterScheduleController({ player, media, path: "/schedule.json", origin: "https://local.test",
+  controller = new TheaterScheduleController({ player, media, path: "/schedule.json", origin: "https://local.test", localSource: "/local.mp4",
     fetcher: async () => response(data), now: () => now,
     setTimeout: (callback) => { timers.set(++timerId, callback); return timerId; }, clearTimeout: (id) => timers.delete(id),
-    onChange: (status) => statuses.push(status), onScheduleLoaded,
+    onChange: (status) => statuses.push(status), onScheduleLoaded, waitForGesture,
   });
-  await controller.loaded;
+  await controller.start();
   const ready = () => { media.readyState = 2; media.event("loadedmetadata"); media.event("canplay"); };
   const tick = (time) => { now = time; const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach((callback) => callback()); };
   const dispose = () => { controller.dispose(); player.dispose(); };
   return { media, player, controller, timers, seeks, statuses, ready, tick, dispose, setNow: (time) => { now = time; } };
 }
+
+test("construction is inert and explicit start fetches once without a fallback request", async () => {
+  const sources = [], timers = new Map(); let fetches = 0;
+  const media = new Media();
+  const controller = new TheaterScheduleController({
+    player: { state: { ready: false, duration: 0 }, setSource(source) { sources.push(source); media.src = source; }, pause() {} },
+    media, path: "/schedule.json", origin: "https://local.test",
+    fetcher: async () => { fetches++; return response(schedule()); },
+    now: () => 123, setTimeout: (callback) => { timers.set(1, callback); return 1; }, clearTimeout: (id) => timers.delete(id),
+    onChange() {},
+  });
+  controller.setFollowing(false); controller.setFollowing(true);
+  assert.equal(fetches, 0); assert.deepEqual(sources, []); assert.equal(timers.size, 0);
+  const loaded = controller.start(); assert.equal(controller.start(), loaded);
+  await loaded;
+  assert.equal(controller.start(), loaded);
+  assert.equal(fetches, 1); assert.deepEqual(sources, ["/a.mp4"]); assert.equal(timers.size, 1);
+  controller.dispose();
+});
+
+test("disposal before start prevents manifest, fallback and scheduled work", async () => {
+  let fetches = 0, sources = 0;
+  const controller = new TheaterScheduleController({
+    player: { setSource() { sources++; } }, media: { src: "" }, path: "/schedule.json", origin: "https://local.test",
+    fetcher: async () => { fetches++; return response(schedule()); }, onChange() {},
+  });
+  controller.setFollowing(false); controller.dispose();
+  await controller.start(); await controller.start(); controller.setVisible(true); controller.setFollowing(false);
+  assert.equal(fetches, 0); assert.equal(sources, 0);
+});
+
+test("local diagnostics after media failure reselect the scheduled source within the same UTC slot", async () => {
+  const f = await fixture(); f.ready(); await flush();
+  f.media.error = { code: 4 }; f.media.event("error");
+  assert.equal(f.media.src, "");
+  f.controller.setFollowing(false); assert.equal(f.media.src, "/local.mp4");
+  f.ready(); f.player.play(); await flush();
+  f.setNow(127); f.controller.setFollowing(true);
+  assert.equal(f.media.src, "/a.mp4");
+  f.ready(); await flush(); assert.equal(f.media.currentTime, 127);
+  f.dispose();
+});
+
+test("startup prepares only the live clip and waits for a synchronous sound gesture, even across UTC boundaries", async () => {
+  const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20), 1, false, undefined, true);
+  assert.equal(f.media.src, "/a.mp4");
+  f.ready(); await flush();
+  assert.equal(f.media.currentTime, 1); assert.equal(f.media.plays.length, 0);
+  f.tick(11); f.ready(); await flush();
+  assert.equal(f.media.src, "/b.mp4"); assert.equal(f.media.plays.length, 0);
+  f.setNow(12); f.controller.play(true);
+  assert.deepEqual(f.media.plays, [2]); assert.equal(f.media.muted, false);
+  await flush(); f.tick(21); f.ready(); await flush();
+  assert.deepEqual(f.media.plays, [2, 1]); // Consent survives scheduled clip changes.
+  f.dispose();
+});
+
+test("a boundary during the initial Play prepares the replacement but never replays audio intent asynchronously", async () => {
+  const f = await fixture(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20), 9, false, undefined, true);
+  f.ready(); f.setNow(11); f.controller.play(true);
+  assert.equal(f.media.src, "/b.mp4"); assert.equal(f.media.plays.length, 0);
+  f.ready(); await flush(); f.tick(12);
+  assert.equal(f.media.plays.length, 0); assert.equal(f.media.muted, true);
+  f.controller.play(true); assert.deepEqual(f.media.plays, [2]);
+  await flush(); f.dispose();
+});
+
+test("Continue muted releases initial preparation without waiting and still honors later visibility pauses", async () => {
+  const f = await fixture(schedule(), 123, false, undefined, true);
+  f.controller.continueMuted(); assert.equal(f.media.plays.length, 0);
+  f.ready(); await flush(); assert.deepEqual(f.media.plays, [123]); assert.equal(f.media.muted, true);
+  f.controller.setVisible(false); f.player.setVisible(false);
+  f.player.setVisible(true); f.controller.setVisible(true); f.tick(124); await flush();
+  assert.equal(f.media.plays.length, 1);
+  f.dispose();
+});
+
+test("failed current clip stays failed during polling; explicit Retry reloads the same slot once and requires Play", async () => {
+  const f = await fixture(schedule(), 123, false, undefined, true);
+  f.ready(); f.controller.play(true); await flush();
+  f.media.error = { code: 2 }; f.media.event("error");
+  assert.equal(f.player.state.failed, true); assert.equal(f.media.src, "");
+  const loads = f.media.loads;
+  f.tick(124); f.tick(125); f.controller.play(true);
+  assert.equal(f.media.loads, loads); assert.equal(f.media.plays.length, 1);
+  f.media.error = null; f.controller.retry(); f.controller.retry();
+  assert.equal(f.media.src, "/a.mp4"); assert.equal(f.media.loads, loads + 1);
+  assert.equal(f.player.state.failed, false);
+  f.ready(); await flush(); assert.equal(f.media.plays.length, 1);
+  f.setNow(126); f.controller.play(true); assert.deepEqual(f.media.plays, [123, 126]);
+  await flush(); f.dispose();
+});
+
+test("ordinary Retry is inert during metadata load; explicit slow retry reloads only the selected clip", async () => {
+  const f = await fixture(schedule(), 123, false, undefined, true);
+  const loads = f.media.loads;
+  f.controller.retry(); assert.equal(f.media.loads, loads);
+  f.controller.retry(true); assert.equal(f.media.src, "/a.mp4"); assert.equal(f.media.loads, loads + 2);
+  f.ready(); await flush(); assert.equal(f.media.plays.length, 0);
+  f.controller.setVisible(false); f.controller.retry(true); assert.equal(f.media.loads, loads + 2);
+  f.dispose(); const disposedLoads = f.media.loads;
+  f.controller.retry(true); f.controller.continueMuted(); assert.equal(f.media.loads, disposedLoads);
+});
+
+test("manifest failure is structured, retry deduplicates fetches, and the recovered source still waits for confirmation", async () => {
+  const media = new Media(); let fetches = 0, controller;
+  const player = new TheaterVideoPlayer({ media, scheduled: true, attach: () => true, markFrame: () => true,
+    detach() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, onChange: () => controller?.playerChanged() });
+  player.setSceneReady(true);
+  controller = new TheaterScheduleController({ player, media, path: "/schedule.json", origin: "https://local.test",
+    waitForGesture: true, now: () => 123, setTimeout: () => 1, clearTimeout() {}, onChange() {},
+    fetcher: async () => { fetches++; if (fetches === 1) throw new Error("offline"); return response(schedule()); } });
+  const initial = controller.start();
+  assert.deepEqual(controller.state, { loading: true, failed: false });
+  controller.retry(); assert.equal(fetches, 1);
+  await initial;
+  assert.deepEqual(controller.state, { loading: false, failed: true }); assert.equal(media.src, "");
+  controller.retry(); controller.retry(); await controller.start();
+  assert.equal(fetches, 2); assert.deepEqual(controller.state, { loading: false, failed: false });
+  assert.equal(media.src, "/a.mp4"); media.readyState = 2; media.event("loadedmetadata"); media.event("canplay"); await flush();
+  assert.equal(media.plays.length, 0);
+  controller.play(true); assert.deepEqual(media.plays, [123]); assert.equal(media.muted, false);
+  await flush(); controller.dispose(); player.dispose();
+});
 
 test("world observer receives one validated frozen manifest, independently of decoder controls", async () => {
   const manifests = [];
@@ -235,7 +359,7 @@ test("controller retains denial even when a fake player clears its source-local 
     fetcher: async () => response(schedule([entry("a", 0, 10), entry("b", 10, 10, "/b.mp4")], 20)), now: () => now,
     setTimeout: (callback) => { timers.set(++id, callback); return id; }, clearTimeout: (timer) => timers.delete(timer), onChange: () => {},
   });
-  await controller.loaded; assert.equal(attempts, 1);
+  await controller.start(); assert.equal(attempts, 1);
   for (const time of [11, 21]) {
     now = time; const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach((callback) => callback());
     assert.equal(state.autoplayBlocked, false); assert.equal(attempts, 1);
@@ -255,7 +379,7 @@ test("invalid clock during manifest load stays a clock error, keeps timer alive 
     f.ready(); await flush(); assert.equal(f.media.plays.length, 0);
     assert.doesNotThrow(() => f.tick(clock)); assert.equal(f.timers.size, 1);
     assert.match(f.statuses.at(-1), /^Clock unavailable/);
-    assert.doesNotThrow(() => f.tick(120)); await flush();
+    assert.doesNotThrow(() => f.tick(120)); f.ready(); await flush();
     assert.equal(f.media.currentTime, 120); assert.equal(f.media.plays.length, 0); assert.equal(f.timers.size, 1);
     assert.match(f.statuses.at(-1), /UTC/);
     f.tick(3601); assert.equal(f.media.plays.length, 0); // Safety pause survives cycle boundaries.
@@ -307,7 +431,9 @@ test("loader rejects invalid paths, redirects, invalid schema, oversized/offline
   }
   const f = await fixture({}); f.ready(); assert.match(f.statuses.at(-1), /unavailable/); assert.equal(f.media.plays.length, 0);
   f.controller.play(); assert.equal(f.media.plays.length, 0);
-  f.controller.setFollowing(false); f.controller.play(); assert.equal(f.media.plays.length, 1); f.dispose();
+  assert.equal(f.media.src, "");
+  f.controller.setFollowing(false); assert.equal(f.media.src, "/local.mp4");
+  f.ready(); f.controller.play(); assert.equal(f.media.plays.length, 1); f.dispose();
 });
 
 test("loader deadline covers a stalled body and cancels it at 10 seconds", async (t) => {
@@ -326,6 +452,7 @@ test("dispose aborts pending manifest; late fetch resolution cannot revive sched
   const controller = new TheaterScheduleController({ player: {}, media: {}, path: "/schedule.json", origin: "https://local.test",
     fetcher: async (_url, options) => { signal = options.signal; return pending; }, onChange: () => calls++,
   });
-  controller.dispose(); assert.equal(signal.aborted, true); resolve(response(schedule())); await controller.loaded;
-  assert.equal(calls, 1);
+  const loaded = controller.start();
+  controller.dispose(); assert.equal(signal.aborted, true); resolve(response(schedule())); await loaded;
+  assert.equal(calls, 2);
 });

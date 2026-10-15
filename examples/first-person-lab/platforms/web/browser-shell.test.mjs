@@ -5,7 +5,8 @@ import { build } from "esbuild";
 
 // A unit-test bundle only: no real Woven client, generated WASM, or output files.
 const bundled = await build({ entryPoints: ["main.ts"], bundle: true, write: false,
-  format: "esm", platform: "browser", target: "es2022", plugins: [{
+  format: "esm", platform: "browser", target: "es2022",
+  define: { "import.meta.url": JSON.stringify("https://portfolio.test/weaver/first-person-lab/main.js") }, plugins: [{
     name: "offline-browser-seams",
     setup(builder) {
       builder.onResolve({ filter: /^@signalweave\/woven-client$/ }, () => ({ path: "woven", namespace: "fixture" }));
@@ -21,8 +22,9 @@ const bundled = await build({ entryPoints: ["main.ts"], bundle: true, write: fal
           static connect(config) { return globalThis.__weaverHarness.connect(config); }
         }
       ` : `
-        export default function init() { return globalThis.__weaverHarness.init(); }
-        export function GenerateUserName() { return "BrightCalm"; }
+        export default function init(options) { return globalThis.__weaverHarness.init(options); }
+        export function GenerateGuestName() { return "Bright Otter"; }
+        export function IsLegacyUserName(name) { return name === "BrightCalm"; }
         export function GenerateUserID() { return "a8712050-f10b-4d38-93b1-556fab8633d2"; }
         export function set_display_name(value) { globalThis.__weaverHarness.bootEvents.push(["name", value]); return true; }
         export function set_minimal_ui(value) { globalThis.__weaverHarness.bootEvents.push(["minimal", value]); }
@@ -31,7 +33,10 @@ const bundled = await build({ entryPoints: ["main.ts"], bundle: true, write: fal
         export function mark_theater_video_frame() { globalThis.__weaverHarness.videoEvents.push(["frame"]); return true; }
         export function detach_theater_video() { globalThis.__weaverHarness.videoEvents.push(["detach"]); }
         export function set_room_lighting(lobby, auditorium) { globalThis.__weaverHarness.videoEvents.push(["light", lobby, auditorium]); return true; }
-        export function pick_control_panel(x, y) { globalThis.__weaverHarness.panelPicks.push([x, y]); return globalThis.__weaverHarness.panelHit; }
+        export function pick_control_panel() { globalThis.__weaverHarness.legacyPanelPicks++; return 0; }
+        export function pick_scene_interaction(x, y) { const h = globalThis.__weaverHarness; if (h.interactionError) throw new Error("stale interaction binding"); h.panelPicks.push([x, y]); return h.panelHit; }
+        export function activate_seat_interaction(target) { const h = globalThis.__weaverHarness; h.seatTargets.push(target); if (h.interactionError) throw new Error("retired interaction"); if (h.seatAccept) h.pendingSeatTarget = target; return h.seatAccept; }
+        export function invalidate_scene_interactions() { const h = globalThis.__weaverHarness; h.sceneInvalidations++; h.pendingSeatTarget = null; }
         export function set_control_panel_state(panel, state) { globalThis.__weaverHarness.panelStates.push([panel, state]); return true; }
         export function invalidate_control_panels() { globalThis.__weaverHarness.panelInvalidations++; }
         export function get_npc_interaction_context() { const h = globalThis.__weaverHarness; return h.npcActive ? h.npcContext : undefined; }
@@ -44,12 +49,12 @@ const bundled = await build({ entryPoints: ["main.ts"], bundle: true, write: fal
         export function send_host_chat(text) { return globalThis.__weaverHarness.sendChat(text); }
         export function set_host_chat_focus(active) { globalThis.__weaverHarness.chatFocus.push(active); }
         export function reset_host_chat() { globalThis.__weaverHarness.pendingChat.length = 0; }
-        export function realtime_connected(id) { globalThis.__weaverHarness.events.push(["connected", id]); return true; }
+        export function realtime_connected(id) { globalThis.__weaverHarness.events.push(["connected", id]); return globalThis.__weaverHarness.acceptConnection; }
         export function realtime_disconnected(reason) { globalThis.__weaverHarness.events.push(["disconnected", reason]); return true; }
         export function realtime_entity_entered(id) { globalThis.__weaverHarness.events.push(["entered", id]); return true; }
         export function realtime_entity_left(id) { globalThis.__weaverHarness.events.push(["left", id]); return true; }
         export function realtime_payload(id, seq, text) { globalThis.__weaverHarness.events.push(["payload", id, seq, text]); return true; }
-        export function realtime_unreliable_payload() { return true; }
+        export function realtime_unreliable_payload(id, seq, payload) { globalThis.__weaverHarness.events.push(["pose", id, seq, payload.slice()]); return true; }
       `, loader: "js" }));
     },
   }] });
@@ -60,12 +65,39 @@ const TOKEN = "a".repeat(64); // Synthetic fixture, never an environment credent
 const jsonResponse = () => new Response(JSON.stringify({ ...TARGET, token: TOKEN }),
   { headers: { "content-type": "application/json" } });
 const flush = async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); };
+const deferred = () => { let resolve; const promise = new Promise((yes) => { resolve = yes; }); return { promise, resolve }; };
+const SCHEDULED_VIDEO = "/weaver/assets/theater/trailers/fixture.mp4";
+const LOCAL_VIDEO = "/weaver/assets/theater/Music_SpaceNoirJazz.mp4";
+const scheduleResponse = () => new Response(JSON.stringify({
+  version: 1, revision: "fixture", anchorUnixSeconds: 0, cycleSeconds: 3600, driftToleranceSeconds: 5,
+  entries: [{ id: "fixture", title: "Scheduled fixture", startSeconds: 0, durationSeconds: 3600,
+    source: SCHEDULED_VIDEO, sourceStartSeconds: 0, loop: false }],
+}), { headers: { "content-type": "application/json" } });
 let moduleId = 0;
+
+function trustedClick(element) {
+  const event = new Event("click", { cancelable: true });
+  Object.defineProperty(event, "isTrusted", { value: true });
+  element.dispatchEvent(event);
+}
+
+function scenePointer(f, type, values = {}) {
+  const { target = f.elements.get("scene"), isTrusted = true, timeStamp = 0, ...fields } = values;
+  const event = new Event(type, { cancelable: true });
+  Object.defineProperties(event, { isTrusted: { value: isTrusted }, target: { value: target }, timeStamp: { value: timeStamp } });
+  Object.assign(event, { button: 0, pointerId: 1, pointerType: "mouse", isPrimary: true, clientX: 100, clientY: 50, ...fields });
+  f.window.dispatchEvent(event);
+  return event;
+}
+
+function soundPanelClick(f) {
+  assert.equal(scenePointer(f, "pointerdown").defaultPrevented, true);
+}
 
 class KeyboardFixtureEvent extends Event {
   constructor(type, options = {}) {
     super(type, { cancelable: true, ...options });
-    for (const [name, fallback] of Object.entries({ key: "", code: "", repeat: false, isComposing: false })) {
+    for (const [name, fallback] of Object.entries({ key: "", code: "", repeat: false, isComposing: false, shiftKey: false })) {
       this[name] = options[name] ?? fallback;
     }
   }
@@ -76,18 +108,24 @@ class Element extends EventTarget {
   isContentEditable = false;
   blurCount = 0;
   focusCount = 0;
-  focus() { this.focusCount += 1; }
-  blur() { this.blurCount += 1; this.dispatchEvent(new Event("blur")); }
+  focus() { this.focusCount += 1; if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  blur() { this.blurCount += 1; if (this.ownerDocument?.activeElement === this) this.ownerDocument.activeElement = null; this.dispatchEvent(new Event("blur")); }
   value = "";
   textContent = "";
   disabled = true;
   hidden = false;
   open = false;
+  inert = false;
+  dataset = {};
+  attributes = new Map();
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  children = [];
   classes = new Set();
   classList = { add: (value) => this.classes.add(value), toggle: (value, enabled) => {
     if (enabled) this.classes.add(value); else this.classes.delete(value);
   } };
-  contains(target) { return target === this; }
+  contains(target) { return target === this || this.children.some(child => child.contains(target)); }
   getBoundingClientRect() { return { left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }; }
   remove() { this.removed = true; }
   setCustomValidity() {}
@@ -99,6 +137,8 @@ function clientFixture() {
   const publishes = [];
   const pending = [];
   const inbox = [];
+  const pendingDatagrams = [];
+  const datagrams = [];
   let closed = false;
   const startup = [{ messageKind: 9 }, { messageKind: 11, entityId: 7n }];
   const client = {
@@ -110,7 +150,7 @@ function clientFixture() {
     subscribeSpace: async () => {},
     recvTimeout: async () => startup.shift(),
     recv: () => inbox.length ? Promise.resolve(inbox.shift()) : new Promise((resolve, reject) => pending.push({ resolve, reject })),
-    recvDatagram: () => new Promise((_resolve, reject) => pending.push({ reject })),
+    recvDatagram: () => datagrams.length ? Promise.resolve(datagrams.shift()) : new Promise((resolve, reject) => pendingDatagrams.push({ resolve, reject })),
     publishEvent: async (...args) => {
       publishes.push({ kind: "event", at: performance.now(), channel: args[4], sequence: args[6], payload: args[8].slice() });
     },
@@ -121,18 +161,28 @@ function clientFixture() {
     logger: { info: async () => { publishes.push({ kind: "log", at: performance.now() }); } },
     close: () => {
       closed = true;
-      for (const waiter of pending.splice(0)) waiter.reject(new Error("fixture closed"));
+      for (const waiter of [...pending.splice(0), ...pendingDatagrams.splice(0)]) waiter.reject(new Error("fixture closed"));
     },
     send: (value) => {
       const index = pending.findIndex((waiter) => waiter.resolve);
       if (index === -1) inbox.push(value);
       else pending.splice(index, 1)[0].resolve(value);
     },
+    sendDatagram: (value) => {
+      const waiter = pendingDatagrams.shift();
+      if (waiter) waiter.resolve(value); else datagrams.push(value);
+    },
   };
   return client;
 }
 
 class VideoElement extends Element {
+  _src = "";
+  sources = [];
+  loads = [];
+  getAttribute(name) { return name === "src" ? this._src || null : super.getAttribute(name); }
+  get src() { return this._src; }
+  set src(value) { this._src = value; this.sources.push(value); }
   _muted = false;
   _volume = 1;
   get muted() { return this._muted; }
@@ -148,35 +198,39 @@ class VideoElement extends Element {
   pauseCount = 0;
   playCount = 0;
   playError = null;
-  load() {}
-  removeAttribute(name) { if (name === "src") this.src = ""; }
+  playPromise = null;
+  load() { this.loads.push(this.src); this.readyState = 0; }
+  removeAttribute(name) { if (name === "src") this._src = ""; }
   pause() { this.paused = true; this.pauseCount += 1; }
   play() {
     this.playCount += 1;
     if (this.playError) return Promise.reject(this.playError);
-    this.paused = false; this.dispatchEvent(new Event("playing")); return Promise.resolve();
+    this.paused = false; this.dispatchEvent(new Event("playing")); return this.playPromise ?? Promise.resolve();
   }
 }
 
 async function shell(t, options = {}) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  let now = 0;
-  t.mock.method(Date, "now", () => 0);
+  let now = 0, unixNow = options.unixNow ?? 0;
+  t.mock.method(Date, "now", () => unixNow);
   t.mock.method(performance, "now", () => now);
-  const elements = new Map(["network-form", "connect-network", "disconnect-network", "network-status", "woven-auth",
+  const elements = new Map(["network-form", "connect-network", "disconnect-network", "network-status", "connection-badge", "connection-label", "woven-auth",
     "woven-token", "display-name", "join-network", "reload-scene", "multiplayer-settings", "woven-url",
     "woven-namespace", "woven-session", "woven-space", "woven-epoch", "woven-certificate-hash", "status", "scene",
+        "subtitle-controls", "theater-subtitle-hud", "theater-subtitles", "theater-subtitle-explanation",
         "theater-controls", "theater-play", "theater-restart", "theater-mute", "theater-volume", "theater-seek", "theater-time", "theater-status",
-        "theater-lobby-light", "theater-auditorium-light", "theater-follow-schedule", "theater-schedule-status"]
+        "theater-lobby-light", "theater-auditorium-light", "theater-follow-schedule", "theater-schedule-status",
+        "scene-instructions", "connection-controls", "theater-startup", "theater-startup-status",
+        "theater-startup-play", "theater-startup-retry", "theater-startup-continue"]
     .map((id) => [id, new Element()]));
   for (const [id, value] of Object.entries({ "woven-auth": "bearer", "woven-url": TARGET.url,
     "woven-namespace": "2", "woven-session": "2", "woven-space": "3", "woven-epoch": "1",
-        "theater-lobby-light": "1", "theater-auditorium-light": "0.18" })) elements.get(id).value = value;
+        "theater-lobby-light": "1", "theater-auditorium-light": "0.20" })) elements.get(id).value = value;
   elements.set("theater-video", new VideoElement());
   const rafs = new Map();
   let nextRaf = 0;
   const document = Object.assign(new EventTarget(), {
-    visibilityState: "visible",
+    visibilityState: options.visibility ?? "visible",
     activeElement: null,
     pointerLockElement: null,
     pointerLockExits: 0,
@@ -186,18 +240,21 @@ async function shell(t, options = {}) {
       ...(options.publishRateHz === undefined ? {} : { weaverPublishRateHz: options.publishRateHz }),
     } },
     getElementById: (id) => elements.get(id) ?? null,
-    querySelector: (selector) => selector.includes("weaver-theater-schedule") ? { content: "/weaver/theater-schedule.json" } : selector.includes("weaver-theater-video") ? { content: "" } : ({ content: selector.includes("weaver-lobby-bootstrap") ?
+    querySelector: (selector) => selector.includes("weaver-theater-schedule") ? { content: "/weaver/theater-schedule.json" } : selector.includes("weaver-theater-video") ? { content: options.localSource ?? "" } : ({ content: selector.includes("weaver-lobby-bootstrap") ?
       (options.visitor === false ? "" : "/api/lobby") : JSON.stringify(TARGET) }),
   });
+  for (const element of elements.values()) element.ownerDocument = document;
+  elements.get("theater-startup").children = ["theater-startup-play", "theater-startup-retry", "theater-startup-continue"].map(id => elements.get(id));
   const storage = new Map();
-  const window = Object.assign(new EventTarget(), { isSecureContext: true, location: { origin: options.origin ?? "https://portfolio.test" },
+  const window = Object.assign(new EventTarget(), { navigator: { onLine: options.onLine ?? true }, isSecureContext: true, location: { origin: options.origin ?? "https://portfolio.test" },
     requestAnimationFrame: (callback) => { rafs.set(++nextRaf, callback); return nextRaf; },
     cancelAnimationFrame: (id) => rafs.delete(id),
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) } });
   const client = clientFixture();
   const clients = [];
-  const harness = { events: [], connects: [], fetches: [], bootEvents: [], startState: null,
-    panelPicks: [], panelStates: [], panelHit: 1, panelInvalidations: 0,
+  const harness = { acceptConnection: options.acceptConnection !== false, events: [], connects: [], fetches: [], wasmFetches: [], scheduleFetches: [], bootEvents: [], startState: null,
+    panelPicks: [], panelStates: [], panelHit: 1, panelInvalidations: 0, legacyPanelPicks: 0,
+    sceneInvalidations: 0, seatTargets: [], seatAccept: true, pendingSeatTarget: null, interactionError: false,
     npcActive: false, npcContext: undefined, npcAccept: true, npcQuestions: [], npcResponses: [],
     npcClears: 0, npcActivations: [], npcCycles: [], npcDefinitions: [{ id: "concession_support" }],
     videoEvents: [], chatFocus: [], chatSends: [], pendingChat: [], nextChatSequence: 100n,
@@ -209,14 +266,16 @@ async function shell(t, options = {}) {
     },
     flushChat: () => {
       for (const text of harness.pendingChat.splice(0)) {
-        globalThis.weaverChatMessage("7", "BrightCalm", text, true);
+        globalThis.weaverChatMessage("7", "Bright Otter", text, true);
         globalThis.weaverRealtimePublishReliable(harness.nextChatSequence++, JSON.stringify({
-          kind: "chat", version: 1, display_name: "BrightCalm", text,
+          kind: "chat", version: 1, display_name: "Bright Otter", text,
         }));
       }
     },
-    init: async () => {
+    init: async ({ module_or_path }) => {
       harness.bootEvents.push(["init"]);
+      // Model the real WASM initializer consuming the monitored response stream.
+      await module_or_path.arrayBuffer();
       assert.equal(typeof globalThis.weaverSceneReady, "function");
       assert.equal(typeof globalThis.weaverSceneFatal, "function");
       if (options.initError) throw new Error("fixture WASM assets missing");
@@ -238,15 +297,24 @@ async function shell(t, options = {}) {
     },
   };
   harness.progress = [];
-  window.parent = { postMessage: (data, origin) => harness.progress.push({ ...JSON.parse(data), origin }) };
+  harness.loadingMessages = [];
+  window.parent = { postMessage: (data, origin) => {
+    const message = { ...JSON.parse(data), origin };
+    harness.loadingMessages.push(message);
+    if (message.event === "progress") harness.progress.push(message);
+  } };
   const globals = { window, document, HTMLElement: Element, Node: Element, KeyboardEvent: KeyboardFixtureEvent, WebTransport: options.noWebTransport ? undefined : function () {},
     __weaverHarness: harness, fetch: async (url, init) => {
+      url = String(url);
+      if (url.endsWith("/pkg/first_person_lab_bg.wasm")) {
+        harness.wasmFetches.push({ url, init });
+        return options.wasmFetch ? options.wasmFetch(url, init, harness) : new Response(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), {
+          headers: { "content-type": "application/wasm", "content-length": "8" },
+        });
+      }
       if (url.endsWith("/weaver/theater-schedule.json")) {
-        return options.scheduleFetch ? options.scheduleFetch(url, init) : new Response(JSON.stringify({
-          version: 1, revision: "fixture", anchorUnixSeconds: 0, cycleSeconds: 3600, driftToleranceSeconds: 5,
-          entries: [{ id: "jazz", title: "Space Noir Jazz", startSeconds: 0, durationSeconds: 3600,
-            source: "/weaver/assets/theater/Music_SpaceNoirJazz.mp4", sourceStartSeconds: 0, loop: false }],
-        }), { headers: { "content-type": "application/json" } });
+        harness.scheduleFetches.push({ url, init });
+        return options.scheduleFetch ? options.scheduleFetch(url, init) : scheduleResponse();
       }
       harness.fetches.push({ url, init });
       return options.fetch ? options.fetch(url, init, harness.fetches.length) : jsonResponse();
@@ -285,7 +353,13 @@ async function shell(t, options = {}) {
     t.mock.timers.tick(ms);
     await flush();
   };
-  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs };
+  const metadata = () => {
+    const video = elements.get("theater-video");
+    video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata")); video.dispatchEvent(new Event("loadeddata"));
+  };
+  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs, metadata,
+    continueMuted: () => elements.get("theater-startup-continue").dispatchEvent(new Event("click")),
+    setUnixNow: (value) => { unixNow = value; } };
 }
 
 const npcContext = (sequence = "1") => ({
@@ -304,6 +378,7 @@ test("NPC bridge is renderer-gated but works offline without chat, replication, 
   assert.deepEqual(f.harness.npcActivations, []);
   globalThis.weaverSceneReady(); await flush();
   assert.deepEqual(f.harness.npcActivations, [true]);
+  await f.advance(0);
   assert.deepEqual(f.harness.npcCycles, [[0, 3600]]);
   f.harness.npcContext = JSON.stringify(npcContext());
   globalThis.weaverNpcInteractionFrame(f.harness.npcContext);
@@ -327,13 +402,14 @@ test("NPC bridge is renderer-gated but works offline without chat, replication, 
 test("NPC schedule waits for initialized WASM and renderer readiness never authorizes pre-start context", async (t) => {
   const f = await shell(t, { visitor: false, noWebTransport: true, init: async (harness) => {
     globalThis.weaverSceneReady();
-    await flush();
+    t.mock.timers.tick(0); await flush();
+    assert.deepEqual(harness.scheduleFetches, []);
     assert.deepEqual(harness.npcCycles, []);
     assert.deepEqual(harness.npcActivations, []);
     assert.equal(globalThis.weaverGetNpcInteractionContext(), null);
     assert.equal(globalThis.weaverSubmitNpcQuestion("concession_support", "too_early", "hello"), false);
   } });
-  await flush();
+  await f.advance(0);
   assert.deepEqual(f.harness.npcCycles, [[0, 3600]]);
   assert.deepEqual(f.harness.npcActivations, [true]);
   globalThis.weaverSceneReady();
@@ -369,7 +445,7 @@ test("NPC hook errors cannot break the scene; UTF-16 errors and lifecycle retire
 test("E opens the existing composer for a selected offline NPC and never submits on range entry", async (t) => {
   let opens = 0;
   const f = await shell(t, { visitor: false, presentation: "minimal", requestChat: () => { opens++; return true; } });
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); f.continueMuted(); await flush();
   const press = () => f.window.dispatchEvent(new KeyboardFixtureEvent("keydown", { code: "KeyE", key: "e" }));
   press(); assert.equal(opens, 0);
   f.harness.npcContext = JSON.stringify(npcContext());
@@ -381,12 +457,18 @@ test("E opens the existing composer for a selected offline NPC and never submits
   press(); assert.equal(opens, 1);
 });
 
-test("sound HTML is absent; minimal presentation retains hidden diagnostic source controls", () => {
+test("startup confirmation is accessible while minimal presentation hides diagnostic controls", () => {
   const html = readFileSync("index.html", "utf8");
   const css = readFileSync("styles.css", "utf8");
   assert.doesNotMatch(html + css, /theater-enable-sound|theater-sound-access/);
   assert.match(html, /id="theater-controls"/);
+  assert.match(html, /id="theater-startup"[^>]+role="dialog"[^>]+aria-modal="true"/);
+  assert.match(html, /aria-labelledby="theater-startup-title"/);
+  assert.match(html, /id="theater-startup-status"[^>]+role="status"/);
+  assert.match(html, /id="theater-startup-play"[^>]*>Play with sound</);
+  assert.match(html, /id="theater-startup-continue"[^>]*>Continue without sound</);
   assert.match(css, /html\[data-weaver-presentation="minimal"\] \.theater-controls \{ display: none; \}/);
+  assert.match(css, /html\[data-weaver-presentation="minimal"\] :is\(\.instructions, \.connection-panel\) \{ display: none; \}/);
 });
 
 test("diagnostic theater focus still suppresses game input and releases pointer lock", async (t) => {
@@ -412,6 +494,41 @@ test("load milestones are bounded, monotonic and scene-gated, including synchron
   assert.equal(f.harness.progress.length, 6);
 });
 
+test("download reports real bytes, then initializing, without granting renderer readiness", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true });
+  assert.equal(f.harness.wasmFetches.length, 1);
+  const updates = f.harness.loadingMessages.filter(message => message.event !== "progress");
+  assert.deepEqual(updates.map(({ event, loadedBytes, totalBytes }) => ({ event, loadedBytes, totalBytes })), [
+    { event: "download", loadedBytes: 0, totalBytes: 8 },
+    { event: "download", loadedBytes: 8, totalBytes: 8 },
+    { event: "initializing", loadedBytes: undefined, totalBytes: undefined },
+  ]);
+  assert.equal(f.harness.progress.at(-1).stage, "started");
+  assert.equal(f.harness.scheduleFetches.length, 0);
+  assert.equal(f.elements.get("join-network").disabled, true);
+});
+
+test("a healthy download can exceed twenty seconds while a stalled download aborts", async (t) => {
+  let controller, active, signal;
+  const started = deferred();
+  const boot = shell(t, { visitor: false, noWebTransport: true, wasmFetch: (_url, init, harness) => {
+    active = harness; signal = init.signal;
+    return new Response(new ReadableStream({ start(source) { controller = source; started.resolve(); } }));
+  } });
+  await started.promise; await flush();
+  for (let i = 0; i < 4; i++) {
+    t.mock.timers.tick(15000);
+    controller.enqueue(new Uint8Array([i])); await flush();
+    assert.equal(signal.aborted, false);
+  }
+  assert.equal(active.loadingMessages.some(message => message.event === "initializing"), false);
+  t.mock.timers.tick(20000);
+  await boot;
+  assert.equal(signal.aborted, true);
+  assert.equal(active.loadingMessages.some(message => message.event === "initializing"), false);
+  assert.deepEqual(active.progress.map(message => message.completed), [1, 3]);
+});
+
 test("failed initialization never emits completion and late ready cannot advance progress", async (t) => {
   const f = await shell(t, { initError: true });
   assert.deepEqual(f.harness.progress.map(message => message.completed), [1, 3]);
@@ -428,18 +545,337 @@ test("elapsed time cannot advance progress while awaiting the renderer", async (
   assert.equal(f.harness.progress.at(-1).completed, 14);
 });
 
-test("schedule status and controls are independent; bootstrap-shaped manifest fails closed without breaking scene", async (t) => {
+test("theater starts once in a later task, never in the synchronous ready callback or its microtasks", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true });
+  const video = f.elements.get("theater-video");
+  await f.advance(0);
+  assert.equal(f.harness.scheduleFetches.length, 0); assert.deepEqual(video.loads, []);
+  globalThis.weaverSceneReady();
+  assert.equal(f.harness.progress.at(-1).stage, "scene");
+  assert.equal(f.elements.get("reload-scene").hidden, true);
+  assert.equal(f.harness.scheduleFetches.length, 0); assert.deepEqual(video.sources, []);
+  assert.equal(f.elements.get("theater-startup").hidden, false);
+  assert.equal(f.elements.get("theater-startup").dataset.state, "preparing");
+  await flush();
+  assert.equal(f.harness.scheduleFetches.length, 0); assert.deepEqual(video.loads, []);
+  globalThis.weaverSceneReady();
+  await f.advance(0);
+  assert.equal(f.harness.scheduleFetches.length, 1);
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO]); assert.deepEqual(video.loads, [SCHEDULED_VIDEO]);
+  globalThis.weaverSceneReady(); f.metadata(); await f.advance(0);
+  assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  assert.equal(video.playCount, 0);
+  assert.equal(f.elements.get("theater-startup").dataset.state, "ready");
+  f.continueMuted();
+  assert.equal(video.playCount, 1);
+});
+
+test("slow manifest cannot block ready and selects the current UTC slot only when it arrives", async (t) => {
+  const manifest = deferred();
+  const f = await shell(t, { visitor: false, noWebTransport: true, unixNow: 7000, scheduleFetch: () => manifest.promise });
+  const video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0);
+  assert.equal(f.harness.progress.at(-1).completed, 14);
+  assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, []);
+  await f.advance(9000);
+  assert.equal(f.elements.get("reload-scene").hidden, true); assert.deepEqual(video.loads, []);
+  f.setUnixNow(75000);
+  manifest.resolve(new Response(JSON.stringify({
+    version: 1, revision: "late", anchorUnixSeconds: 0, cycleSeconds: 120, driftToleranceSeconds: 5,
+    entries: [
+      { id: "first", title: "First", startSeconds: 0, durationSeconds: 60, source: "/first.mp4", sourceStartSeconds: 0, loop: false },
+      { id: "second", title: "Second", startSeconds: 60, durationSeconds: 60, source: "/second.mp4", sourceStartSeconds: 10, loop: false },
+    ],
+  }), { headers: { "content-type": "application/json" } }));
+  await flush();
+  assert.deepEqual(video.sources, ["/second.mp4"]); assert.equal(video.playCount, 0);
+  assert.deepEqual(f.harness.npcCycles, [[0, 120]]);
+  f.metadata(); await flush();
+  assert.equal(video.currentTime, 25); assert.equal(video.playCount, 0);
+  f.continueMuted();
+  assert.equal(video.playCount, 1); assert.equal(video.muted, true);
+});
+
+test("startup Play accepts metadata, stays synchronous, and waits for observed sound plus a frame", async (t) => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  const video = f.elements.get("theater-video"), dialog = f.elements.get("theater-startup");
+  const play = f.elements.get("theater-startup-play");
+  assert.equal(dialog.hidden, true);
+  globalThis.weaverSceneReady();
+  assert.equal(dialog.hidden, false); assert.equal(f.harness.progress.at(-1).completed, 14);
+  assert.equal(f.harness.scheduleFetches.length, 0);
+  await f.advance(0);
+  video.readyState = 1; video.dispatchEvent(new Event("loadedmetadata"));
+  assert.equal(dialog.dataset.state, "ready"); assert.equal(play.disabled, false);
+  assert.equal(video.playCount, 0); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  let gesture = false;
+  video.play = () => {
+    assert.equal(gesture, true); assert.equal(video.muted, false);
+    video.playCount++; video.paused = false;
+    return Promise.resolve(); // Neither a playing notification nor a decoded frame.
+  };
+  f.setUnixNow(17000);
+  play.dispatchEvent(new Event("click")); assert.equal(video.playCount, 0);
+  gesture = true; trustedClick(play); gesture = false;
+  assert.equal(video.playCount, 1); assert.equal(video.currentTime, 17);
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "starting");
+  await flush(); assert.equal(dialog.hidden, false);
+  video.dispatchEvent(new Event("playing")); assert.equal(dialog.hidden, false);
+  video.readyState = 2; video.dispatchEvent(new Event("loadeddata"));
+  assert.equal(dialog.hidden, true); assert.equal(f.elements.get("scene").inert, false);
+  assert.equal(f.harness.chatFocus.at(-1), false);
+  globalThis.weaverSceneReady(); assert.equal(dialog.hidden, true);
+});
+
+test("startup Retry reloads only on failure or an explicit slow retry and bounds repeated attempts", async (t) => {
+  let available = false;
+  const f = await shell(t, { visitor: false, scheduleFetch: () => available ? scheduleResponse() : jsonResponse() });
+  const dialog = f.elements.get("theater-startup"), retry = f.elements.get("theater-startup-retry");
+  const video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0);
+  assert.equal(dialog.dataset.state, "failed"); assert.equal(retry.hidden, false);
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 4);
+  assert.deepEqual(video.sources, []); assert.equal(f.elements.get("theater-startup-continue").disabled, false);
+  available = true; trustedClick(retry);
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 5);
+  trustedClick(retry); await flush();
+  assert.equal(f.harness.scheduleFetches.length, 2); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  assert.equal(dialog.dataset.state, "preparing");
+  await f.advance(12_000);
+  assert.equal(dialog.dataset.state, "slow"); assert.equal(retry.hidden, false);
+  trustedClick(retry); await flush();
+  assert.equal(f.harness.scheduleFetches.length, 2);
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  assert.equal(dialog.dataset.state, "preparing"); assert.equal(retry.hidden, true);
+  trustedClick(retry); trustedClick(retry); await flush();
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  await f.advance(11_999); assert.equal(dialog.dataset.state, "preparing");
+  await f.advance(1); assert.equal(dialog.dataset.state, "slow");
+  video.error = { code: 4 }; video.dispatchEvent(new Event("error"));
+  assert.equal(dialog.dataset.state, "failed");
+  video.error = null; trustedClick(retry); await flush();
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  f.metadata(); assert.equal(dialog.dataset.state, "ready"); assert.equal(video.playCount, 0);
+  video.playError = new Error("NotAllowedError");
+  trustedClick(f.elements.get("theater-startup-play")); await flush();
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "failed");
+  video.playError = null; trustedClick(retry);
+  assert.equal(video.playCount, 2); assert.equal(video.muted, false);
+  assert.equal(dialog.hidden, true);
+});
+
+test("Continue while preparing starts only the current and later selected UTC clips muted", async (t) => {
+  const f = await shell(t, { visitor: false, scheduleFetch: () => new Response(JSON.stringify({
+    version: 1, revision: "two", anchorUnixSeconds: 0, cycleSeconds: 20, driftToleranceSeconds: 5,
+    entries: [
+      { id: "first", title: "First", startSeconds: 0, durationSeconds: 10, source: "/first.mp4", sourceStartSeconds: 0, loop: false },
+      { id: "second", title: "Second", startSeconds: 10, durationSeconds: 10, source: "/second.mp4", sourceStartSeconds: 0, loop: false },
+    ],
+  }), { headers: { "content-type": "application/json" } }) });
+  const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); f.continueMuted();
+  assert.equal(dialog.hidden, true); assert.equal(video.muted, true); assert.equal(video.playCount, 0);
+  await f.advance(0);
+  assert.deepEqual(video.sources, ["/first.mp4"]);
+  f.metadata(); await flush(); assert.equal(video.playCount, 1); assert.equal(video.muted, true);
+  f.setUnixNow(12_000); await f.advance(1000);
+  assert.deepEqual(video.sources, ["/first.mp4", "/second.mp4"]); assert.equal(video.playCount, 1);
+  f.metadata(); await flush();
+  assert.equal(video.playCount, 2); assert.equal(video.muted, true); assert.equal(dialog.hidden, true);
+});
+
+test("World Sound reopens preparation and retries a failed current source instead of silently returning", async (t) => {
+  const f = await shell(t, { visitor: false });
+  const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted();
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 5);
+  soundPanelClick(f);
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "preparing");
+  assert.equal(video.playCount, 0); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  f.continueMuted(); video.error = { code: 4 }; video.dispatchEvent(new Event("error"));
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 4);
+  video.error = null; soundPanelClick(f);
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "preparing");
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  f.metadata(); await flush();
+  assert.equal(dialog.hidden, false);
+  trustedClick(f.elements.get("theater-startup-play")); await flush();
+  assert.equal(dialog.hidden, true); assert.equal(video.muted, false);
+});
+
+test("pending Sound reopens confirmation and slow Retry reloads once without replaying audible intent", async (t) => {
+  const f = await shell(t, { visitor: false });
+  const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
+  const retry = f.elements.get("theater-startup-retry"), pending = deferred();
+  video.playPromise = pending.promise;
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata();
+  assert.equal(video.playCount, 1); assert.equal(dialog.hidden, true);
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 2);
+  soundPanelClick(f);
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "starting");
+  assert.equal(video.playCount, 1);
+  await f.advance(12_000); assert.equal(dialog.dataset.state, "slow");
+  trustedClick(retry);
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  assert.equal(dialog.dataset.state, "preparing"); assert.equal(retry.hidden, true);
+  trustedClick(retry); assert.equal(video.sources.length, 2);
+  video.playPromise = null; pending.resolve(); await flush(); f.metadata(); await flush();
+  assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "ready");
+  assert.equal(video.playCount, 1); assert.equal(video.muted, true);
+  trustedClick(f.elements.get("theater-startup-play"));
+  assert.equal(video.playCount, 2); assert.equal(video.muted, false); assert.equal(dialog.hidden, true);
+});
+
+test("startup visibility pauses the slow indication and disposal cancels late UI work", async (t) => {
+  const f = await shell(t, { visitor: false });
+  const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0);
+  await f.advance(6000); await f.visible("hidden"); await f.advance(60_000);
+  assert.equal(dialog.hidden, true);
+  await f.visible("visible"); assert.equal(dialog.dataset.state, "preparing");
+  await f.advance(12_000); assert.equal(dialog.dataset.state, "slow");
+  assert.equal(f.elements.get("theater-startup-continue").disabled, false);
+  globalThis.weaverDisposeTheaterVideo();
+  assert.equal(dialog.hidden, true); assert.equal(f.elements.get("scene").inert, false);
+  await f.advance(60_000); await f.visible("hidden"); await f.visible("visible");
+  f.metadata(); trustedClick(f.elements.get("theater-startup-play"));
+  trustedClick(f.elements.get("theater-startup-retry")); f.continueMuted();
+  assert.equal(dialog.hidden, true); assert.equal(video.playCount, 0);
+});
+
+test("startup traps focus, releases held input and pointer lock, blocks chat/game input, and Escape restores canvas", async (t) => {
+  let requests = 0;
+  const f = await shell(t, { visitor: false, presentation: "minimal", requestChat: () => { requests++; return true; } });
+  const canvas = f.elements.get("scene"), play = f.elements.get("theater-startup-play");
+  const dialog = f.elements.get("theater-startup"), continued = f.elements.get("theater-startup-continue");
+  const released = [];
+  canvas.addEventListener("keyup", (event) => released.push(event.code));
+  canvas.focus(); key(f, "keydown", "w"); f.document.pointerLockElement = canvas;
+  globalThis.weaverSceneReady();
+  assert.deepEqual(released, ["KeyW"]); assert.equal(f.document.pointerLockExits, 1);
+  assert.equal(f.document.activeElement, continued); assert.equal(canvas.inert, true);
+  assert.equal(f.harness.chatFocus.at(-1), true); assert.equal(globalThis.weaverResumeGameInput(), false);
+  globalThis.weaverSetChatFocus(true); globalThis.weaverSetChatFocus(false);
+  assert.equal(f.harness.chatFocus.at(-1), true);
+  let nativeInput = 0;
+  f.window.addEventListener("keydown", () => nativeInput++);
+  f.window.addEventListener("keyup", () => nativeInput++);
+  f.window.addEventListener("beforeinput", () => nativeInput++);
+  for (const pressed of ["w", "e", "Enter"]) assert.equal(key(f, "keydown", pressed).defaultPrevented, true);
+  f.window.dispatchEvent(new Event("beforeinput", { cancelable: true }));
+  assert.equal(nativeInput, 0); assert.equal(requests, 0);
+  await f.advance(0); f.metadata();
+  key(f, "keydown", "Tab"); assert.equal(f.document.activeElement, play);
+  key(f, "keydown", "Tab", { shiftKey: true }); assert.equal(f.document.activeElement, continued);
+  for (const type of ["keydown", "keyup"]) {
+    for (const pressed of ["Enter", " "]) {
+      assert.equal(key(f, type, pressed, { target: continued }).defaultPrevented, false, `${pressed} ${type} retains native activation`);
+    }
+  }
+  assert.equal(nativeInput, 0);
+  key(f, "keydown", "Escape");
+  assert.equal(dialog.hidden, true); assert.equal(f.document.activeElement, canvas);
+  assert.equal(canvas.inert, false); assert.equal(f.harness.chatFocus.at(-1), false);
+  assert.equal(key(f, "keydown", "w", { repeat: true }).defaultPrevented, true);
+  key(f, "keydown", "w"); assert.equal(nativeInput, 1);
+});
+
+test("stalled metadata and unavailable media never withhold ready, time out the scene, or load fallback", async (t) => {
+  const f = await shell(t);
+  const video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0);
+  assert.equal(f.harness.progress.at(-1).stage, "scene"); assert.equal(video.readyState, 0);
+  await f.advance(25000);
+  assert.equal(video.playCount, 0); assert.deepEqual(f.harness.videoEvents, []);
+  assert.equal(f.elements.get("reload-scene").hidden, true);
+  assert.equal(f.elements.get("status").classes.has("failed"), false);
+  assert.match(f.elements.get("network-status").textContent, /Online/);
+  video.error = { code: 4 }; video.dispatchEvent(new Event("error"));
+  await f.advance(1000);
+  assert.match(f.elements.get("theater-status").textContent, /media error 4/);
+  assert.deepEqual(video.sources, [SCHEDULED_VIDEO]); assert.equal(video.src, "");
+  assert.equal(f.elements.get("reload-scene").hidden, true); assert.equal(f.client.closed(), false);
+});
+
+test("a pending autoplay promise cannot block ready and cannot revive disposed media", async (t) => {
+  const f = await shell(t, { visitor: false });
+  const video = f.elements.get("theater-video"), play = deferred();
+  video.playPromise = play.promise;
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata();
+  assert.equal(video.playCount, 1); assert.equal(f.harness.progress.at(-1).completed, 14);
+  await f.advance(25000);
+  assert.equal(f.elements.get("reload-scene").hidden, true);
+  assert.equal(f.elements.get("status").classes.has("failed"), false);
+  globalThis.weaverDisposeTheaterVideo(); play.resolve(); await flush();
+  assert.equal(video.paused, true); assert.equal(video.src, ""); assert.equal(video.playCount, 1);
+});
+
+for (const queued of [false, true]) {
+  for (const teardown of ["dispose", "fatal"]) {
+    test(`${teardown} ${queued ? "after ready before its task" : "before ready"} prevents all theater requests`, async (t) => {
+      const f = await shell(t, { visitor: false, noWebTransport: true });
+      const video = f.elements.get("theater-video");
+      if (queued) globalThis.weaverSceneReady();
+      if (teardown === "fatal") globalThis.weaverSceneFatal("fixture shutdown");
+      else globalThis.weaverDisposeTheaterVideo();
+      globalThis.weaverSceneReady();
+      await f.visible("hidden"); await f.visible("visible"); f.metadata(); await f.advance(25000);
+      assert.equal(f.harness.scheduleFetches.length, 0);
+      assert.deepEqual(video.sources, []); assert.deepEqual(video.loads, []);
+      assert.deepEqual(f.harness.videoEvents, []); assert.equal(video.playCount, 0); assert.equal(video.removed, true);
+    });
+  }
+}
+
+for (const initiallyHidden of [false, true]) {
+  test(`${initiallyHidden ? "initially hidden scene" : "hide before the deferred task"} postpones loading and restore still requires Play`, async (t) => {
+    const f = await shell(t, { visitor: false, visibility: initiallyHidden ? "hidden" : "visible" });
+    const video = f.elements.get("theater-video");
+    globalThis.weaverSceneReady();
+    if (!initiallyHidden) await f.visible("hidden");
+    await f.advance(0);
+    assert.equal(f.harness.scheduleFetches.length, 0); assert.deepEqual(video.sources, []);
+    await f.visible("visible");
+    assert.equal(f.harness.scheduleFetches.length, 0);
+    await f.advance(0); f.metadata(); await flush();
+    assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+    assert.equal(video.playCount, 0);
+    f.elements.get("theater-play").dispatchEvent(new Event("click")); await flush();
+    assert.equal(video.playCount, 1);
+  });
+}
+
+test("explicit local selection before ready remains lazy, honors its configured source, and can rejoin the schedule", async (t) => {
+  const f = await shell(t, { visitor: false, localSource: "/diagnostics.mp4", unixNow: 17000 });
+  const video = f.elements.get("theater-video"), follow = f.elements.get("theater-follow-schedule");
+  follow.checked = false; follow.dispatchEvent(new Event("change"));
+  await f.advance(0);
+  assert.equal(f.harness.scheduleFetches.length, 0); assert.deepEqual(video.sources, []);
+  globalThis.weaverSceneReady(); assert.deepEqual(video.sources, []);
+  await f.advance(0); f.metadata(); await flush();
+  assert.deepEqual(video.sources, ["/diagnostics.mp4"]); assert.equal(video.playCount, 0);
+  follow.checked = true; follow.dispatchEvent(new Event("change"));
+  assert.deepEqual(video.sources, ["/diagnostics.mp4", SCHEDULED_VIDEO]);
+  f.metadata(); await flush(); assert.equal(video.currentTime, 17); assert.equal(video.playCount, 0);
+  f.continueMuted(); assert.equal(video.playCount, 1);
+});
+
+test("unavailable schedule cannot block ready or load fallback until explicit local diagnostics", async (t) => {
   const f = await shell(t, { scheduleFetch: async () => jsonResponse() });
   const video = f.elements.get("theater-video");
-  video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady();
+  assert.equal(f.harness.progress.at(-1).stage, "scene");
+  assert.deepEqual(video.sources, []); assert.equal(f.harness.scheduleFetches.length, 0);
+  await f.advance(0);
   assert.match(f.elements.get("theater-schedule-status").textContent, /Schedule unavailable/);
   assert.equal(video.playCount, 0); assert.equal(f.elements.get("theater-follow-schedule").checked, true);
   assert.equal(f.elements.get("theater-restart").disabled, true);
   assert.equal(f.elements.get("theater-seek").disabled, true);
-  assert.equal(f.elements.get("theater-play").disabled, false);
+  assert.equal(f.elements.get("theater-play").disabled, true);
   f.elements.get("theater-play").dispatchEvent(new Event("click")); assert.equal(video.playCount, 0);
+  assert.deepEqual(video.sources, []);
   const follow = f.elements.get("theater-follow-schedule"); follow.checked = false; follow.dispatchEvent(new Event("change"));
+  assert.deepEqual(video.sources, [LOCAL_VIDEO]); f.metadata();
   assert.match(f.elements.get("theater-schedule-status").textContent, /not synchronized/);
   assert.equal(f.elements.get("theater-restart").disabled, false);
   assert.equal(f.elements.get("theater-seek").disabled, false);
@@ -453,13 +889,15 @@ test("movie attachment waits for metadata plus initialized renderer; controls pa
   video.readyState = 2;
   video.dispatchEvent(new Event("loadedmetadata"));
   assert.deepEqual(f.harness.videoEvents, []);
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0);
+  assert.deepEqual(f.harness.videoEvents, []);
+  f.continueMuted(); f.metadata(); await flush();
   assert.deepEqual(f.harness.videoEvents.map(([event]) => event), ["attach", "frame"]);
   globalThis.weaverSceneReady();
   assert.equal(f.harness.videoEvents.filter(([event]) => event === "attach").length, 1);
   assert.equal(video.playCount, 1);
   assert.equal(video.autoplay, false);
-  assert.equal(video.src, "/weaver/assets/theater/Music_SpaceNoirJazz.mp4");
+  assert.equal(video.src, SCHEDULED_VIDEO);
   assert.equal(f.elements.get("theater-time").textContent, "0:00 / 66:21");
   assert.equal(video.paused, false); assert.equal(f.rafs.size, 1);
   assert.equal(video.muted, true); assert.equal(video.volume, 0.4);
@@ -473,6 +911,135 @@ test("movie attachment waits for metadata plus initialized renderer; controls pa
   globalThis.weaverDisposeTheaterVideo(); globalThis.weaverDisposeTheaterVideo();
   assert.equal(video.src, ""); assert.equal(video.removed, true);
   assert.equal(f.harness.videoEvents.filter(([event]) => event === "detach").length, 1);
+});
+
+test("one combined picker dispatches offline seats and preserves synchronous, exclusive wall controls", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true, presentation: "minimal" });
+  f.harness.panelHit = 100;
+  scenePointer(f, "pointerdown");
+  assert.deepEqual(f.harness.seatTargets, [], "renderer readiness is required");
+  globalThis.weaverSceneReady();
+  scenePointer(f, "pointerdown");
+  assert.deepEqual(f.harness.seatTargets, [], "startup confirmation owns input");
+  f.continueMuted();
+  for (let target = 100; target <= 123; target++) {
+    f.harness.panelHit = target;
+    assert.equal(scenePointer(f, "pointerdown").defaultPrevented, true);
+    scenePointer(f, "pointerup");
+    scenePointer(f, "click");
+  }
+  assert.deepEqual(f.harness.seatTargets, Array.from({ length: 24 }, (_, index) => 100 + index));
+  assert.equal(f.harness.connects.length, 0);
+  let fullscreen = 0, gesture = false;
+  f.window.jdharrisonGetFullscreenState = () => ({ available: true, active: false, pending: false, error: false });
+  f.window.jdharrisonToggleFullscreen = () => { assert.ok(gesture); fullscreen++; };
+  f.harness.panelHit = 2;
+  gesture = true; scenePointer(f, "pointerdown"); gesture = false;
+  scenePointer(f, "pointerup"); scenePointer(f, "click");
+  assert.equal(fullscreen, 1);
+  f.harness.panelHit = 3; scenePointer(f, "pointerdown"); scenePointer(f, "pointerup");
+  f.harness.panelHit = 1; soundPanelClick(f);
+  assert.equal(f.elements.get("theater-startup").hidden, false);
+  assert.deepEqual(f.harness.seatTargets, Array.from({ length: 24 }, (_, index) => 100 + index));
+  assert.equal(f.harness.legacyPanelPicks, 0, "no second panel-only pick or fallback dispatcher");
+});
+
+test("exit target is capture-only for an unlocked mouse and activates once for a locked mouse or touch", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true });
+  globalThis.weaverSceneReady(); f.continueMuted();
+  f.harness.panelHit = 200;
+  for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) {
+    assert.equal(scenePointer(f, type).defaultPrevented, false);
+  }
+  assert.deepEqual(f.harness.seatTargets, []);
+  f.document.pointerLockElement = f.elements.get("scene");
+  f.document.dispatchEvent(new Event("pointerlockchange"));
+  assert.equal(scenePointer(f, "pointerdown", { clientX: 10, clientY: 10 }).defaultPrevented, true);
+  scenePointer(f, "pointerup"); scenePointer(f, "click");
+  assert.deepEqual(f.harness.panelPicks.at(-1), [0, 0]);
+  assert.deepEqual(f.harness.seatTargets, [200]);
+  f.document.pointerLockElement = null;
+  f.document.dispatchEvent(new Event("pointerlockchange"));
+  const touch = { pointerType: "touch" };
+  assert.equal(scenePointer(f, "pointerdown", touch).defaultPrevented, false);
+  assert.equal(scenePointer(f, "pointerup", { ...touch, timeStamp: 100 }).defaultPrevented, false);
+  scenePointer(f, "click");
+  assert.deepEqual(f.harness.seatTargets, [200, 200]);
+});
+
+test("seat rejection, invalid targets and unavailable interaction bindings never activate a fallback", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true });
+  globalThis.weaverSceneReady(); f.continueMuted();
+  f.harness.panelHit = 100; f.harness.seatAccept = false;
+  assert.equal(scenePointer(f, "pointerdown").defaultPrevented, true);
+  scenePointer(f, "pointerup"); scenePointer(f, "click");
+  assert.deepEqual(f.harness.seatTargets, [100]);
+  assert.equal(f.harness.pendingSeatTarget, null);
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+  for (const target of [99, 124, 201, NaN]) {
+    f.harness.panelHit = target;
+    assert.equal(scenePointer(f, "pointerdown").defaultPrevented, false);
+  }
+  f.harness.interactionError = true;
+  assert.equal(scenePointer(f, "pointerdown").defaultPrevented, false);
+  assert.equal(f.harness.legacyPanelPicks, 0);
+  assert.deepEqual(f.harness.seatTargets, [100]);
+});
+
+test("focus and viewport/capture phase changes clear both seat tap candidates and queued Rust intent", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true, presentation: "minimal" });
+  globalThis.weaverSceneReady(); f.continueMuted(); f.harness.panelHit = 100;
+  const touch = { pointerType: "touch" };
+  for (const interrupt of [
+    () => { globalThis.weaverSetChatFocus(true); globalThis.weaverSetChatFocus(false); },
+    () => { const panel = f.elements.get("theater-controls"); panel.dispatchEvent(new Event("focusin")); panel.dispatchEvent(new Event("focusout")); },
+    () => f.window.dispatchEvent(new Event("blur")),
+    () => f.window.dispatchEvent(new Event("resize")),
+    () => f.window.dispatchEvent(new Event("orientationchange")),
+    () => f.document.dispatchEvent(new Event("pointerlockchange")),
+  ]) {
+    const count = f.harness.seatTargets.length, invalidations = f.harness.sceneInvalidations;
+    scenePointer(f, "pointerdown", touch);
+    interrupt();
+    scenePointer(f, "pointerup", { ...touch, timeStamp: 100 });
+    assert.equal(f.harness.seatTargets.length, count);
+    assert.ok(f.harness.sceneInvalidations > invalidations);
+    scenePointer(f, "pointerdown"); scenePointer(f, "pointerup");
+    assert.equal(f.harness.pendingSeatTarget, 100);
+    interrupt();
+    assert.equal(f.harness.pendingSeatTarget, null);
+  }
+  const editable = f.elements.get("display-name");
+  editable.tagName = "INPUT"; editable.focus();
+  const count = f.harness.seatTargets.length;
+  assert.equal(scenePointer(f, "pointerdown").defaultPrevented, false);
+  assert.equal(f.harness.seatTargets.length, count);
+});
+
+test("hidden/pagehide, fatal and shutdown phases never replay an old seat gesture", async (t) => {
+  const f = await shell(t, { visitor: false, noWebTransport: true });
+  globalThis.weaverSceneReady(); f.continueMuted(); f.harness.panelHit = 100;
+  const touch = { pointerType: "touch" };
+  scenePointer(f, "pointerdown", touch);
+  await f.visible("hidden"); await f.visible("visible");
+  scenePointer(f, "pointerup", { ...touch, timeStamp: 100 });
+  assert.deepEqual(f.harness.seatTargets, []);
+  scenePointer(f, "pointerdown", touch);
+  f.window.dispatchEvent(new Event("pagehide"));
+  const restored = new Event("pageshow"); Object.defineProperty(restored, "persisted", { value: true });
+  f.window.dispatchEvent(restored);
+  scenePointer(f, "pointerup", { ...touch, timeStamp: 100 });
+  assert.deepEqual(f.harness.seatTargets, []);
+  scenePointer(f, "pointerdown"); scenePointer(f, "pointerup");
+  assert.equal(f.harness.pendingSeatTarget, 100, "fresh input works after a nonpermanent reset");
+  globalThis.weaverSceneFatal("fixture fatal");
+  assert.equal(f.harness.pendingSeatTarget, null);
+  assert.equal(f.harness.panelInvalidations, 1);
+  const count = f.harness.seatTargets.length;
+  globalThis.weaverSceneReady(); globalThis.weaverDisposeTheaterVideo();
+  scenePointer(f, "pointerdown");
+  assert.equal(f.harness.seatTargets.length, count);
+  assert.equal(f.harness.panelInvalidations, 1);
 });
 
 test("sound panel invokes schedule audible play synchronously, observes state and invalidates on shutdown", async (t) => {
@@ -492,8 +1059,10 @@ test("sound panel invokes schedule audible play synchronously, observes state an
     return play();
   };
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
+  assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 2);
+  video.readyState = 3; video.dispatchEvent(new Event("canplay"));
   assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 1);
   gesture = true; activate(); gesture = false;
   assert.equal(video.playCount, 2); assert.equal(video.muted, false);
@@ -517,7 +1086,7 @@ test("shell surfaces blocked muted autoplay and permits one manual Play retry", 
   const video = f.elements.get("theater-video");
   video.playError = new Error("NotAllowedError");
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
   const play = f.elements.get("theater-play");
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   assert.equal(play.disabled, false); assert.equal(play.textContent, "Play");
@@ -543,7 +1112,7 @@ test("movie audio controls synchronize external changes and preserve explicit mu
   assert.equal(volume.value, "0.4");
   assert.equal(mute.disabled, true);
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
   assert.equal(mute.disabled, false); assert.equal(volume.disabled, false);
   assert.equal(video.playCount, 1);
   mute.dispatchEvent(new Event("click"));
@@ -583,14 +1152,22 @@ test("early metadata and synchronous ready cannot attach until WASM startup comp
     const video = document.getElementById("theater-video");
     video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
     globalThis.weaverSceneReady();
+    assert.equal(document.getElementById("theater-startup").hidden, true);
     duringInit = [...harness.videoEvents];
   } });
   assert.deepEqual(duringInit, []);
+  assert.equal(f.elements.get("theater-startup").hidden, false);
+  assert.equal(f.elements.get("theater-startup").dataset.state, "preparing");
+  assert.deepEqual(f.harness.videoEvents, []); assert.equal(f.harness.scheduleFetches.length, 0);
+  await f.advance(0);
+  assert.deepEqual(f.elements.get("theater-video").sources, [SCHEDULED_VIDEO]);
+  assert.deepEqual(f.harness.videoEvents, []);
+  f.metadata();
   assert.deepEqual(f.harness.videoEvents.map(([event]) => event), ["attach", "frame"]);
 });
 
 test("theater focus composes with host chat focus without reviving game input", async (t) => {
-  const f = await shell(t, { presentation: "minimal" }); globalThis.weaverSceneReady(); await flush();
+  const f = await shell(t, { presentation: "minimal" }); globalThis.weaverSceneReady(); f.continueMuted(); await flush();
   const panel = f.elements.get("theater-controls");
   panel.dispatchEvent(new Event("focusin"));
   assert.equal(f.harness.chatFocus.at(-1), true);
@@ -608,7 +1185,7 @@ test("theater focus composes with host chat focus without reviving game input", 
 test("fatal scene disposes video and a late ready cannot reattach", async (t) => {
   const f = await shell(t); const video = f.elements.get("theater-video");
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.metadata(); await flush();
   globalThis.weaverSceneFatal("fixture graphics failure");
   globalThis.weaverSceneReady(); video.dispatchEvent(new Event("loadedmetadata"));
   assert.deepEqual(f.harness.videoEvents.map(([event]) => event), ["attach", "frame", "detach"]);
@@ -644,6 +1221,111 @@ test("shell drops malformed and oversize reliable messages without losing the he
 });
 
 // Exercise the actual shell bridge/outboxes, not a reimplementation of the send policy.
+function badge(f, label) {
+  assert.equal(f.elements.get("connection-label").textContent, label);
+  assert.equal(f.elements.get("connection-badge").dataset.state, label.toLowerCase());
+}
+
+test("passive badge is outside diagnostics, accessible, safe-area anchored and pointer transparent", async () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  const markup = html.slice(html.indexOf('<div id="connection-badge"'), html.indexOf('<section id="scene-instructions"'));
+  assert.match(markup, /role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(markup, /POWERED BY WOVEN.HOST/);
+  assert.doesNotMatch(markup, /<(button|a|input)\b|tabindex|hidden>/);
+  assert.ok(html.indexOf('id="connection-badge"') < html.indexOf('id="connection-controls"'));
+  assert.match(html, /id="subtitle-controls"[^>]* hidden/);
+  const rule = css.match(/\.connection-badge \{([^}]+)\}/)[1];
+  assert.match(rule, /position: fixed/);
+  assert.match(rule, /top:.*env\(safe-area-inset-top\)/);
+  assert.match(rule, /right:.*env\(safe-area-inset-right\)/);
+  assert.match(rule, /pointer-events: none/);
+  assert.match(css, /\.connection-badge \* \{ pointer-events: none; \}/);
+  assert.match(css, /\.connection-dot \{ width: 8px; height: 8px/);
+  assert.match(css, /\.connection-brand \{[^}]*letter-spacing:[^}]*text-transform: uppercase/s);
+  assert.doesNotMatch(css, /html\[data-weaver-presentation="minimal"\][^{]*connection-badge/);
+});
+
+test("badge waits through boot, admission and subscription for accepted assigned entity", async (t) => {
+  const admission = deferred(), assignment = deferred();
+  const f = await shell(t, { connect: (client) => {
+    client.admitWithCancellation = () => admission.promise;
+    const recv = client.recvTimeout;
+    client.recvTimeout = async () => { await assignment.promise; return recv(); };
+    return client;
+  } });
+  badge(f, "Offline");
+  globalThis.weaverSceneReady(); await flush();
+  badge(f, "Connecting");
+  admission.resolve({ kind: "admission", result: { status: 1 } }); await flush();
+  badge(f, "Connecting");
+  assignment.resolve(); await flush();
+  badge(f, "Connected");
+  await f.advance(120_000);
+  badge(f, "Connected"); // A quiet room is not a transport failure.
+});
+
+for (const [name, options, label] of [
+  ["unsupported", { noWebTransport: true }, "Unavailable"],
+  ["failed setup", { connect: async () => { throw new Error("setup failed"); } }, "Offline"],
+  ["rejected realtime inbox", { acceptConnection: false }, "Offline"],
+  ["initially offline", { onLine: false }, "Offline"],
+]) test(`badge is honest for ${name}`, async (t) => {
+  const f = await shell(t, options);
+  globalThis.weaverSceneReady(); await flush();
+  badge(f, label);
+});
+
+for (const loss of ["recv null", "datagram null", "recv error", "publish error", "manual", "hidden", "pagehide", "fatal", "offline"]) {
+  test(`badge leaves green on ${loss} and only reconnects explicitly`, async (t) => {
+    const f = await online(t);
+    badge(f, "Connected");
+    if (loss === "recv null") f.client.send(null);
+    if (loss === "datagram null") f.client.sendDatagram(null);
+    if (loss === "recv error") f.client.close();
+    if (loss === "publish error") {
+      f.client.publishEvent = async () => { throw new Error("publish closed"); };
+      globalThis.weaverRealtimePublishReliable(99n, '{"kind":"chat","text":"test"}');
+    }
+    if (loss === "manual") f.elements.get("disconnect-network").dispatchEvent(new Event("click"));
+    if (loss === "hidden") await f.visible("hidden");
+    if (loss === "pagehide") f.window.dispatchEvent(new Event("pagehide"));
+    if (loss === "fatal") globalThis.weaverSceneFatal("device lost");
+    if (loss === "offline") {
+      f.window.navigator.onLine = false;
+      f.window.dispatchEvent(new Event("offline"));
+      badge(f, "Disconnected");
+      f.window.navigator.onLine = true;
+      f.window.dispatchEvent(new Event("online"));
+    }
+    await flush();
+    badge(f, loss === "fatal" ? "Unavailable" : "Disconnected");
+    assert.equal(f.client.closed(), true);
+    if (loss === "hidden") await f.visible("visible");
+    if (loss === "pagehide") {
+      const event = new Event("pageshow"); Object.defineProperty(event, "persisted", { value: true });
+      f.window.dispatchEvent(event);
+    }
+    assert.equal(f.harness.connects.length, 1);
+    if (loss === "fatal") { globalThis.weaverSceneReady(); badge(f, "Unavailable"); return; }
+    f.elements.get("join-network").dispatchEvent(new Event("click"));
+    badge(f, "Connecting");
+    await flush(); badge(f, "Connected");
+  });
+}
+
+test("offline cancels pending transport and late completion cannot turn the badge green", async (t) => {
+  const handshake = deferred();
+  const f = await shell(t, { connect: () => handshake.promise });
+  globalThis.weaverSceneReady(); await flush(); badge(f, "Connecting");
+  f.window.navigator.onLine = false; f.window.dispatchEvent(new Event("offline"));
+  badge(f, "Offline");
+  f.window.navigator.onLine = true; f.window.dispatchEvent(new Event("online"));
+  handshake.resolve(f.client); await flush();
+  badge(f, "Offline"); assert.equal(f.client.closed(), true);
+  assert.equal(f.harness.connects.length, 1);
+});
+
 async function online(t, options = {}) {
   const f = await shell(t, options);
   globalThis.weaverSceneReady();
@@ -652,9 +1334,81 @@ async function online(t, options = {}) {
   return f;
 }
 
-function pose(sequence, payload = new Uint8Array(25)) {
+function posePayload(version = 1, seat = 0) {
+  const payload = new Uint8Array(version === 1 ? 25 : 26);
+  payload[0] = version;
+  if (version === 2) payload[1] = seat;
+  const view = new DataView(payload.buffer);
+  [1, 2, 3, 0, 0, -1].forEach((value, index) => view.setFloat32(version + index * 4, value, true));
+  return payload;
+}
+
+function pose(sequence, payload = posePayload()) {
   globalThis.weaverRealtimePublishPositionedUnreliable(BigInt(sequence), 1, 2, 3, payload);
 }
+
+function malformedPosePayloads() {
+  const unknown = posePayload(); unknown[0] = 3;
+  const wrongLegacyLength = new Uint8Array(26); wrongLegacyLength[0] = 1;
+  const wrongSeatedLength = new Uint8Array(25); wrongSeatedLength[0] = 2;
+  return [null, undefined, [], new ArrayBuffer(25), new Uint8Array(), new Uint8Array(25),
+    posePayload().slice(0, 24), unknown, wrongLegacyLength, wrongSeatedLength, posePayload(2, 25), posePayload(2, 255)];
+}
+
+test("both pose versions publish unchanged copied bytes on the positioned datagram channel", async (t) => {
+  const f = await online(t);
+  const payloads = [posePayload(), ...Array.from({ length: 25 }, (_, seat) => posePayload(2, seat))];
+  for (const [index, payload] of payloads.entries()) {
+    const expected = payload.slice();
+    const backing = new Uint8Array(payload.length + 8);
+    backing.set(payload, 4);
+    const wasmView = backing.subarray(4, 4 + payload.length);
+    pose(index + 1, wasmView);
+    wasmView.fill(255);
+    await flush();
+    const published = f.client.publishes.at(-1);
+    assert.equal(published.kind, "pose"); assert.equal(published.channel, 4n);
+    assert.equal(published.sequence, BigInt(index + 1));
+    assert.deepEqual(published.position, { x: 1, y: 2, z: 3 });
+    assert.deepEqual(published.payload, expected);
+  }
+  assert.equal(f.client.publishes.length, payloads.length);
+  assert.throws(() => globalThis.weaverRealtimePublishUnreliable(99n, posePayload(2, 1)), /rejects unpositioned/);
+});
+
+test("outgoing pose headers reject unknown versions, wrong lengths and invalid seat codes without a fallback", async (t) => {
+  const f = await online(t, { publishRateHz: "4" });
+  pose(1); await flush();
+  pose(2, posePayload(2, 8));
+  for (const payload of malformedPosePayloads()) {
+    assert.throws(() => globalThis.weaverRealtimePublishPositionedUnreliable(3n, 1, 2, 3, payload), /pose payload must be version 1/);
+  }
+  assert.throws(() => globalThis.weaverRealtimePublishPositionedUnreliable(4n, NaN, 2, 3, posePayload(2)), /finite coordinates/);
+  await f.advance(260);
+  assert.deepEqual(f.client.publishes.map(call => call.sequence), [1n, 2n]);
+  assert.deepEqual(f.client.publishes.at(-1).payload, posePayload(2, 8));
+  assert.equal(f.client.closed(), false);
+});
+
+test("incoming legacy and seated poses retain scope/delivery gates and forward opaque bytes to Rust", async (t) => {
+  const f = await online(t);
+  const envelope = { namespaceId: 2n, sessionId: 2n, spaceId: 3n, spaceEpoch: 1n,
+    channelId: 4n, payloadTypeId: 1n, entityId: 8n, senderSequence: 1n, messageKind: 21, deliveryClass: 3 };
+  for (const payload of malformedPosePayloads()) { f.client.sendDatagram({ ...envelope, payload }); await flush(); }
+  for (const invalid of [{ namespaceId: 99n }, { sessionId: 99n }, { spaceId: 99n }, { spaceEpoch: 99n },
+    { channelId: 1n }, { payloadTypeId: 2n }, { entityId: null }, { entityId: 7n }, { messageKind: 20 }, { deliveryClass: 1 }]) {
+    f.client.sendDatagram({ ...envelope, payload: posePayload(2, 1), ...invalid }); await flush();
+  }
+  assert.deepEqual(f.harness.events.filter(event => event[0] === "pose"), []);
+  const payloads = [posePayload(), ...Array.from({ length: 25 }, (_, seat) => posePayload(2, seat))];
+  for (const [index, payload] of payloads.entries()) {
+    f.client.sendDatagram({ ...envelope, senderSequence: BigInt(index + 1), payload }); await flush();
+  }
+  assert.deepEqual(f.harness.events.filter(event => event[0] === "pose"),
+    payloads.map((payload, index) => ["pose", 8n, BigInt(index + 1), payload]));
+  assert.equal(f.client.closed(), false);
+  assert.deepEqual(f.client.publishes, []);
+});
 
 function assertSharedSpacing(publishes, spacing = 260) {
   for (let i = 1; i < publishes.length; i += 1) {
@@ -699,7 +1453,7 @@ test("paced reliable FIFO keeps latest replacement ordering ahead of the newest 
   globalThis.weaverRealtimePublishLatest(5n, "fixture new latest");
   globalThis.weaverRealtimePublishReliable(6n, "fixture chat two");
   pose(7);
-  const payload = new Uint8Array(25).fill(8);
+  const payload = posePayload(2, 8);
   pose(8, payload);
   payload.fill(99); // The bridge must not retain a view into caller/WASM memory.
   await f.advance(259);
@@ -709,7 +1463,7 @@ test("paced reliable FIFO keeps latest replacement ordering ahead of the newest 
   assert.deepEqual(f.client.publishes.map(({ kind, sequence, at }) => [kind, sequence, at]), [
     ["event", 1n, 0], ["event", 4n, 260], ["event", 5n, 520], ["event", 6n, 780], ["pose", 8n, 1_040],
   ]);
-  assert.deepEqual(f.client.publishes.at(-1).payload, new Uint8Array(25).fill(8));
+  assert.deepEqual(f.client.publishes.at(-1).payload, posePayload(2, 8));
   assert.deepEqual(f.client.publishes.at(-1).position, { x: 1, y: 2, z: 3 });
   assertSharedSpacing(f.client.publishes);
 });
@@ -948,7 +1702,7 @@ test("startup without the renderer callback times out and cannot be revived by a
   t.mock.timers.tick(20_000);
   globalThis.weaverSceneReady();
   await flush();
-  assert.match(f.elements.get("network-status").textContent, /startup timed out/);
+  assert.match(f.elements.get("network-status").textContent, /loading stalled/);
   assert.equal(f.elements.get("join-network").disabled, true);
   assert.equal(f.harness.fetches.length, 0);
 });
@@ -964,7 +1718,7 @@ test("empty bootstrap metas do not autoconnect the public operator mode", async 
 });
 
 function expectedBoot(minimal) {
-  return [["init"], ["initialized"], ["minimal", minimal], ["name", "BrightCalm"], ["start"]];
+  return [["init"], ["initialized"], ["minimal", minimal], ["name", "Bright Otter"], ["start"]];
 }
 
 for (const [presentation, minimal] of [[undefined, false], ["minimal", true], ["immersive", false],
@@ -973,7 +1727,7 @@ for (const [presentation, minimal] of [[undefined, false], ["minimal", true], ["
     const f = await shell(t, { presentation });
     assert.deepEqual(f.harness.bootEvents, expectedBoot(minimal));
     assert.deepEqual(f.harness.startState, { joinDisabled: true, fetchCount: 0, connectionCount: 0 });
-    assert.equal(f.elements.get("display-name").value, "BrightCalm");
+    assert.equal(f.elements.get("display-name").value, "Bright Otter");
     assert.equal(f.harness.fetches.length, 0);
     assert.equal(f.harness.connects.length, 0);
     globalThis.weaverSceneReady();
@@ -1050,7 +1804,10 @@ test("explicit scene startup failures stay fatal and never join", async (t) => {
 
 function key(f, type, key, options = {}) {
   const event = new KeyboardFixtureEvent(type, { key, code: key === "Enter" ? "Enter" : "Key" + key.toUpperCase(), ...options });
-  if (options.target) Object.defineProperty(event, "composedPath", { value: () => [options.target, f.window] });
+  if (options.target) {
+    Object.defineProperty(event, "composedPath", { value: () => [options.target, f.window] });
+    Object.defineProperty(event, "target", { value: options.target });
+  }
   f.window.dispatchEvent(event);
   return event;
 }
@@ -1066,7 +1823,7 @@ test("host callbacks are preserved, Rust alone echoes accepted chat, and decimal
   f.harness.flushChat();
   const remote = ["18446744073709551615", "Visitor", "validated remote", false];
   globalThis.weaverChatMessage(...remote); // Rust's accepted remote notification seam.
-  assert.deepEqual(messages, [["7", "BrightCalm", "hello 🌍", true], remote]);
+  assert.deepEqual(messages, [["7", "Bright Otter", "hello 🌍", true], remote]);
   const payload = new TextEncoder().encode('{"kind":"chat","version":1,"display_name":"Raw","text":"not yet accepted"}');
   f.client.send({ namespaceId: 2n, sessionId: 2n, spaceId: 3n, spaceEpoch: 1n, channelId: 1n,
     payloadTypeId: 1n, entityId: 8n, senderSequence: 1n, messageKind: 20, payload });
@@ -1172,6 +1929,8 @@ test("explicit resume focuses the scene and requests mouse lock without syntheti
   canvas.addEventListener("click", () => clicks += 1);
   assert.equal(globalThis.weaverResumeGameInput(), false);
   globalThis.weaverSceneReady();
+  f.continueMuted();
+  canvas.focusCount = 0;
   await flush();
   globalThis.weaverSetChatFocus(true);
   assert.equal(globalThis.weaverResumeGameInput(), false);
@@ -1303,7 +2062,7 @@ for (const trigger of ["disconnect", "pagehide", "hidden", "scene-fatal", "realt
     assert.deepEqual(f.clients[1].publishes, []);
     assert.equal(globalThis.weaverSendChat("fresh"), true);
     f.harness.flushChat();
-    assert.deepEqual(messages, [["7", "BrightCalm", "fresh", true]]);
+    assert.deepEqual(messages, [["7", "Bright Otter", "fresh", true]]);
   });
 }
 
@@ -1344,7 +2103,7 @@ test("closing the host composer does not cancel a successfully queued send or ea
   f.harness.flushChat();
   f.harness.flushChat();
   await flush();
-  assert.deepEqual(messages, [["7", "BrightCalm", "submitted before close", true]]);
+  assert.deepEqual(messages, [["7", "Bright Otter", "submitted before close", true]]);
   assert.equal(f.client.publishes.length, 1);
 });
 

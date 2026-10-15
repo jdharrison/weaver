@@ -442,7 +442,7 @@ impl WgpuRenderer {
 
             let mesh_groups = group_mesh_instances(&snapshot.meshes);
             let mut mesh_draws = Vec::new();
-            for ((handle, texture_handle, _sampling_mode), instances) in mesh_groups {
+            for ((handle, texture_handle, _sampling_mode, _render_mode), instances) in mesh_groups {
                 if let Some(mesh) = self.meshes.get(&handle) {
                     let texture = texture_handle
                         .and_then(|handle| {
@@ -454,6 +454,8 @@ impl WgpuRenderer {
                     mesh_draws.push((mesh.clone(), texture, instances));
                 }
             }
+            // The mesh pipeline draws surfaces, then additive meshes in this
+            // same pass before sprites, sharing the established scene depth.
             self.mesh_pipeline.render(
                 &mut pass,
                 &self.context.device,

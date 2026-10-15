@@ -1,10 +1,16 @@
 //! Labeled theater blockout: north is -Z; all dimensions are in meters.
 
+mod projector;
+
+#[cfg(test)]
+pub(crate) const PROJECTOR_MESH_COUNT: usize = projector::MESH_COUNT;
+
 use glam::{Vec2, Vec3};
 use std::sync::OnceLock;
 use weaver_app_core::{AppAssets, CameraBounds, MeshAsset, TextureAsset};
 use weaver_render::{
-    MeshHandle, MeshInstance, MeshLighting, MeshTextureFit, RenderTransform, SpriteHandle,
+    MeshHandle, MeshInstance, MeshLighting, MeshRenderMode, MeshTextureFit, RenderTransform,
+    SpriteHandle,
 };
 use weaver_render_wgpu::Vertex;
 
@@ -13,7 +19,7 @@ pub(crate) const MIN_Z: f32 = -28.0;
 pub(crate) const MAX_Z: f32 = 10.0;
 pub(crate) const HEIGHT: f32 = 12.0;
 pub(crate) const LOBBY_LIGHT_LEVEL: f32 = 1.0;
-pub(crate) const AUDITORIUM_LIGHT_LEVEL: f32 = 0.18;
+pub(crate) const AUDITORIUM_LIGHT_LEVEL: f32 = 0.20;
 pub(crate) const PLAYER_RADIUS: f32 = 0.3;
 pub(crate) const SPAWN: Vec3 = Vec3::new(0.0, super::EYE_HEIGHT, MAX_Z - 2.0);
 const LOBBY_MIN: Vec2 = Vec2::new(-HALF_WIDTH, 0.0);
@@ -78,6 +84,11 @@ const SCREEN_HEIGHT: f32 = 19.0 / DEFAULT_VIDEO_ASPECT;
 const SCREEN_WIDTH: f32 = SCREEN_HEIGHT * SCREEN_ASPECT;
 const SCREEN_BOTTOM: f32 = 0.65;
 const SCREEN_TOP: f32 = SCREEN_BOTTOM + SCREEN_HEIGHT;
+pub(crate) const SCREEN_TARGET: Vec3 = Vec3::new(
+    SCREEN_CENTER_X,
+    SCREEN_BOTTOM.midpoint(SCREEN_TOP),
+    MIN_Z + 0.09,
+);
 
 const fn floor_profile(position: Vec3) -> &'static [(f32, f32)] {
     if position.z >= 0.0 {
@@ -131,7 +142,10 @@ pub(crate) fn fit_screen(
     }
     let mut changed = false;
     for instance in instances {
+        // Additive consumers opt into screen mapping explicitly; the lens uses
+        // fixed center sampling and must not acquire contain-fit metadata.
         if instance.texture != Some(screen_texture)
+            || (instance.render_mode == MeshRenderMode::Additive && instance.texture_fit.is_none())
             || instance.texture_fit.as_ref().is_some_and(|fit| {
                 fit.surface_aspect == SCREEN_ASPECT && fit.content_aspect == aspect
             })
@@ -147,66 +161,92 @@ pub(crate) fn fit_screen(
     changed
 }
 
+const CHAIR_HALF_WIDTH: f32 = 0.45;
+const CHAIR_HALF_DEPTH: f32 = 0.45;
+const CHAIR_BACK_HEIGHT: f32 = 0.95;
+const SEAT_HEIGHT: f32 = 0.48;
+const SEATED_EYE_HEIGHT: f32 = 1.25;
 #[cfg(test)]
-pub(crate) const SEAT_HEIGHT: f32 = 0.0;
-#[cfg(test)]
-pub(crate) const CHAIR_MESH_COUNT: usize = 0;
+pub(crate) const CHAIR_MESH_COUNT: usize = SEATS.len();
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Seat {
     pub(crate) id: &'static str,
+    /// Floor/base center, not a standing or seated eye. All chairs face -Z.
     pub(crate) position: Vec3,
 }
 
 impl Seat {
-    pub(crate) fn approach(self) -> Vec3 {
-        grounded_eye(self.position + Vec3::Z * 1.2)
+    const fn new(id: &'static str, x: f32, z: f32) -> Self {
+        Self {
+            id,
+            position: Vec3::new(x, floor_height(Vec3::new(x, 0.0, z)), z),
+        }
     }
 
-    #[cfg(test)]
+    /// Grounded standing exit: in front of the rear row, behind the middle row.
+    /// These sides avoid the rear NPC diagonal and the middle resident marks.
+    pub(crate) fn approach(self) -> Vec3 {
+        let offset = if self.position.z >= SIDE_ENTRY_MIN_Z {
+            -1.1
+        } else {
+            1.1
+        };
+        grounded_eye(self.position + Vec3::Z * offset)
+    }
+
     pub(crate) fn seated_eye(self) -> Vec3 {
-        self.position
+        self.position + Vec3::Y * SEATED_EYE_HEIGHT
+    }
+
+    /// Unexpanded world-space bounds for picking and the physical chair envelope.
+    pub(crate) fn bounds(self) -> (Vec3, Vec3) {
+        (
+            self.position + Vec3::new(-CHAIR_HALF_WIDTH, 0.0, -CHAIR_HALF_DEPTH),
+            self.position + Vec3::new(CHAIR_HALF_WIDTH, CHAIR_BACK_HEIGHT, CHAIR_HALF_DEPTH),
+        )
     }
 }
 
-// Legacy catalog IDs now describe standing viewing marks, not physical seats.
-pub(crate) const SEATS: [Seat; 8] = [
-    Seat {
-        id: "seat_a1",
-        position: grounded_eye(Vec3::new(-6.0, 0.0, -10.0)),
-    },
-    Seat {
-        id: "seat_a2",
-        position: grounded_eye(Vec3::new(-3.0, 0.0, -10.0)),
-    },
-    Seat {
-        id: "seat_a3",
-        position: grounded_eye(Vec3::new(0.0, 0.0, -10.0)),
-    },
-    Seat {
-        id: "seat_a4",
-        position: grounded_eye(Vec3::new(3.0, 0.0, -10.0)),
-    },
-    Seat {
-        id: "seat_b1",
-        position: grounded_eye(Vec3::new(-6.0, 0.0, -19.0)),
-    },
-    Seat {
-        id: "seat_b2",
-        position: grounded_eye(Vec3::new(-3.0, 0.0, -19.0)),
-    },
-    Seat {
-        id: "seat_b3",
-        position: grounded_eye(Vec3::new(0.0, 0.0, -19.0)),
-    },
-    Seat {
-        id: "seat_b4",
-        position: grounded_eye(Vec3::new(3.0, 0.0, -19.0)),
-    },
+// Two six-seat banks per flat leave a 3.1m center aisle. The original eight
+// entries retain their wire indices; new seats extend each bank outward.
+pub(crate) const SEAT_COUNT: usize = 24;
+pub(crate) const SEATS: [Seat; SEAT_COUNT] = [
+    Seat::new("seat_a1", -10.5, -9.5),
+    Seat::new("seat_a2", -8.75, -9.5),
+    Seat::new("seat_a3", -4.75, -9.5),
+    Seat::new("seat_a4", -3.0, -9.5),
+    Seat::new("seat_b1", -10.5, -17.5),
+    Seat::new("seat_b2", -8.75, -17.5),
+    Seat::new("seat_b3", -4.75, -17.5),
+    Seat::new("seat_b4", -3.0, -17.5),
+    Seat::new("seat_a5", -12.25, -9.5),
+    Seat::new("seat_a6", -14.0, -9.5),
+    Seat::new("seat_a7", -15.75, -9.5),
+    Seat::new("seat_a8", -17.5, -9.5),
+    Seat::new("seat_a9", -1.25, -9.5),
+    Seat::new("seat_a10", 0.5, -9.5),
+    Seat::new("seat_a11", 2.25, -9.5),
+    Seat::new("seat_a12", 4.0, -9.5),
+    Seat::new("seat_b5", -12.25, -17.5),
+    Seat::new("seat_b6", -14.0, -17.5),
+    Seat::new("seat_b7", -15.75, -17.5),
+    Seat::new("seat_b8", -17.5, -17.5),
+    Seat::new("seat_b9", -1.25, -17.5),
+    Seat::new("seat_b10", 0.5, -17.5),
+    Seat::new("seat_b11", 2.25, -17.5),
+    Seat::new("seat_b12", 4.0, -17.5),
 ];
 
+pub(crate) fn seat_index(id: &str) -> Option<u8> {
+    SEATS
+        .iter()
+        .position(|seat| seat.id == id)
+        .and_then(|index| u8::try_from(index).ok())
+}
+
 pub(crate) fn seat(id: &str) -> Option<Seat> {
-    SEATS.iter().copied().find(|seat| seat.id == id)
+    seat_index(id).map(|index| SEATS[usize::from(index)])
 }
 
 pub(crate) fn npc_waypoint(id: &str) -> Option<Vec3> {
@@ -226,6 +266,8 @@ pub(crate) fn npc_waypoint(id: &str) -> Option<Vec3> {
         "auditorium_entry" => Vec3::new(8.0, eye, -10.5),
         "row_a" => Vec3::new(8.0, eye, -10.0),
         "row_b" => Vec3::new(8.0, eye, -19.0),
+        "row_b_approach_aisle" => Vec3::new(8.0, eye, -16.4),
+        "auditorium_back_aisle" => Vec3::new(8.0, eye, -7.5),
         "auditorium_back" => Vec3::new(SCREEN_CENTER_X, eye, -6.0),
         "auditorium_left" => Vec3::new(-17.0, eye, -19.0),
         "auditorium_right" => Vec3::new(4.0, eye, -19.0),
@@ -435,22 +477,22 @@ impl Theater {
                 Vec3::new(
                     SCREEN_CENTER_X - half_video_width,
                     SCREEN_BOTTOM,
-                    AUDITORIUM_MIN.y + 0.09,
+                    SCREEN_TARGET.z,
                 ),
                 Vec3::new(
                     SCREEN_CENTER_X + half_video_width,
                     SCREEN_BOTTOM,
-                    AUDITORIUM_MIN.y + 0.09,
+                    SCREEN_TARGET.z,
                 ),
                 Vec3::new(
                     SCREEN_CENTER_X + half_video_width,
                     SCREEN_TOP,
-                    AUDITORIUM_MIN.y + 0.09,
+                    SCREEN_TARGET.z,
                 ),
                 Vec3::new(
                     SCREEN_CENTER_X - half_video_width,
                     SCREEN_TOP,
-                    AUDITORIUM_MIN.y + 0.09,
+                    SCREEN_TARGET.z,
                 ),
             ],
             [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
@@ -469,8 +511,11 @@ impl Theater {
             scene.assets.textures[4].handle,
             DEFAULT_VIDEO_ASPECT,
         );
-        // The auditorium intentionally has no chairs or seat colliders.
         scene.posters();
+        for seat in SEATS {
+            scene.chair(seat);
+        }
+        projector::append(&mut scene);
         apply_room_lighting(
             &mut scene.instances,
             LOBBY_LIGHT_LEVEL,
@@ -548,6 +593,98 @@ impl Theater {
             light.position.y = ceiling_height(light.position) - 0.3;
         }
         self.instances.push(instance);
+    }
+
+    fn chair(&mut self, seat: Seat) {
+        let upholstery = [0.42, 0.11, 0.15, 1.0];
+        let frame = [0.16, 0.17, 0.19, 1.0];
+        // Pedestal, cushion, low back (+Z), then the two armrests. One mesh per
+        // chair keeps the solid parts together without adding textures or draws per face.
+        let parts = [
+            (
+                Vec3::new(-0.28, 0.0, -0.28),
+                Vec3::new(0.28, 0.36, 0.28),
+                frame,
+            ),
+            (
+                Vec3::new(-0.33, 0.36, -CHAIR_HALF_DEPTH),
+                Vec3::new(0.33, SEAT_HEIGHT, 0.30),
+                upholstery,
+            ),
+            (
+                Vec3::new(-CHAIR_HALF_WIDTH, 0.36, 0.30),
+                Vec3::new(CHAIR_HALF_WIDTH, CHAIR_BACK_HEIGHT, CHAIR_HALF_DEPTH),
+                upholstery,
+            ),
+            (
+                Vec3::new(-CHAIR_HALF_WIDTH, 0.36, -CHAIR_HALF_DEPTH),
+                Vec3::new(-0.33, 0.65, 0.30),
+                frame,
+            ),
+            (
+                Vec3::new(0.33, 0.36, -CHAIR_HALF_DEPTH),
+                Vec3::new(CHAIR_HALF_WIDTH, 0.65, 0.30),
+                frame,
+            ),
+        ];
+        let mut vertices = Vec::with_capacity(parts.len() * 24);
+        let mut indices = Vec::with_capacity(parts.len() * 36);
+        for (min, max, color) in parts {
+            let min = seat.position + min;
+            let max = seat.position + max;
+            let corners = [
+                Vec3::new(min.x, min.y, min.z),
+                Vec3::new(max.x, min.y, min.z),
+                Vec3::new(max.x, max.y, min.z),
+                Vec3::new(min.x, max.y, min.z),
+                Vec3::new(min.x, min.y, max.z),
+                Vec3::new(max.x, min.y, max.z),
+                Vec3::new(max.x, max.y, max.z),
+                Vec3::new(min.x, max.y, max.z),
+            ];
+            for face in [
+                [1, 0, 3, 2],
+                [4, 5, 6, 7],
+                [0, 4, 7, 3],
+                [5, 1, 2, 6],
+                [3, 7, 6, 2],
+                [0, 1, 5, 4],
+            ] {
+                let points = face.map(|index| corners[index]);
+                let normal = (points[1] - points[0])
+                    .cross(points[2] - points[0])
+                    .normalize();
+                let base = u16::try_from(vertices.len()).expect("bounded chair mesh");
+                vertices.extend(points.map(|position| Vertex {
+                    position: position.to_array(),
+                    normal: normal.to_array(),
+                    color,
+                    uv: [0.0; 2],
+                }));
+                indices.extend([0, 1, 2, 0, 2, 3].map(|index| base + index));
+            }
+        }
+        let handle = MeshHandle::new();
+        self.assets
+            .meshes
+            .push(MeshAsset::new(handle, vertices, indices));
+        let mut instance = MeshInstance::new(handle, RenderTransform::default());
+        instance.lighting = Some(MeshLighting {
+            position: Vec3::new(
+                SCREEN_CENTER_X,
+                HEIGHT - 0.3,
+                AUDITORIUM_MIN.y.midpoint(AUDITORIUM_MAX.y),
+            ),
+            ambient: 0.35,
+            intensity: 0.65,
+        });
+        self.instances.push(instance);
+        let (min, max) = seat.bounds();
+        self.colliders.push(Collider {
+            min: Vec2::new(min.x, min.z),
+            max: Vec2::new(max.x, max.z),
+            height: max.y,
+        });
     }
 
     fn posters(&mut self) {
@@ -693,7 +830,8 @@ pub(crate) fn apply_room_lighting(
     }
 }
 
-/// Physical box from floor to height; only movement expands its XZ footprint.
+/// Solid column from world Y=0 to an absolute top; raised floors hide its base.
+/// Walking clearance expands XZ; visibility uses the finite physical top.
 #[derive(Clone)]
 pub(crate) struct Collider {
     min: Vec2,
@@ -948,54 +1086,304 @@ mod tests {
     }
 
     #[test]
-    fn legacy_seats_are_chair_free_standing_marks_with_clear_paths() {
-        let scene = Theater::new();
-        assert_eq!(scene.colliders.len(), 10);
-        assert_eq!(scene.instances.len(), 44);
-        assert_eq!(CHAIR_MESH_COUNT, 0);
-        assert_eq!(SEAT_HEIGHT, 0.0);
-        for seat in SEATS {
-            let row = eye(8.0, seat.approach().z);
+    fn seat_catalog_has_floor_bases_physical_bounds_and_grounded_exits() {
+        assert_eq!(SEATS.len(), SEAT_COUNT);
+        assert_eq!(SEAT_COUNT, 24);
+        let mut ids = std::collections::HashSet::new();
+        for (index, chair) in SEATS.into_iter().enumerate() {
+            assert!(ids.insert(chair.id));
+            let (rear, number) = match index {
+                0..4 => (true, index + 1),
+                4..8 => (false, index - 3),
+                8..16 => (true, index - 3),
+                _ => (false, index - 11),
+            };
+            let x = [
+                -10.5, -8.75, -4.75, -3.0, -12.25, -14.0, -15.75, -17.5, -1.25, 0.5, 2.25, 4.0,
+            ][number - 1];
+            let z = if rear { -9.5 } else { -17.5 };
+            let floor = if rear { 2.4 } else { 1.2 };
             assert_eq!(
-                seat.position.y,
-                floor_height(seat.position) + crate::EYE_HEIGHT
+                chair.id,
+                format!("seat_{}{}", if rear { 'a' } else { 'b' }, number)
             );
-            assert_eq!(seat.seated_eye(), seat.position);
-            assert!(npc_path_clear(row, seat.approach(), &scene.colliders));
-            assert!(npc_path_clear(
-                seat.approach(),
-                seat.position,
-                &scene.colliders
+            assert_eq!(seat_index(chair.id), Some(index as u8));
+            assert_eq!(seat(chair.id), Some(chair));
+            assert_eq!(chair.position, Vec3::new(x, floor, z));
+            assert_eq!(chair.position.y, floor_height(chair.position));
+            assert_eq!(chair.seated_eye(), Vec3::new(x, floor + 1.25, z));
+            assert!(chair.approach().abs_diff_eq(
+                Vec3::new(
+                    x,
+                    floor + crate::EYE_HEIGHT,
+                    if rear { -10.6 } else { -16.4 }
+                ),
+                0.00001,
             ));
-            assert!(has_line_of_sight(
-                seat.approach(),
-                seat.seated_eye(),
-                &scene.colliders
-            ));
-            let resolved = resolve_movement(seat.approach(), seat.position, &scene.colliders);
-            assert!(resolved.abs_diff_eq(seat.position, 0.0001));
-            for other in SEATS {
-                assert!(npc_path_clear(
-                    seat.position,
-                    other.position,
-                    &scene.colliders
-                ));
-                assert!(
-                    resolve_movement(seat.position, other.position, &scene.colliders)
-                        .abs_diff_eq(other.position, 0.0001)
-                );
+            assert_eq!(
+                npc_waypoint(&format!("{}_approach", chair.id)),
+                Some(chair.approach())
+            );
+            let (min, max) = chair.bounds();
+            assert!((max - min).abs_diff_eq(Vec3::new(0.9, 0.95, 0.9), 0.00001));
+            assert_eq!(min.y, floor);
+            assert!(chair.seated_eye().y > max.y + crate::view::CAMERA_CLEARANCE);
+            for x in [min.x, max.x] {
+                for z in [min.z, max.z] {
+                    assert_eq!(floor_height(Vec3::new(x, 0.0, z)), floor);
+                }
             }
         }
+        assert!(seat("").is_none());
+        assert!(seat("seat_a0").is_none());
+        assert!(seat_index("seat_b13").is_none());
+        for z in [-9.5, -17.5] {
+            let mut row: Vec<_> = SEATS.iter().filter(|seat| seat.position.z == z).collect();
+            assert_eq!(row.len(), 12);
+            row.sort_by(|a, b| a.position.x.total_cmp(&b.position.x));
+            assert_eq!(
+                row.iter()
+                    .filter(|seat| seat.position.x < SCREEN_CENTER_X)
+                    .count(),
+                6
+            );
+            assert_eq!(
+                row.iter()
+                    .filter(|seat| seat.position.x > SCREEN_CENTER_X)
+                    .count(),
+                6
+            );
+            assert!((row[6].bounds().0.x - row[5].bounds().1.x - 3.1).abs() < 0.00001);
+            for pair in row.windows(2) {
+                assert!(pair[0].bounds().1.x < pair[1].bounds().0.x);
+            }
+        }
+    }
+
+    #[test]
+    fn chair_meshes_fill_their_bounds_with_low_backs_and_auditorium_lighting() {
+        let mut scene = Theater::new();
+        assert_eq!(scene.colliders.len(), 10 + SEATS.len());
+        assert_eq!(
+            scene.assets.meshes.len(),
+            44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
+        );
+        assert_eq!(
+            scene.instances.len(),
+            44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
+        );
+        for (index, chair) in SEATS.into_iter().enumerate() {
+            let mesh = &scene.assets.meshes[44 + index];
+            let instance = &scene.instances[44 + index];
+            let collider = &scene.colliders[10 + index];
+            let (min, max) = chair.bounds();
+            assert_eq!(mesh.vertices.len(), 5 * 24);
+            assert_eq!(mesh.indices.len(), 5 * 36);
+            let mut mesh_min = Vec3::splat(f32::INFINITY);
+            let mut mesh_max = Vec3::splat(f32::NEG_INFINITY);
+            for vertex in &mesh.vertices {
+                let point = Vec3::from(vertex.position);
+                mesh_min = mesh_min.min(point);
+                mesh_max = mesh_max.max(point);
+                assert!(point.y >= floor_height(point));
+                if (point.y - max.y).abs() < 0.00001 {
+                    assert!(point.z >= chair.position.z + 0.30 - 0.00001);
+                }
+            }
+            assert!(mesh_min.abs_diff_eq(min, 0.00001));
+            assert!(mesh_max.abs_diff_eq(max, 0.00001));
+            assert!(mesh.vertices.iter().any(|vertex| {
+                (vertex.position[1] - chair.position.y - SEAT_HEIGHT).abs() < 0.00001
+            }));
+            assert_eq!(collider.min, Vec2::new(min.x, min.z));
+            assert_eq!(collider.max, Vec2::new(max.x, max.z));
+            assert_eq!(collider.height, max.y);
+            assert_eq!(instance.mesh, mesh.handle);
+            assert_eq!(instance.transform, RenderTransform::IDENTITY);
+            assert_eq!(instance.texture, None);
+            assert_eq!(instance.emissive, 0.0);
+            let light = instance.lighting.unwrap();
+            assert!(in_auditorium(light.position));
+            assert!((light.ambient + light.intensity - AUDITORIUM_LIGHT_LEVEL).abs() < 0.00001);
+        }
+        for level in [0.0, 0.6, 1.0] {
+            apply_room_lighting(
+                &mut scene.instances,
+                1.0,
+                level,
+                scene.assets.textures[4].handle,
+            );
+            for instance in &scene.instances[44..44 + CHAIR_MESH_COUNT] {
+                let light = instance.lighting.unwrap();
+                assert_eq!(light.ambient, 0.35 * level);
+                assert_eq!(light.intensity, 0.65 * level);
+            }
+        }
+    }
+
+    #[test]
+    fn chair_aisles_and_exits_preserve_entry_ramps_and_authored_npc_routes() {
+        let scene = Theater::new();
+        // Construction validates every resident anchor and complete authored leg,
+        // not just selected time samples or the named route endpoints.
+        let _npcs = crate::npcs::NpcRuntime::new(&scene.colliders);
+        for chair in SEATS {
+            let approach = chair.approach();
+            let route = [
+                SPAWN,
+                npc_waypoint("lobby_aisle").unwrap(),
+                npc_waypoint("passage_lobby").unwrap(),
+                npc_waypoint("corridor_turn").unwrap(),
+                npc_waypoint("auditorium_entry").unwrap(),
+                eye(SCREEN_CENTER_X, -10.6),
+                eye(SCREEN_CENTER_X, approach.z),
+                approach,
+            ];
+            for pair in route.windows(2) {
+                for (from, to) in [(pair[0], pair[1]), (pair[1], pair[0])] {
+                    assert!(
+                        npc_path_clear(from, to, &scene.colliders),
+                        "{}: {from:?} -> {to:?}",
+                        chair.id
+                    );
+                    assert!(resolve_movement(from, to, &scene.colliders).abs_diff_eq(to, 0.0001));
+                }
+            }
+            assert!(has_line_of_sight(
+                approach,
+                chair.seated_eye(),
+                &scene.colliders
+            ));
+        }
         assert!(!npc_path_clear(
-            eye(-5.0, 3.2),
-            eye(-5.0, -2.8),
+            eye(8.0, -10.5),
+            eye(-6.75, -6.0),
             &scene.colliders
         ));
-        assert!(npc_path_clear(
-            eye(9.5, 3.2),
-            eye(9.5, -5.8),
-            &scene.colliders
-        ));
+        for (from, to) in [
+            (eye(8.0, -10.5), eye(8.0, -7.5)),
+            (eye(8.0, -7.5), eye(-6.75, -6.0)),
+            (eye(8.0, -19.0), eye(-17.0, -19.0)),
+            (eye(8.0, -10.5), eye(8.0, -26.0)),
+            (eye(SCREEN_CENTER_X, -6.0), eye(SCREEN_CENTER_X, -26.0)),
+        ] {
+            for (from, to) in [(from, to), (to, from)] {
+                assert!(npc_path_clear(from, to, &scene.colliders));
+                assert!(resolve_movement(from, to, &scene.colliders).abs_diff_eq(to, 0.0001));
+            }
+        }
+        for z in [-9.5, -17.5] {
+            for x in [-9.625, SCREEN_CENTER_X, -3.875] {
+                for (from, to) in [(z - 1.1, z + 1.1), (z + 1.1, z - 1.1)] {
+                    assert!(npc_path_clear(eye(x, from), eye(x, to), &scene.colliders));
+                    assert!(
+                        resolve_movement(eye(x, from), eye(x, to), &scene.colliders)
+                            .abs_diff_eq(eye(x, to), 0.0001)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chair_footprints_block_walking_in_both_directions_without_tunneling() {
+        let scene = Theater::new();
+        for chair in SEATS {
+            let (min, max) = chair.bounds();
+            for (from, to, stop) in [
+                (min.z - 1.0, max.z + 1.0, min.z - PLAYER_RADIUS),
+                (max.z + 1.0, min.z - 1.0, max.z + PLAYER_RADIUS),
+            ] {
+                let start = eye(chair.position.x, from);
+                let end = eye(chair.position.x, to);
+                assert!(!npc_path_clear(start, end, &scene.colliders));
+                assert!(
+                    resolve_movement(start, end, &scene.colliders)
+                        .abs_diff_eq(eye(chair.position.x, stop), 0.0001)
+                );
+            }
+            for (from, to, stop) in [
+                (min.x - 0.5, max.x + 0.5, min.x - PLAYER_RADIUS),
+                (max.x + 0.5, min.x - 0.5, max.x + PLAYER_RADIUS),
+            ] {
+                let start = eye(from, chair.position.z);
+                let end = eye(to, chair.position.z);
+                assert!(!npc_path_clear(start, end, &scene.colliders));
+                assert!(
+                    resolve_movement(start, end, &scene.colliders)
+                        .abs_diff_eq(eye(stop, chair.position.z), 0.0001)
+                );
+            }
+            assert!(!npc_path_clear(
+                chair.approach(),
+                grounded_eye(chair.position),
+                &scene.colliders
+            ));
+        }
+    }
+
+    #[test]
+    fn chair_visibility_and_camera_sweeps_use_finite_world_space_tops() {
+        let scene = Theater::new();
+        let radius = crate::view::CAMERA_CLEARANCE;
+        for chair in SEATS {
+            let (min, max) = chair.bounds();
+            let low_y = chair.position.y + 0.7;
+            for (from, to, stop) in [
+                (min.z - 0.6, max.z + 0.6, min.z - radius),
+                (max.z + 0.6, min.z - 0.6, max.z + radius),
+            ] {
+                let low_start = Vec3::new(chair.position.x, low_y, from);
+                let low_end = Vec3::new(chair.position.x, low_y, to);
+                assert!(!has_line_of_sight(low_start, low_end, &scene.colliders));
+                assert!(
+                    clip_camera(low_start, low_end, radius, &scene.colliders)
+                        .abs_diff_eq(Vec3::new(chair.position.x, low_y, stop), 0.00001)
+                );
+                let sight_start = Vec3::new(chair.position.x, max.y + 0.01, from);
+                let sight_end = Vec3::new(chair.position.x, max.y + 0.01, to);
+                assert!(has_line_of_sight(sight_start, sight_end, &scene.colliders));
+                let high_start = sight_start + Vec3::Y * radius;
+                let high_end = sight_end + Vec3::Y * radius;
+                assert!(
+                    clip_camera(high_start, high_end, radius, &scene.colliders)
+                        .abs_diff_eq(high_end, 0.00001)
+                );
+            }
+            let seated = chair.seated_eye();
+            let down = clip_camera(seated, chair.position, radius, &scene.colliders);
+            assert!(down.abs_diff_eq(Vec3::new(seated.x, max.y + radius, seated.z), 0.00001));
+            assert_eq!(
+                clip_camera(seated, seated, radius, &scene.colliders),
+                seated
+            );
+            assert_eq!(
+                clip_camera(seated, seated + Vec3::Y, radius, &scene.colliders),
+                seated + Vec3::Y
+            );
+        }
+    }
+
+    #[test]
+    fn every_seated_eye_has_clear_static_sight_lines_to_the_cinema_surface() {
+        let scene = Theater::new();
+        assert_eq!(SCREEN_TARGET.z, -27.91);
+        for chair in SEATS {
+            for x in [
+                SCREEN_CENTER_X - SCREEN_WIDTH * 0.5,
+                SCREEN_CENTER_X,
+                SCREEN_CENTER_X + SCREEN_WIDTH * 0.5,
+            ] {
+                for y in [SCREEN_BOTTOM, SCREEN_TARGET.y, SCREEN_TOP] {
+                    let target = Vec3::new(x, y, SCREEN_TARGET.z);
+                    assert!(
+                        has_line_of_sight(chair.seated_eye(), target, &scene.colliders),
+                        "{}: screen {target:?}",
+                        chair.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1154,11 +1542,21 @@ mod tests {
     #[test]
     fn sight_uses_physical_planes_passage_and_actual_obstacle_heights() {
         let scene = Theater::new();
-        assert!(
+        assert_eq!(
             scene
                 .colliders
                 .iter()
-                .all(|collider| collider.height == HEIGHT)
+                .filter(|collider| collider.height == HEIGHT)
+                .count(),
+            10
+        );
+        assert_eq!(
+            scene
+                .colliders
+                .iter()
+                .filter(|collider| collider.height < HEIGHT)
+                .count(),
+            SEATS.len()
         );
         assert!(!has_line_of_sight(
             eye(0.0, 3.0),
@@ -1331,7 +1729,7 @@ mod tests {
             })
         );
         for (index, instance) in scene.instances.iter().enumerate() {
-            if index != screen_index {
+            if index != screen_index && instance.render_mode == MeshRenderMode::Surface {
                 assert!(instance.texture_fit.is_none());
             }
         }
@@ -1355,7 +1753,7 @@ mod tests {
             ),
             (1, 1)
         );
-        assert_eq!(scene.colliders.len(), 10);
+        assert_eq!(scene.colliders.len(), 10 + SEATS.len());
     }
 
     #[test]
@@ -1487,10 +1885,14 @@ mod tests {
         ] {
             assert!(fit_screen(&mut scene.instances, texture, aspect));
             let mut expected = before.clone();
-            expected[index].texture_fit = Some(MeshTextureFit {
-                surface_aspect: SCREEN_ASPECT,
-                content_aspect: aspect,
-            });
+            for instance in &mut expected {
+                if instance.texture == Some(texture) && instance.texture_fit.is_some() {
+                    instance.texture_fit = Some(MeshTextureFit {
+                        surface_aspect: SCREEN_ASPECT,
+                        content_aspect: aspect,
+                    });
+                }
+            }
             assert_eq!(scene.instances, expected);
             assert_eq!(scene.assets.meshes[index].indices, indices);
             let after: Vec<_> = scene.assets.meshes[index]
@@ -1574,7 +1976,7 @@ mod tests {
     #[test]
     fn seven_posters_fit_frames_preserve_ratios_and_stay_on_clear_lobby_walls() {
         let scene = Theater::new();
-        assert_eq!(scene.colliders.len(), 10);
+        assert_eq!(scene.colliders.len(), 10 + SEATS.len());
         let normals = [
             Vec3::X,
             Vec3::Z,
@@ -1781,9 +2183,12 @@ mod tests {
                     .abs_diff_eq(normal, 0.000001)
             );
         }
-        // One extra ramp ceiling piece and the side-entry lintel.
-        assert_eq!(scene.instances.len(), 44);
-        assert_eq!(scene.colliders.len(), 10);
+        // Architectural meshes retain their order; chairs and the projector are appended.
+        assert_eq!(
+            scene.instances.len(),
+            44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
+        );
+        assert_eq!(scene.colliders.len(), 10 + SEATS.len());
         for mesh in scene.assets.meshes.iter().filter(|mesh| {
             scene.instances.iter().any(|instance| {
                 instance.mesh == mesh.handle
@@ -1958,7 +2363,10 @@ mod tests {
     #[test]
     fn every_rendered_floor_piece_matches_ground_queries_and_keeps_uv_tiles_continuous() {
         let scene = Theater::new();
-        assert_eq!(scene.assets.meshes.len(), 44);
+        assert_eq!(
+            scene.assets.meshes.len(),
+            44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
+        );
         for (index, mesh) in scene.assets.meshes[..8].iter().enumerate() {
             for triangle in mesh.indices.as_chunks::<3>().0 {
                 let points = triangle.map(|i| Vec3::from(mesh.vertices[usize::from(i)].position));
@@ -2034,7 +2442,7 @@ mod tests {
         let scene = Theater::new();
         for (from, to) in [
             (eye(-6.75, -26.0), eye(-6.75, -6.0)),
-            (eye(-17.0, -26.0), eye(7.0, -6.0)),
+            (eye(6.0, -26.0), eye(8.0, -6.0)),
             (eye(10.75, 8.0), eye(10.75, -10.5)),
             (eye(9.4, 8.0), eye(12.1, -10.5)),
             (eye(10.75, -10.5), eye(-17.0, -10.5)),

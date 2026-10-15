@@ -31,6 +31,20 @@ pub fn generate_user_name(
     .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
 }
 
+/// Generate a friendly `Adjective Noun` guest display name.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = GenerateGuestName)]
+pub fn generate_guest_name() -> String {
+    weaver_core::generate_guest_name()
+}
+
+/// Recognize the exact legacy two-distinct-adjective default name format.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = IsLegacyUserName)]
+pub fn is_legacy_user_name(name: &str) -> bool {
+    weaver_core::is_legacy_user_name(name)
+}
+
 /// Generate a fresh UUIDv4; persist and reuse it when a stable local ID is needed.
 ///
 /// This is not an authenticated identity or a Woven entity ID.

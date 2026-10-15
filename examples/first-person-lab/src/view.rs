@@ -11,6 +11,7 @@ pub(crate) const ZOOM_STEP: f32 = 0.5;
 const ZOOM_RESPONSE: f32 = 12.0;
 pub(crate) const CAMERA_CLEARANCE: f32 = 0.2;
 
+#[derive(Clone)]
 pub(crate) struct ViewRig {
     pub(crate) player: Camera,
     distance: f32,
@@ -26,6 +27,20 @@ impl ViewRig {
             target_distance: DEFAULT_DISTANCE,
             remembered_distance: DEFAULT_DISTANCE,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn preferences(&self) -> (f32, f32, f32) {
+        (
+            self.distance,
+            self.target_distance,
+            self.remembered_distance,
+        )
+    }
+
+    pub(crate) fn force_first_person(&mut self) {
+        self.distance = 0.0;
+        self.target_distance = 0.0;
     }
 
     pub(crate) fn third_person(&self) -> bool {
@@ -99,6 +114,36 @@ mod tests {
             rig.camera(0.0, &colliders).eye.distance(rig.player.eye),
             DEFAULT_DISTANCE
         );
+    }
+
+    #[test]
+    fn seated_override_and_restore_keep_all_zoom_preferences() {
+        let mut rig = ViewRig::new(Camera::default());
+        rig.apply_input(&InputFrame {
+            zoom_delta: -3.0,
+            ..InputFrame::default()
+        });
+        rig.camera(0.05, &[]);
+        let saved = rig.clone();
+        rig.force_first_person();
+        assert_eq!(rig.camera(0.0, &[]).eye, rig.player.eye);
+        assert!(!rig.third_person());
+        rig = saved.clone();
+        assert_eq!(rig.distance, saved.distance);
+        assert_eq!(rig.target_distance, saved.target_distance);
+        assert_eq!(rig.remembered_distance, saved.remembered_distance);
+        rig.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        let saved_first = rig.clone();
+        rig.force_first_person();
+        rig = saved_first;
+        rig.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(rig.target_distance, saved.target_distance);
     }
 
     #[test]

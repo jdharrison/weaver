@@ -15,12 +15,17 @@
   <body>
     <canvas id="scene" tabindex="0" aria-label="Weaver first-person multiplayer room"></canvas>
 
-    <section class="instructions" aria-label="Controls">
+    <div id="connection-badge" class="connection-badge" data-state="offline" role="status" aria-live="polite" aria-atomic="true">
+      <div class="connection-badge-row"><span class="connection-dot" aria-hidden="true"></span><span id="connection-label">Offline</span></div>
+      <div class="connection-brand">POWERED BY WOVEN.HOST</div>
+    </div>
+
+    <section id="scene-instructions" class="instructions" aria-label="Controls">
       <p id="status" role="status">Loading Weaver GPU backend…</p>
       <p class="desktop-controls">Click for mouse look · <strong>WASD</strong> / arrows · Enter chats · Escape releases</p>
       <p class="touch-controls">Left touch moves · right touch looks · Chat is desktop-first (keyboard required)</p>
     </section>
-    <section class="connection-panel" aria-label="Connection and settings">
+    <section id="connection-controls" class="connection-panel" aria-label="Connection and settings">
       <div class="connection-status">
         <p id="network-status" role="status" aria-live="polite">Loading scene · if loading stalls, reload the page or check browser support.</p>
         <div class="network-actions">
@@ -59,6 +64,14 @@
     <!-- Decoder source only: Weaver renders the movie on the 3D theater screen. -->
     <video id="theater-video" hidden muted loop playsinline preload="metadata"></video>
 
+    <div id="theater-subtitle-hud" class="theater-subtitle-hud" aria-live="off" hidden></div>
+
+    <!-- Retain subtitle state bindings; the in-world control replaces this overlay. -->
+    <section id="subtitle-controls" class="subtitle-controls" aria-label="Movie subtitles" hidden>
+      <button id="theater-subtitles" type="button" aria-pressed="true" aria-describedby="theater-subtitle-explanation" disabled>Subtitles: on (required)</button>
+      <p id="theater-subtitle-explanation">Subtitles stay on while movie audio is not audible.</p>
+    </section>
+
     <section id="theater-controls" class="theater-controls" aria-label="Theater movie controls">
       <div class="theater-actions">
         <strong>Theater</strong>
@@ -72,12 +85,26 @@
         <button id="theater-mute" type="button" disabled>Unmute</button>
         <label>Volume <input id="theater-volume" type="range" min="0" max="1" step="0.01" value="0.4" disabled></label>
       </div>
+
       <label class="theater-seek">Seek <input id="theater-seek" type="range" min="0" max="0" step="0.01" value="0" disabled></label>
       <div class="theater-lights">
         <label>Lobby light <input id="theater-lobby-light" type="range" min="0" max="1" step="0.05" value="1" disabled></label>
-        <label>Auditorium light <input id="theater-auditorium-light" type="range" min="0" max="1" step="0.01" value="0.18" disabled></label>
+        <label>Auditorium light <input id="theater-auditorium-light" type="range" min="0" max="1" step="0.01" value="0.20" disabled></label>
       </div>
       <p id="theater-status" role="status">Loading movie metadata…</p>
+    </section>
+    <section id="theater-startup" class="theater-startup" role="dialog" aria-modal="true"
+      aria-labelledby="theater-startup-title" aria-describedby="theater-startup-description theater-startup-status" hidden>
+      <div class="theater-startup-card">
+        <h1 id="theater-startup-title">Enter the theater</h1>
+        <p id="theater-startup-description">Movie sound is optional. You can change it using Sound in the room.</p>
+        <p id="theater-startup-status" role="status" aria-live="polite" aria-atomic="true">Preparing the current movie…</p>
+        <div class="theater-startup-actions">
+          <button id="theater-startup-play" type="button" disabled>Play with sound</button>
+          <button id="theater-startup-retry" type="button" hidden>Retry</button>
+          <button id="theater-startup-continue" type="button">Continue without sound</button>
+        </div>
+      </div>
     </section>
     <script type="module" src="main.js"></script>
   </body>

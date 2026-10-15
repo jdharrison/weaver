@@ -231,6 +231,32 @@ test("untrusted accessors, prototypes and throwing proxies produce only the fixe
   assert.throws(() => validateTheaterSchedule(new Proxy({}, { ownKeys() { throw new Error("secret"); } })), { message: "Invalid theater schedule." });
 });
 
+test("optional captions survive validation and resolution without altering legacy entries", () => {
+  const input = fixture();
+  input.entries[0].captions = "/weaver/assets/theater/captions/intro.vtt";
+  const schedule = validateTheaterSchedule(input);
+  assert.deepEqual(schedule, input);
+  assert.equal(at(schedule, 0).entry.captions, input.entries[0].captions);
+  assert.equal(Object.isFrozen(schedule.entries[0]), true);
+  assert.equal(Object.hasOwn(schedule.entries[1], "captions"), false);
+  input.entries[0].captions = "/changed.vtt";
+  assert.notEqual(schedule.entries[0].captions, input.entries[0].captions);
+});
+
+test("captions require canonical root-relative VTT paths and reject accessors", () => {
+  for (const captions of [undefined, null, 1, "", "intro.vtt", "//host/intro.vtt",
+    "https://host/intro.vtt", "/intro.mp4", "/intro.VTT", "/intro.vtt?x=1",
+    "/intro.vtt#cue", "/../intro.vtt", "/a/./intro.vtt", "/%61.vtt",
+    "/a//intro.vtt", "/a\\intro.vtt", "/a b.vtt", "/" + "a".repeat(2048) + ".vtt"]) {
+    invalid((value) => { value.entries[0].captions = captions; });
+  }
+  let reads = 0;
+  invalid((value) => Object.defineProperty(value.entries[0], "captions", {
+    get() { reads++; return "/intro.vtt"; },
+  }));
+  assert.equal(reads, 0);
+});
+
 test("short looping media returns continuous raw media time; metadata modulo belongs to controller", () => {
   const schedule = validateTheaterSchedule(fixture());
   const times = [20, 23, 28, 59.5].map((delta) => at(schedule, delta).mediaTimeSeconds);

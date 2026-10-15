@@ -1,35 +1,51 @@
 //! Local world meshes and a synchronous, permission-neutral browser picking seam.
 
-#[cfg(any(target_arch = "wasm32", test))]
 use crate::theater::{self, Collider};
 use glam::Vec3;
-#[cfg(any(target_arch = "wasm32", test))]
 use glam::{UVec2, Vec2};
 use std::{cell::RefCell, rc::Rc};
 use weaver_app_core::{AppAssets, MeshAsset, TextureAsset};
-#[cfg(any(target_arch = "wasm32", test))]
 use weaver_render::Camera;
 use weaver_render::{MeshHandle, MeshInstance, MeshLighting, RenderTransform, SpriteHandle};
 use weaver_render_wgpu::Vertex;
 
-const STATE_COUNT: usize = 5;
-#[cfg(any(target_arch = "wasm32", test))]
+const STATE_COUNT: usize = 7;
+const FORCED_ON: usize = 6;
 const MAX_RANGE: f32 = 10.0;
-#[cfg(any(target_arch = "wasm32", test))]
 const MAX_AGE_MS: f64 = 250.0;
 const WIDTH: f32 = 2.6;
 const HEIGHT: f32 = 0.9;
-const CENTERS: [Vec3; 2] = [Vec3::new(-1.5, 1.7, 0.04), Vec3::new(1.5, 1.7, 0.04)];
-
-#[derive(Default)]
+const CENTERS: [Vec3; 3] = [
+    Vec3::new(-1.5, 1.7, 0.04),
+    Vec3::new(1.5, 1.7, 0.04),
+    Vec3::new(0.0, 0.65, 0.04),
+];
 struct Bridge {
     disposed: bool,
-    states: [usize; 2],
-    #[cfg(any(target_arch = "wasm32", test))]
+    states: [usize; 3],
     snapshot: Option<Snapshot>,
+    player_eye: Vec3,
+    seated: Option<u8>,
+    occupied: [bool; theater::SEAT_COUNT],
+    last_pick: Option<(Vec2, u32)>,
+    pending: Option<u32>,
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+impl Default for Bridge {
+    fn default() -> Self {
+        Self {
+            disposed: false,
+            states: [0, 0, 3],
+            snapshot: None,
+            player_eye: Vec3::NAN,
+            seated: None,
+            occupied: [false; theater::SEAT_COUNT],
+            last_pick: None,
+            pending: None,
+        }
+    }
+}
+
 struct Snapshot {
     camera: Camera,
     viewport: UVec2,
@@ -38,13 +54,12 @@ struct Snapshot {
     enabled: bool,
 }
 
-#[cfg(target_arch = "wasm32")]
 std::thread_local! {
     static BRIDGE: RefCell<Rc<RefCell<Bridge>>> = RefCell::new(Rc::new(RefCell::new(Bridge::default())));
 }
 
 /// Pick a world control synchronously. NDC is -1..=1, +Y upward; (0,0) is center.
-/// Returns 0 for no enabled hit, 1 for sound, or 2 for fullscreen.
+/// Returns 0 for no enabled hit, 1 for sound, 2 for fullscreen, or 3 for subtitles.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn pick_control_panel(x: f32, y: f32) -> u32 {
@@ -60,8 +75,11 @@ pub fn pick_control_panel(x: f32, y: f32) -> u32 {
     BRIDGE.with(|slot| slot.borrow().borrow().pick(Vec2::new(x, y), now))
 }
 
-/// Publish browser-observed state: panel 1/2; state 0 unavailable, 1 off,
-/// 2 pending, 3 on, 4 blocked/retry. Invalid or disposed updates return false.
+/// Publish browser-observed state: panel 1 sound, 2 fullscreen, 3 subtitles;
+/// state 0 unavailable, 1 off, 2 pending, 3 on, 4 blocked/retry, 5 loading,
+/// 6 forced on (subtitles only, not pickable). Subtitles default to on.
+/// Sound off also forces the subtitle display on without overwriting its state.
+/// The host owns subtitle HUD visibility. Invalid or disposed updates return false.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn set_control_panel_state(panel: u32, state: u32) -> bool {
@@ -75,10 +93,156 @@ pub fn invalidate_control_panels() {
     BRIDGE.with(|slot| slot.borrow().borrow_mut().invalidate());
 }
 
+/// Update physical eligibility separately from the displayed (possibly zoomed) camera.
+pub(crate) fn set_seating_context(
+    player_eye: Vec3,
+    seated: Option<u8>,
+    occupied: [bool; theater::SEAT_COUNT],
+) {
+    BRIDGE.with(|slot| {
+        let binding = slot.borrow();
+        let mut bridge = binding.borrow_mut();
+        bridge.player_eye = player_eye;
+        bridge.seated = seated.filter(|index| usize::from(*index) < theater::SEAT_COUNT);
+        bridge.occupied = occupied;
+    });
+}
+
+pub(crate) fn take_seat_request() -> Option<u32> {
+    BRIDGE.with(|slot| slot.borrow().borrow_mut().pending.take())
+}
+
+pub(crate) fn pick_current_interaction(ndc: Vec2, now_ms: f64) -> u32 {
+    BRIDGE.with(|slot| {
+        let binding = slot.borrow();
+        let mut bridge = binding.borrow_mut();
+        let target = bridge.pick_scene(ndc, now_ms);
+        bridge.last_pick = Some((ndc, target));
+        target
+    })
+}
+
+pub(crate) fn queue_seat_request(target: u32, now_ms: f64) -> bool {
+    BRIDGE.with(|slot| slot.borrow().borrow_mut().queue(target, now_ms))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_now() -> Option<f64> {
+    let window = web_sys::window()?;
+    if window.document()?.hidden() {
+        return None;
+    }
+    Some(window.performance()?.now())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn pick_scene_interaction(x: f32, y: f32) -> u32 {
+    browser_now().map_or(0, |now| pick_current_interaction(Vec2::new(x, y), now))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn activate_seat_interaction(target: u32) -> bool {
+    browser_now().is_some_and(|now| queue_seat_request(target, now))
+}
+
+/// Suspend interaction without retiring the app; the next publish can resume it.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn invalidate_scene_interactions() {
+    BRIDGE.with(|slot| slot.borrow().borrow_mut().clear_interactions());
+}
+
 impl Bridge {
+    fn clear_interactions(&mut self) {
+        self.snapshot = None;
+        self.last_pick = None;
+        self.pending = None;
+    }
+
+    fn fresh_snapshot(&self, now: f64) -> Option<&Snapshot> {
+        let snapshot = self.snapshot.as_ref()?;
+        let age = now - snapshot.published_ms;
+        (!self.disposed && snapshot.enabled && age.is_finite() && (0.0..=MAX_AGE_MS).contains(&age))
+            .then_some(snapshot)
+    }
+
+    fn pick_scene(&self, ndc: Vec2, now: f64) -> u32 {
+        let Some(snapshot) = self.fresh_snapshot(now) else {
+            return 0;
+        };
+        let Some((origin, direction)) = snapshot.ray(ndc) else {
+            return 0;
+        };
+        // Even unavailable controls own their hit, so a click cannot exit a seat.
+        let panel = self.pick_panel(ndc, now, true);
+        if panel != 0 {
+            return panel;
+        }
+        if self.seated.is_some() {
+            return 200;
+        }
+        let nearest = theater::SEATS
+            .iter()
+            .enumerate()
+            .filter_map(|(index, seat)| {
+                let (min, max) = seat.bounds();
+                ray_box(origin, direction, min, max).map(|distance| (index, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((index, distance)) = nearest else {
+            return 0;
+        };
+        let seat = theater::SEATS[index];
+        // Stop before the envelope: testing the hit itself would occlude every chair.
+        let hit = origin + direction * (distance - 0.001).max(0.0);
+        if self.occupied[index]
+            || !self.player_eye.is_finite()
+            || self.player_eye.distance(seat.seated_eye()) > 2.5
+            || !theater::has_line_of_sight(origin, hit, &snapshot.colliders)
+        {
+            return 0;
+        }
+        100 + index as u32
+    }
+
+    fn queue(&mut self, target: u32, now: f64) -> bool {
+        if !(100..100 + theater::SEAT_COUNT as u32).contains(&target) && target != 200 {
+            return false;
+        }
+        // Direct native callers use the center ray. Once picked, only that exact
+        // target/ray is eligible, including after a new frame has been published.
+        let (ndc, picked) = self.last_pick.unwrap_or((Vec2::ZERO, target));
+        if picked != target || self.pick_scene(ndc, now) != target {
+            return false;
+        }
+        if let Some(pending) = self.pending {
+            return pending == target;
+        }
+        // Keep click intent through camera movement until the frame consumes it;
+        // the app rechecks current physical range and occupancy at consumption.
+        self.pending = Some(target);
+        true
+    }
+
+    fn display_state(&self, panel: usize) -> usize {
+        // Keep the subtitle preference intact while muted; the host may also
+        // explicitly publish forced-on for other audio-unavailable conditions.
+        if panel == 2 && self.states[0] == 1 {
+            FORCED_ON
+        } else {
+            self.states[panel]
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn set_state(&mut self, panel: u32, state: u32) -> bool {
-        if self.disposed || !(1..=2).contains(&panel) || state >= STATE_COUNT as u32 {
+        if self.disposed
+            || !(1..=3).contains(&panel)
+            || state >= STATE_COUNT as u32
+            || (state == FORCED_ON as u32 && panel != 3)
+        {
             return false;
         }
         self.states[(panel - 1) as usize] = state as usize;
@@ -87,14 +251,17 @@ impl Bridge {
 
     fn invalidate(&mut self) {
         self.disposed = true;
-        #[cfg(any(target_arch = "wasm32", test))]
         {
-            self.snapshot = None;
+            self.clear_interactions();
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn pick(&self, ndc: Vec2, now: f64) -> u32 {
+        self.pick_panel(ndc, now, false)
+    }
+
+    fn pick_panel(&self, ndc: Vec2, now: f64, include_unavailable: bool) -> u32 {
         let Some(snapshot) = &self.snapshot else {
             return 0;
         };
@@ -113,7 +280,13 @@ impl Bridge {
             .iter()
             .enumerate()
             .find_map(|(index, center)| {
-                if matches!(self.states[index], 0 | 2) || direction.z >= -f32::EPSILON {
+                // Sound may reopen its startup/retry UI while a clip is loading.
+                // Fullscreen still ignores a second activation during its request.
+                let state = self.display_state(index);
+                if (!include_unavailable
+                    && (state == 0 || state == FORCED_ON || (index != 0 && state == 2)))
+                    || direction.z >= -f32::EPSILON
+                {
                     return None;
                 }
                 let distance = (center.z - origin.z) / direction.z;
@@ -133,7 +306,27 @@ impl Bridge {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+fn ray_box(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
+    let mut near = 0.0_f32;
+    let mut far = f32::INFINITY;
+    for axis in 0..3 {
+        if direction[axis].abs() <= f32::EPSILON {
+            if origin[axis] < min[axis] || origin[axis] > max[axis] {
+                return None;
+            }
+        } else {
+            let a = (min[axis] - origin[axis]) / direction[axis];
+            let b = (max[axis] - origin[axis]) / direction[axis];
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if near > far {
+                return None;
+            }
+        }
+    }
+    Some(near)
+}
+
 impl Snapshot {
     fn ray(&self, ndc: Vec2) -> Option<(Vec3, Vec3)> {
         if !ndc.is_finite()
@@ -173,14 +366,13 @@ impl Snapshot {
 
 pub(crate) struct ControlPanels {
     bridge: Rc<RefCell<Bridge>>,
-    mesh_indices: [usize; 2],
-    textures: [[SpriteHandle; STATE_COUNT]; 2],
+    mesh_indices: [usize; 3],
+    textures: [[SpriteHandle; STATE_COUNT]; 3],
 }
 
 impl ControlPanels {
     pub(crate) fn new(assets: &mut AppAssets, meshes: &mut Vec<MeshInstance>) -> Self {
         let bridge = Rc::new(RefCell::new(Bridge::default()));
-        #[cfg(target_arch = "wasm32")]
         BRIDGE.with(|slot| *slot.borrow_mut() = Rc::clone(&bridge));
         let textures = std::array::from_fn(|panel| {
             std::array::from_fn(|state| {
@@ -207,7 +399,7 @@ impl ControlPanels {
                 .meshes
                 .push(MeshAsset::new(handle, vertices, vec![0, 1, 2, 0, 2, 3]));
             let mut mesh = MeshInstance::new(handle, RenderTransform::default());
-            mesh.texture = Some(textures[panel][0]);
+            mesh.texture = Some(textures[panel][bridge.borrow().display_state(panel)]);
             mesh.lighting = Some(MeshLighting {
                 position: Vec3::ZERO,
                 ambient: 1.0,
@@ -225,9 +417,9 @@ impl ControlPanels {
     }
 
     pub(crate) fn refresh_meshes(&self, meshes: &mut [MeshInstance]) {
-        let states = self.bridge.borrow().states;
+        let bridge = self.bridge.borrow();
         for (panel, index) in self.mesh_indices.iter().enumerate() {
-            meshes[*index].texture = Some(self.textures[panel][states[panel]]);
+            meshes[*index].texture = Some(self.textures[panel][bridge.display_state(panel)]);
             // Room lighting changes must not darken the control's own display.
             meshes[*index].lighting = Some(MeshLighting {
                 position: Vec3::ZERO,
@@ -237,7 +429,6 @@ impl ControlPanels {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn publish(
         &self,
         camera: &Camera,
@@ -247,6 +438,9 @@ impl ControlPanels {
         enabled: bool,
     ) {
         let mut bridge = self.bridge.borrow_mut();
+        if !enabled {
+            bridge.clear_interactions();
+        }
         if !bridge.disposed {
             bridge.snapshot = Some(Snapshot {
                 camera: camera.clone(),
@@ -295,9 +489,9 @@ fn label_texture(panel: usize, state: usize) -> TextureAsset {
     const W: usize = 384;
     const H: usize = 128;
     let accent = match state {
-        3 => [70, 220, 150, 255],
+        3 | FORCED_ON => [70, 220, 150, 255],
         4 => [255, 175, 65, 255],
-        2 => [110, 175, 255, 255],
+        2 | 5 => [110, 175, 255, 255],
         _ => [195, 210, 225, 255],
     };
     let mut rgba = [15, 23, 34, 255].repeat(W * H);
@@ -308,9 +502,22 @@ fn label_texture(panel: usize, state: usize) -> TextureAsset {
             }
         }
     }
-    let title = if panel == 0 { "SOUND" } else { "FULLSCREEN" };
-    let status = ["UNAVAILABLE", "OFF", "PENDING", "ON", "RETRY"][state];
-    for (text, top, scale) in [(title, 18, 3), (status, 55, 3), ("CLICK PANEL", 99, 2)] {
+    let title = ["SOUND", "FULLSCREEN", "SUBTITLES"][panel];
+    let status = [
+        "UNAVAILABLE",
+        "OFF",
+        "PENDING",
+        "ON",
+        "RETRY",
+        "LOADING",
+        "FORCED ON",
+    ][state];
+    let hint = if state == FORCED_ON {
+        "AUDIO OFF"
+    } else {
+        "CLICK PANEL"
+    };
+    for (text, top, scale) in [(title, 18, 3), (status, 55, 3), (hint, 99, 2)] {
         let left = (W - (text.len() * 6 - 1) * scale) / 2;
         for (letter, character) in text.chars().enumerate() {
             for (row, bits) in glyph(character).iter().enumerate() {
@@ -344,7 +551,7 @@ mod tests {
     use super::*;
     fn bridge() -> Bridge {
         Bridge {
-            states: [1, 1],
+            states: [3, 1, 3],
             snapshot: Some(Snapshot {
                 camera: Camera {
                     eye: theater::SPAWN,
@@ -359,6 +566,146 @@ mod tests {
             ..Bridge::default()
         }
     }
+    fn seat_bridge(index: usize) -> Bridge {
+        let mut bridge = bridge();
+        let seat = theater::SEATS[index];
+        bridge.player_eye = seat.approach();
+        let snapshot = bridge.snapshot.as_mut().unwrap();
+        snapshot.camera.eye = seat.approach();
+        snapshot.camera.target = seat.position + Vec3::Y * 0.5;
+        bridge
+    }
+
+    #[test]
+    fn seats_use_physical_range_and_do_not_occlude_themselves() {
+        for index in 0..theater::SEAT_COUNT {
+            let mut bridge = seat_bridge(index);
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 100 + index as u32);
+            assert!(!bridge.queue(100 + theater::SEAT_COUNT as u32, 100.0));
+            assert!(bridge.queue(100 + index as u32, 100.0));
+            assert_eq!(bridge.pending.take(), Some(100 + index as u32));
+            bridge.occupied[index] = true;
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+            assert!(!bridge.queue(100 + index as u32, 100.0));
+            bridge.occupied[index] = false;
+            bridge.player_eye = theater::SPAWN;
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+            bridge.player_eye = theater::SEATS[index].approach();
+            let snapshot = bridge.snapshot.as_mut().unwrap();
+            let offset = (snapshot.camera.eye - snapshot.camera.target).normalize() * 3.0;
+            snapshot.camera.eye += offset;
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 100 + index as u32);
+        }
+    }
+
+    #[test]
+    fn exact_target_occupancy_freshness_and_bounded_pending() {
+        let mut bridge = seat_bridge(0);
+        assert!(!bridge.queue(101, 100.0));
+        assert!(!bridge.queue(200, 100.0));
+        assert!(!bridge.queue(99, 100.0));
+        bridge.occupied[0] = true;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        assert!(!bridge.queue(100, 100.0));
+        bridge.occupied[0] = false;
+        for now in [99.0, 350.001, f64::NAN, f64::INFINITY] {
+            assert!(!bridge.queue(100, now));
+        }
+        assert!(bridge.queue(100, 350.0));
+        assert!(bridge.queue(100, 350.0));
+        bridge.seated = Some(0);
+        assert!(!bridge.queue(200, 100.0));
+        assert_eq!(bridge.pending.take(), Some(100));
+        assert_eq!(bridge.pending.take(), None);
+        assert!(bridge.queue(200, 100.0));
+        bridge.clear_interactions();
+        assert!(bridge.pending.is_none());
+        assert!(!bridge.disposed);
+        assert!(!bridge.queue(200, 100.0));
+    }
+
+    #[test]
+    fn cached_pick_revalidates_and_panels_own_unavailable_hits() {
+        let mut bridge = seat_bridge(0);
+        bridge.last_pick = Some((Vec2::ZERO, 101));
+        assert!(!bridge.queue(100, 100.0));
+        bridge.last_pick = Some((Vec2::ZERO, 100));
+        bridge.snapshot.as_mut().unwrap().camera.target += Vec3::X * 10.0;
+        assert!(!bridge.queue(100, 100.0));
+        let mut bridge = self::bridge();
+        bridge.seated = Some(0);
+        bridge.states = [0; 3];
+        assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 1);
+        assert!(!bridge.queue(200, 100.0));
+        bridge.snapshot.as_mut().unwrap().camera.target = theater::SPAWN + Vec3::X;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 200);
+        assert_eq!(bridge.pick_scene(Vec2::splat(1.1), 100.0), 0);
+        bridge.snapshot.as_mut().unwrap().enabled = false;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+    }
+
+    #[test]
+    fn walls_and_nearest_occupied_chairs_block_seat_picking() {
+        let mut bridge = seat_bridge(0);
+        let snapshot = bridge.snapshot.as_mut().unwrap();
+        snapshot.camera.eye = theater::SPAWN;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        let mut bridge = seat_bridge(1);
+        let seat = theater::SEATS[0];
+        let snapshot = bridge.snapshot.as_mut().unwrap();
+        snapshot.camera.eye = seat.position + Vec3::new(-1.0, 0.5, 0.0);
+        snapshot.camera.target = theater::SEATS[1].position + Vec3::Y * 0.5;
+        bridge.occupied[0] = true;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+    }
+
+    #[test]
+    fn thread_local_binding_publish_suppression_and_revival() {
+        let mut assets = AppAssets::default();
+        let mut meshes = Vec::new();
+        let panels = ControlPanels::new(&mut assets, &mut meshes);
+        let source = seat_bridge(0);
+        let snapshot = source.snapshot.unwrap();
+        set_seating_context(source.player_eye, None, [false; theater::SEAT_COUNT]);
+        panels.publish(
+            &snapshot.camera,
+            snapshot.viewport,
+            &snapshot.colliders,
+            100.0,
+            true,
+        );
+        assert_eq!(pick_current_interaction(Vec2::ZERO, 100.0), 100);
+        assert!(queue_seat_request(100, 100.0));
+        panels.publish(
+            &snapshot.camera,
+            snapshot.viewport,
+            &snapshot.colliders,
+            101.0,
+            false,
+        );
+        assert_eq!(take_seat_request(), None);
+        invalidate_scene_interactions();
+        panels.publish(
+            &snapshot.camera,
+            snapshot.viewport,
+            &snapshot.colliders,
+            102.0,
+            true,
+        );
+        assert!(queue_seat_request(100, 102.0));
+        assert_eq!(take_seat_request(), Some(100));
+        panels.bridge.borrow_mut().invalidate();
+        panels.publish(
+            &snapshot.camera,
+            snapshot.viewport,
+            &snapshot.colliders,
+            103.0,
+            true,
+        );
+        assert_eq!(pick_current_interaction(Vec2::ZERO, 103.0), 0);
+    }
+
     #[test]
     fn picking_checks_state_freshness_coordinates_range_and_front_face() {
         let mut bridge = bridge();
@@ -373,16 +720,15 @@ mod tests {
         ] {
             assert_eq!(bridge.pick(ndc, now), 0);
         }
-        for state in 0..5 {
+        for state in 0..FORCED_ON as u32 {
             assert!(bridge.set_state(1, state));
-            assert_eq!(
-                bridge.pick(Vec2::ZERO, 100.0),
-                u32::from(!matches!(state, 0 | 2))
-            );
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), u32::from(state != 0));
         }
         assert!(!bridge.set_state(0, 1));
-        assert!(!bridge.set_state(3, 1));
-        assert!(!bridge.set_state(1, 5));
+        assert!(!bridge.set_state(4, 1));
+        assert!(!bridge.set_state(1, FORCED_ON as u32));
+        assert!(!bridge.set_state(2, FORCED_ON as u32));
+        assert!(!bridge.set_state(1, STATE_COUNT as u32));
         bridge.set_state(1, 1);
         let snapshot = bridge.snapshot.as_mut().unwrap();
         snapshot.camera.eye = Vec3::new(-1.5, 1.7, 11.0);
@@ -394,7 +740,20 @@ mod tests {
         assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
     }
     #[test]
-    fn displayed_camera_projection_maps_both_panels_and_is_unobstructed_after_counter_removal() {
+    fn sound_loading_and_pending_can_reopen_confirmation_but_fullscreen_pending_cannot() {
+        let mut bridge = bridge();
+        for state in [2, 4, 5] {
+            bridge.set_state(1, state);
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 1);
+        }
+        bridge.snapshot.as_mut().unwrap().camera.target = CENTERS[1];
+        bridge.set_state(2, 2);
+        assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
+        bridge.set_state(2, 1);
+        assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 2);
+    }
+    #[test]
+    fn displayed_camera_projection_maps_all_panels_and_is_unobstructed_after_counter_removal() {
         let mut bridge = bridge();
         bridge.snapshot.as_mut().unwrap().camera.target = theater::SPAWN + Vec3::NEG_Z;
         for (index, center) in CENTERS.iter().enumerate() {
@@ -414,6 +773,70 @@ mod tests {
             "counter removal intentionally leaves this ray unobstructed"
         );
     }
+    #[test]
+    fn subtitles_default_on_and_forced_on_preserves_preference() {
+        assert_eq!(Bridge::default().states, [0, 0, 3]);
+        let mut bridge = bridge();
+        bridge.snapshot.as_mut().unwrap().camera.target = CENTERS[2];
+        for state in 0..STATE_COUNT as u32 {
+            assert!(bridge.set_state(3, state));
+            assert_eq!(bridge.display_state(2), state as usize);
+            let enabled = ![0, 2, FORCED_ON as u32].contains(&state);
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), if enabled { 3 } else { 0 });
+        }
+        assert!(!bridge.set_state(3, STATE_COUNT as u32));
+        for preference in [1, 3] {
+            assert!(bridge.set_state(3, preference));
+            assert!(bridge.set_state(1, 1));
+            assert_eq!(bridge.display_state(2), FORCED_ON);
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
+            assert_eq!(bridge.states[2], preference as usize);
+            assert!(bridge.set_state(1, 3));
+            assert_eq!(bridge.display_state(2), preference as usize);
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 3);
+        }
+        bridge.invalidate();
+        assert!(!bridge.set_state(3, 3));
+        assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
+    }
+
+    #[test]
+    fn subtitle_textures_follow_effective_state_without_reallocating() {
+        let mut assets = AppAssets::default();
+        let mut meshes = Vec::new();
+        let panels = ControlPanels::new(&mut assets, &mut meshes);
+        let handles: Vec<_> = assets
+            .textures
+            .iter()
+            .map(|texture| texture.handle)
+            .collect();
+        for (sound, subtitles, expected) in [(3, 1, 1), (3, 3, 3), (1, 1, 6), (3, 6, 6)] {
+            panels.bridge.borrow_mut().set_state(1, sound);
+            panels.bridge.borrow_mut().set_state(3, subtitles);
+            panels.refresh_meshes(&mut meshes);
+            assert_eq!(meshes[2].texture, Some(panels.textures[2][expected]));
+            assert_eq!(meshes[2].lighting.as_ref().unwrap().ambient, 1.0);
+            assert_eq!(meshes[2].lighting.as_ref().unwrap().intensity, 0.0);
+        }
+        assert_eq!(
+            handles,
+            assets
+                .textures
+                .iter()
+                .map(|texture| texture.handle)
+                .collect::<Vec<_>>()
+        );
+        let base = 2 * STATE_COUNT;
+        assert_ne!(
+            assets.textures[base + 1].rgba,
+            assets.textures[base + 3].rgba
+        );
+        assert_ne!(
+            assets.textures[base + 3].rgba,
+            assets.textures[base + FORCED_ON].rgba
+        );
+    }
+
     #[test]
     fn disposal_and_disabled_input_fail_closed() {
         let mut bridge = bridge();
@@ -516,8 +939,9 @@ mod tests {
         let mut assets = AppAssets::default();
         let mut meshes = Vec::new();
         let panels = ControlPanels::new(&mut assets, &mut meshes);
-        assert_eq!(assets.meshes.len(), 2);
-        assert_eq!(assets.textures.len(), 10);
+        assert_eq!(assets.meshes.len(), 3);
+        assert_eq!(assets.textures.len(), 3 * STATE_COUNT);
+        assert_eq!(meshes[2].texture, Some(panels.textures[2][3]));
         assert_eq!(assets.meshes[0].vertices[0].uv, [0.0, 1.0]);
         let off = assets.textures[1].rgba.clone();
         assert_ne!(off, assets.textures[3].rgba);

@@ -512,6 +512,7 @@ fn setup(
         let id = world.spawn(Renderable {
             mesh: Some(MeshInstance {
                 mesh,
+                render_mode: weaver_render::MeshRenderMode::Surface,
                 texture: None,
                 texture_fit: None,
                 lighting: None,

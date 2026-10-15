@@ -272,6 +272,11 @@ pub trait WeaverApp {
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
     }
+    /// Activate the primary interaction at normalized device coordinates.
+    /// Returns whether the application handled the activation.
+    fn primary_activation(&mut self, _ndc: Vec2) -> bool {
+        false
+    }
     /// Current text editing focus requested from the platform shell.
     fn text_input_mode(&self) -> TextInputMode {
         TextInputMode::Disabled

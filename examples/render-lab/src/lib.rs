@@ -50,6 +50,7 @@ impl RenderLab {
             let angle = index as f32 * (PI * 2.0 / 8.0);
             scene.meshes.push(MeshInstance {
                 mesh: small_mesh,
+                render_mode: weaver_render::MeshRenderMode::Surface,
                 texture: None,
                 texture_fit: None,
                 lighting: None,
