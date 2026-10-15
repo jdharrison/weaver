@@ -34,6 +34,7 @@ const NAMEPLATE_FONT_SIZE: f32 = 15.0;
 const CHAT_HOLD_SECONDS: f64 = 4.0;
 const CHAT_FADE_SECONDS: f64 = 2.0;
 const CHAT_FONT_SIZE: f32 = 25.5;
+const CHAT_RANGE_METERS: f32 = 10.0;
 const MESSAGE_VERSION: u8 = 1;
 const POSE_VERSION: u8 = 1;
 const POSE_PAYLOAD_BYTES: usize = 25;
@@ -898,6 +899,10 @@ impl FirstPersonLab {
                 let eye = if is_local {
                     self.view.player.eye
                 } else if let Some(player) = self.remote_players.get(entity_id) {
+                    // Presentation-only proximity uses the physical player, never the zoomed camera.
+                    if !remote_chat_in_range(self.view.player.eye, player.displayed_position) {
+                        continue;
+                    }
                     player.displayed_position
                 } else {
                     continue;
@@ -1489,6 +1494,11 @@ fn screen_text(
         world_space: false,
         world_height: 1.0,
     }
+}
+
+fn remote_chat_in_range(local_eye: Vec3, remote_eye: Vec3) -> bool {
+    let distance_squared = local_eye.distance_squared(remote_eye);
+    distance_squared.is_finite() && distance_squared <= CHAT_RANGE_METERS * CHAT_RANGE_METERS
 }
 
 fn avatar_label_position(
@@ -2253,6 +2263,241 @@ mod tests {
     }
 
     #[test]
+    fn remote_chat_range_requires_finite_three_dimensional_distance() {
+        assert_eq!(CHAT_RANGE_METERS, 10.0);
+        let local = Vec3::new(1.0, 2.0, 3.0);
+        for offset in [
+            Vec3::ZERO,
+            Vec3::X * 10.0,
+            Vec3::Y * 10.0,
+            Vec3::NEG_Z * 10.0,
+            Vec3::new(6.0, 0.0, 8.0),
+            Vec3::new(0.0, 6.0, 8.0),
+        ] {
+            assert!(remote_chat_in_range(local, local + offset), "{offset:?}");
+        }
+        for offset in [
+            Vec3::X * 10.001,
+            Vec3::Y * 10.001,
+            Vec3::NEG_Z * 10.001,
+            Vec3::new(0.0, 6.001, 8.0),
+            Vec3::new(0.0, 0.1, 10.0),
+            Vec3::splat(f32::NAN),
+            Vec3::splat(f32::INFINITY),
+            Vec3::splat(f32::NEG_INFINITY),
+            Vec3::splat(f32::MAX),
+        ] {
+            let remote = local + offset;
+            assert!(!remote_chat_in_range(local, remote), "{offset:?}");
+            assert!(!remote_chat_in_range(remote, local), "{offset:?}");
+        }
+    }
+
+    #[test]
+    fn remote_chat_uses_displayed_eye_at_the_boundary_and_keeps_distant_names() {
+        for minimal_ui in [false, true] {
+            let mut app = first_person_app();
+            app.set_minimal_ui(minimal_ui);
+            app.scene.camera.eye = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+            app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+            app.controller = FirstPersonController::from_camera(&app.scene.camera);
+            let peer = Vec3::new(5.0, EYE_HEIGHT, 5.0);
+            enter_peer(&mut app, 9);
+            app.receive_unreliable_pose(9, 1, &pose_payload_at(peer));
+            app.receive_message(9, 1, &chat_payload("Visitor", "at the boundary"));
+            app.update(frame(1.0), &InputFrame::default());
+            assert_eq!(app.view.player.eye.distance(peer), CHAT_RANGE_METERS);
+            assert_eq!(chat_runs(&app).len(), 2);
+
+            // A new target does not move the displayed speaker until interpolation runs.
+            app.receive_unreliable_pose(9, 2, &pose_payload_at(peer + Vec3::X * 0.01));
+            app.rebuild_overlay();
+            assert_eq!(app.remote_players[&9].displayed_position, peer);
+            assert_eq!(chat_runs(&app).len(), 2);
+            app.update(frame(1.1), &InputFrame::default());
+            assert!(chat_runs(&app).is_empty());
+            let name = app
+                .scene
+                .text
+                .iter()
+                .find(|run| run.text == "Visitor")
+                .unwrap();
+            assert_eq!(name.size, NAMEPLATE_FONT_SIZE);
+            assert_eq!(name.anchor, TextAnchor::BottomCenter);
+            if minimal_ui {
+                assert_identity_only_overlay(&app);
+            }
+
+            app.receive_unreliable_pose(9, 3, &pose_payload_at(peer - Vec3::X * 0.1));
+            app.rebuild_overlay();
+            assert!(chat_runs(&app).is_empty());
+            app.update(frame(1.2), &InputFrame::default());
+            assert_eq!(chat_runs(&app).len(), 2);
+            assert!(
+                chat_runs(&app)
+                    .iter()
+                    .all(|run| run.text == "at the boundary")
+            );
+            assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+        }
+    }
+
+    #[test]
+    fn remote_chat_range_is_independent_of_zoom_and_perspective() {
+        for distance in [9.5, 10.5] {
+            let mut app = first_person_app();
+            app.set_minimal_ui(true);
+            let local = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+            let peer = local + Vec3::X * distance;
+            app.scene.camera.eye = local;
+            app.scene.camera.target = local + Vec3::X;
+            app.controller = FirstPersonController::from_camera(&app.scene.camera);
+            enter_peer(&mut app, 9);
+            app.receive_unreliable_pose(9, 1, &pose_payload_at(peer));
+            app.receive_message(9, 1, &chat_payload("Visitor", "physical proximity"));
+            for (step, (toggle_perspective, zoom_delta, camera_distance)) in [
+                (false, 0.0, 0.0),
+                (true, 0.0, 2.0),
+                (false, -100.0, 6.0),
+                (false, 100.0, 0.0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                app.update(
+                    FrameContext {
+                        delta_seconds: 1.0,
+                        ..frame(1.0 + step as f64 * 0.1)
+                    },
+                    &InputFrame {
+                        toggle_perspective,
+                        zoom_delta,
+                        ..InputFrame::default()
+                    },
+                );
+                assert_eq!(app.view.player.eye, local);
+                assert_eq!(app.view.third_person(), camera_distance > 0.0);
+                assert!((app.scene.camera.eye.distance(local) - camera_distance).abs() < 0.001);
+                if app.view.third_person() {
+                    assert!(app.scene.camera.eye.distance(peer) > CHAT_RANGE_METERS);
+                }
+                assert_eq!(
+                    chat_runs(&app).len(),
+                    if distance < CHAT_RANGE_METERS { 2 } else { 0 }
+                );
+                assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+                assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn out_of_range_chat_replaces_fades_and_expires_without_restarting_on_return() {
+        let mut app = first_person_app();
+        app.set_minimal_ui(true);
+        app.scene.camera.eye = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.controller = FirstPersonController::from_camera(&app.scene.camera);
+        enter_peer(&mut app, 9);
+        app.receive_unreliable_pose(9, 1, &pose_payload_at(Vec3::new(4.0, EYE_HEIGHT, 5.0)));
+        app.receive_message(9, 1, &chat_payload("Visitor", "first"));
+        app.update(frame(1.0), &InputFrame::default());
+        assert_eq!(chat_runs(&app).len(), 2);
+
+        app.scene.camera.eye.x = -7.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(2.0), &InputFrame::default());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+        assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+
+        app.receive_message(9, 2, &chat_payload("Visitor", "replacement while distant"));
+        app.update(frame(3.0), &InputFrame::default());
+        assert!(chat_runs(&app).is_empty());
+        assert_eq!(app.avatar_chat.len(), 1);
+        assert_eq!(app.avatar_chat[&9].text, "replacement while distant");
+        assert_eq!(app.avatar_chat[&9].received_at, Some(3.0));
+        assert_eq!(app.chat_history.len(), 2);
+        assert_eq!(app.chat_notifications.len(), 2);
+        assert_eq!(app.last_remote_reliable_sequences[&9], 2);
+        app.update(frame(8.0), &InputFrame::default());
+        assert!(chat_runs(&app).is_empty());
+        assert_eq!(app.avatar_chat[&9].opacity(8.0), 0.5);
+
+        app.scene.camera.eye.x = -5.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(8.0), &InputFrame::default());
+        let runs = chat_runs(&app);
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs.iter()
+                .all(|run| run.text == "replacement while distant" && run.color[3] == 0.5)
+        );
+        assert_eq!(app.avatar_chat[&9].received_at, Some(3.0));
+
+        app.scene.camera.eye.x = -7.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(9.0), &InputFrame::default());
+        assert!(app.avatar_chat.is_empty());
+        app.scene.camera.eye.x = -5.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(10.0), &InputFrame::default());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+    }
+
+    #[test]
+    fn own_chat_has_no_range_limit_but_overhead_still_requires_visibility() {
+        for third_person in [false, true] {
+            let mut app = if third_person {
+                FirstPersonLab::new()
+            } else {
+                first_person_app()
+            };
+            app.set_minimal_ui(true);
+            app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
+            assert!(app.queue_validated_chat("own echo".to_owned()));
+            app.update(frame(1.0), &InputFrame::default());
+            let local = Vec3::new(5.0, EYE_HEIGHT, 5.0);
+            app.view.player.eye = local;
+            let distant_camera = Vec3::new(-6.0, EYE_HEIGHT, 5.0);
+            assert!(distant_camera.distance(local) > CHAT_RANGE_METERS);
+            // Isolate presentation: distant clear view, a wall, then off-screen.
+            for (eye, target, visible) in [
+                (distant_camera, local, true),
+                (Vec3::new(0.0, EYE_HEIGHT, -2.0), local, false),
+                (distant_camera, distant_camera - Vec3::X, false),
+            ] {
+                app.scene.camera.eye = eye;
+                app.scene.camera.target = target;
+                app.rebuild_overlay();
+                let runs = chat_runs(&app);
+                assert_eq!(runs.len(), if third_person && !visible { 0 } else { 2 });
+                if !runs.is_empty() {
+                    assert!(runs.iter().all(|run| run.text == "own echo"));
+                    if third_person {
+                        let name = app
+                            .scene
+                            .text
+                            .iter()
+                            .find(|run| run.text == app.display_name)
+                            .unwrap();
+                        assert_eq!(runs[1].anchor, TextAnchor::BottomCenter);
+                        assert_eq!(
+                            runs[1].position,
+                            name.position - Vec2::Y * (NAMEPLATE_FONT_SIZE + 6.0)
+                        );
+                    } else {
+                        assert_eq!(runs[1].anchor, TextAnchor::TopCenter);
+                        assert_eq!(runs[1].position, Vec2::new(640.0, 52.0));
+                    }
+                }
+                assert_eq!(app.avatar_chat[&42].received_at, Some(1.0));
+            }
+        }
+    }
+
+    #[test]
     fn avatar_overlays_follow_physical_line_of_sight() {
         for (viewer, peer, visible) in [
             (
@@ -2408,7 +2653,16 @@ mod tests {
         );
         app.receive_message(9, 1, &chat_payload("Visitor", "do not reset"));
         app.update(frame(1.0), &InputFrame::default());
-        assert_eq!(chat_runs(&app).len(), 2);
+        // The corridor ramp puts this peer just beyond 10 m in 3D despite a clear view.
+        assert!(
+            app.view
+                .player
+                .eye
+                .distance(app.remote_players[&9].displayed_position)
+                > CHAT_RANGE_METERS
+        );
+        assert!(chat_runs(&app).is_empty());
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
 
         // Moving left puts the divider between the viewer and the head anchor.
         app.scene.camera.eye.x = 0.0;
@@ -2422,8 +2676,9 @@ mod tests {
         app.scene.camera.eye.x = 9.5;
         app.scene.camera.target.x = 9.5;
         app.update(frame(6.0), &InputFrame::default());
-        assert_eq!(chat_runs(&app).len(), 2);
-        assert_eq!(app.scene.text[1].color[3], 0.5);
+        assert!(chat_runs(&app).is_empty());
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+        assert_eq!(app.avatar_chat[&9].opacity(6.0), 0.5);
         assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
 
         app.scene.camera.eye.x = 0.0;

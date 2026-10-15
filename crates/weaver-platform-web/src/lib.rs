@@ -104,19 +104,38 @@ struct TouchControls {
     mode: Option<weaver_app_core::PointerMode>,
     movement: Option<ActiveTouch>,
     look: Option<ActiveTouch>,
+    pinch: Option<ActiveTouch>,
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
 impl TouchControls {
     const MOVEMENT_RADIUS: f32 = 64.0;
+    // Use the existing touch-coordinate scale, matching the pixel-wheel sensitivity.
+    const PINCH_PIXELS_PER_STEP: f64 = 50.0;
+    const MAX_PINCH_ZOOM_DELTA: f64 = 4.0;
 
     fn clear(&mut self) {
         self.movement = None;
         self.look = None;
+        self.pinch = None;
     }
 
-    fn sync_mode(&mut self, mode: weaver_app_core::PointerMode) {
+    fn owns(&self, id: u64) -> bool {
+        self.movement.is_some_and(|touch| touch.id == id)
+            || self.look.is_some_and(|touch| touch.id == id)
+            || self.pinch.is_some_and(|touch| touch.id == id)
+    }
+
+    fn sync_mode(
+        &mut self,
+        mode: weaver_app_core::PointerMode,
+        input: &mut weaver_app_core::InputFrame,
+    ) {
         if self.mode != Some(mode) {
+            if self.mode == Some(weaver_app_core::PointerMode::LockedLook) {
+                input.look_delta = glam::Vec2::ZERO;
+                input.zoom_delta = 0.0;
+            }
             self.clear();
             self.mode = Some(mode);
         }
@@ -129,11 +148,19 @@ impl TouchControls {
         phase: winit::event::TouchPhase,
         position: glam::Vec2,
         width: f32,
-        look_delta: &mut glam::Vec2,
+        input: &mut weaver_app_core::InputFrame,
     ) {
-        self.sync_mode(mode);
+        self.sync_mode(mode, input);
         match phase {
             winit::event::TouchPhase::Started => {
+                if mode == weaver_app_core::PointerMode::LockedLook
+                    && (!position.is_finite()
+                        || !width.is_finite()
+                        || width <= 0.0
+                        || self.owns(id))
+                {
+                    return;
+                }
                 let touch = ActiveTouch {
                     id,
                     origin: position,
@@ -149,18 +176,55 @@ impl TouchControls {
                     | weaver_app_core::PointerMode::OrbitDrag => {
                         if self.look.is_none() {
                             self.look = Some(touch);
+                        } else if mode == weaver_app_core::PointerMode::LockedLook
+                            && self.pinch.is_none()
+                        {
+                            // Only a second right-side owner can pinch; never steal movement.
+                            self.pinch = Some(touch);
+                            input.look_delta = glam::Vec2::ZERO;
                         }
                     }
                     weaver_app_core::PointerMode::None => {}
                 }
             }
             winit::event::TouchPhase::Moved => {
+                if mode == weaver_app_core::PointerMode::LockedLook && !position.is_finite() {
+                    return;
+                }
                 if let Some(touch) = self.movement.as_mut().filter(|touch| touch.id == id) {
                     touch.position = position;
                 }
-                if let Some(touch) = self.look.as_mut().filter(|touch| touch.id == id) {
-                    *look_delta += position - touch.position;
-                    touch.position = position;
+                match (&mut self.look, &mut self.pinch) {
+                    (Some(first), Some(second)) if first.id == id || second.id == id => {
+                        // f64 distance arithmetic also handles extreme finite f32 coordinates.
+                        let before = first
+                            .position
+                            .as_dvec2()
+                            .distance(second.position.as_dvec2());
+                        if first.id == id {
+                            first.position = position;
+                        } else {
+                            second.position = position;
+                        }
+                        let after = first
+                            .position
+                            .as_dvec2()
+                            .distance(second.position.as_dvec2());
+                        let zoom = if input.zoom_delta.is_finite() {
+                            f64::from(input.zoom_delta)
+                        } else {
+                            0.0
+                        };
+                        input.zoom_delta = (zoom + (after - before) / Self::PINCH_PIXELS_PER_STEP)
+                            .clamp(-Self::MAX_PINCH_ZOOM_DELTA, Self::MAX_PINCH_ZOOM_DELTA)
+                            as f32;
+                        input.look_delta = glam::Vec2::ZERO;
+                    }
+                    (Some(touch), None) if touch.id == id => {
+                        input.look_delta += position - touch.position;
+                        touch.position = position;
+                    }
+                    _ => {}
                 }
             }
             winit::event::TouchPhase::Ended => {
@@ -168,10 +232,21 @@ impl TouchControls {
                     self.movement = None;
                 }
                 if self.look.is_some_and(|touch| touch.id == id) {
-                    self.look = None;
+                    // Both positions stay current during a pinch, so promotion has no jump.
+                    self.look = self.pinch.take();
+                } else if self.pinch.is_some_and(|touch| touch.id == id) {
+                    self.pinch = None;
                 }
             }
-            winit::event::TouchPhase::Cancelled => self.clear(),
+            winit::event::TouchPhase::Cancelled => {
+                if mode != weaver_app_core::PointerMode::LockedLook || self.owns(id) {
+                    self.clear();
+                    if mode == weaver_app_core::PointerMode::LockedLook {
+                        input.look_delta = glam::Vec2::ZERO;
+                        input.zoom_delta = 0.0;
+                    }
+                }
+            }
         }
     }
 
@@ -743,6 +818,10 @@ mod browser {
                     };
                 }
                 WindowEvent::Touch(touch) => {
+                    if self.app.text_input_mode() == TextInputMode::Focused {
+                        self.sync_text_input();
+                        return;
+                    }
                     let width = self
                         .window
                         .as_ref()
@@ -753,7 +832,7 @@ mod browser {
                         touch.phase,
                         Vec2::new(touch.location.x as f32, touch.location.y as f32),
                         width,
-                        &mut self.input.look_delta,
+                        &mut self.input,
                     );
                 }
                 WindowEvent::Ime(Ime::Commit(text))
@@ -868,7 +947,7 @@ mod browser {
                         .map_or(0.0, |last| ((now - last) / 1000.0) as f32)
                         .clamp(0.0, 0.1);
                     let pointer_mode = self.app.pointer_mode();
-                    self.touches.sync_mode(pointer_mode);
+                    self.touches.sync_mode(pointer_mode, &mut self.input);
                     self.input.movement =
                         (self.movement.axis() + self.touches.movement_axis()).clamp_length_max(1.0);
                     for event in drain_realtime_events() {
@@ -946,6 +1025,7 @@ mod browser {
                             })
                     });
             if self.cursor_captured
+                && self.touches.pinch.is_none()
                 && let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             {
                 self.input.look_delta += Vec2::new(dx as f32, dy as f32);
@@ -998,8 +1078,10 @@ fn recoverable_surface_error(error: &weaver_render_wgpu::WgpuRenderError) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use weaver_app_core::{AppAssets, WeaverApp};
+    use glam::Vec2;
+    use weaver_app_core::{AppAssets, InputFrame, PointerMode, WeaverApp};
     use weaver_render::SceneSnapshot;
+    use winit::event::TouchPhase::{self, Cancelled, Ended, Moved, Started};
 
     struct EmptyApp {
         scene: SceneSnapshot,
@@ -1057,89 +1139,382 @@ mod tests {
         ));
     }
 
+    fn locked_touch(
+        touches: &mut TouchControls,
+        input: &mut InputFrame,
+        id: u64,
+        phase: TouchPhase,
+        position: [f32; 2],
+    ) {
+        touches.handle(
+            PointerMode::LockedLook,
+            id,
+            phase,
+            Vec2::from_array(position),
+            200.0,
+            input,
+        );
+    }
+
+    fn start_pinch(touches: &mut TouchControls, input: &mut InputFrame) {
+        locked_touch(touches, input, 1, Started, [120.0, 40.0]);
+        locked_touch(touches, input, 2, Started, [150.0, 80.0]);
+    }
+
     #[test]
     fn locked_look_touches_split_movement_and_look() {
         let mut touches = TouchControls::default();
-        let mut look_delta = glam::Vec2::ZERO;
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            1,
-            winit::event::TouchPhase::Started,
-            glam::Vec2::new(20.0, 100.0),
-            200.0,
-            &mut look_delta,
-        );
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            2,
-            winit::event::TouchPhase::Started,
-            glam::Vec2::new(180.0, 100.0),
-            200.0,
-            &mut look_delta,
-        );
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            1,
-            winit::event::TouchPhase::Moved,
-            glam::Vec2::new(200.0, -100.0),
-            200.0,
-            &mut look_delta,
-        );
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            2,
-            winit::event::TouchPhase::Moved,
-            glam::Vec2::new(190.0, 120.0),
-            200.0,
-            &mut look_delta,
-        );
+        let mut input = InputFrame::default();
+        locked_touch(&mut touches, &mut input, 1, Started, [20.0, 100.0]);
+        locked_touch(&mut touches, &mut input, 2, Started, [180.0, 100.0]);
+        locked_touch(&mut touches, &mut input, 1, Moved, [200.0, -100.0]);
+        locked_touch(&mut touches, &mut input, 2, Moved, [190.0, 120.0]);
 
         let movement = touches.movement_axis();
         assert!((movement.length() - 1.0).abs() < f32::EPSILON);
         assert!(movement.x > 0.0 && movement.y > 0.0);
-        assert_eq!(look_delta, glam::Vec2::new(10.0, 20.0));
+        assert_eq!(input.look_delta, Vec2::new(10.0, 20.0));
+        assert_eq!(input.zoom_delta, 0.0);
+        assert!(touches.pinch.is_none());
 
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            1,
-            winit::event::TouchPhase::Ended,
-            glam::Vec2::ZERO,
-            200.0,
-            &mut look_delta,
-        );
-        assert_eq!(touches.movement_axis(), glam::Vec2::ZERO);
-        touches.handle(
-            weaver_app_core::PointerMode::LockedLook,
-            2,
-            winit::event::TouchPhase::Cancelled,
-            glam::Vec2::ZERO,
-            200.0,
-            &mut look_delta,
-        );
+        locked_touch(&mut touches, &mut input, 1, Ended, [0.0, 0.0]);
+        assert_eq!(touches.movement_axis(), Vec2::ZERO);
+        locked_touch(&mut touches, &mut input, 2, Cancelled, [0.0, 0.0]);
         assert!(touches.look.is_none());
+    }
+
+    #[test]
+    fn right_half_pinch_starts_without_camera_motion() {
+        let mut touches = TouchControls::default();
+        let mut input = InputFrame::default();
+        locked_touch(&mut touches, &mut input, 1, Started, [120.0, 40.0]);
+        locked_touch(&mut touches, &mut input, 1, Moved, [125.0, 45.0]);
+        assert_eq!(input.look_delta, Vec2::splat(5.0));
+        locked_touch(&mut touches, &mut input, 1, Started, [190.0, 190.0]);
+        assert!(touches.pinch.is_none());
+        locked_touch(&mut touches, &mut input, 2, Started, [150.0, 80.0]);
+        assert!(touches.pinch.is_some());
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(input.zoom_delta, 0.0);
+
+        locked_touch(&mut touches, &mut input, 1, Moved, [125.0, 45.0]);
+        locked_touch(&mut touches, &mut input, 2, Moved, [150.0, 80.0]);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(input.zoom_delta, 0.0);
+    }
+
+    #[test]
+    fn pinch_apart_zooms_in_and_together_zooms_out_without_look() {
+        let mut touches = TouchControls::default();
+        let mut input = InputFrame::default();
+        start_pinch(&mut touches, &mut input);
+        locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+        touches.sync_mode(PointerMode::LockedLook, &mut input);
+        assert_eq!(input.zoom_delta, 1.0);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+
+        input.clear_transient();
+        locked_touch(&mut touches, &mut input, 1, Moved, [150.0, 80.0]);
+        assert_eq!(input.zoom_delta, -1.0);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(touches.movement_axis(), Vec2::ZERO);
+
+        input.clear_transient();
+        locked_touch(&mut touches, &mut input, 1, Moved, [150.0, 80.0]);
+        locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+        assert_eq!(input.zoom_delta, 0.0);
+    }
+
+    #[test]
+    fn pinch_preserves_movement_and_ignores_unowned_touches() {
+        let mut touches = TouchControls::default();
+        let mut input = InputFrame::default();
+        locked_touch(&mut touches, &mut input, 10, Started, [20.0, 100.0]);
+        locked_touch(&mut touches, &mut input, 10, Moved, [52.0, 68.0]);
+        start_pinch(&mut touches, &mut input);
+        locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+        for (id, phase, position) in [
+            (10, Started, [180.0, 120.0]),
+            (11, Started, [40.0, 100.0]),
+            (3, Started, [180.0, 180.0]),
+            (3, Moved, [999.0, -999.0]),
+            (3, Cancelled, [0.0, 0.0]),
+            (3, Ended, [0.0, 0.0]),
+            (11, Moved, [180.0, 180.0]),
+            (11, Ended, [0.0, 0.0]),
+            (11, Cancelled, [0.0, 0.0]),
+        ] {
+            locked_touch(&mut touches, &mut input, id, phase, position);
+        }
+        assert_eq!(touches.movement_axis(), Vec2::splat(0.5));
+        assert_eq!(touches.movement.unwrap().id, 10);
+        assert_eq!(touches.look.unwrap().id, 1);
+        assert_eq!(touches.pinch.unwrap().id, 2);
+        assert_eq!(input.zoom_delta, 1.0);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+
+        locked_touch(&mut touches, &mut input, 10, Moved, [180.0, 100.0]);
+        assert_eq!(touches.movement_axis(), Vec2::X);
+        locked_touch(&mut touches, &mut input, 10, Ended, [180.0, 100.0]);
+        locked_touch(&mut touches, &mut input, 11, Moved, [20.0, 100.0]);
+        assert_eq!(touches.movement_axis(), Vec2::ZERO);
+        assert!(touches.pinch.is_some());
+        assert_eq!(input.zoom_delta, 1.0);
+    }
+
+    #[test]
+    fn ending_either_pinch_finger_resumes_look_without_a_jump() {
+        for ended_id in [1, 2] {
+            let mut touches = TouchControls::default();
+            let mut input = InputFrame::default();
+            locked_touch(&mut touches, &mut input, 10, Started, [20.0, 100.0]);
+            locked_touch(&mut touches, &mut input, 10, Moved, [52.0, 68.0]);
+            start_pinch(&mut touches, &mut input);
+            locked_touch(&mut touches, &mut input, 1, Moved, [130.0, 50.0]);
+            locked_touch(&mut touches, &mut input, 2, Moved, [170.0, 130.0]);
+            input.clear_transient();
+            locked_touch(&mut touches, &mut input, ended_id, Ended, [f32::NAN; 2]);
+            let (remaining_id, position) = if ended_id == 1 {
+                (2, [170.0, 130.0])
+            } else {
+                (1, [130.0, 50.0])
+            };
+            assert!(touches.pinch.is_none());
+            assert_eq!(touches.look.unwrap().id, remaining_id);
+            assert_eq!(touches.look.unwrap().position, Vec2::from_array(position));
+            assert_eq!(touches.movement_axis(), Vec2::splat(0.5));
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+
+            let position = [position[0] + 3.0, position[1] - 4.0];
+            locked_touch(&mut touches, &mut input, remaining_id, Moved, position);
+            assert_eq!(input.look_delta, Vec2::new(3.0, -4.0));
+            assert_eq!(input.zoom_delta, 0.0);
+            locked_touch(&mut touches, &mut input, ended_id, Started, [190.0, 190.0]);
+            locked_touch(&mut touches, &mut input, remaining_id, Moved, position);
+            assert!(touches.pinch.is_some());
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+        }
+    }
+
+    #[test]
+    fn cancelled_pinch_clears_owners_and_pending_camera_input() {
+        for cancelled_id in [1, 2, 10] {
+            let mut touches = TouchControls::default();
+            let mut input = InputFrame::default();
+            locked_touch(&mut touches, &mut input, 10, Started, [20.0, 100.0]);
+            locked_touch(&mut touches, &mut input, 10, Moved, [52.0, 68.0]);
+            start_pinch(&mut touches, &mut input);
+            locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+            assert_eq!(input.zoom_delta, 1.0);
+            locked_touch(
+                &mut touches,
+                &mut input,
+                cancelled_id,
+                Cancelled,
+                [f32::NAN; 2],
+            );
+            assert!(touches.movement.is_none());
+            assert!(touches.look.is_none());
+            assert!(touches.pinch.is_none());
+            for id in [1, 2, 10] {
+                locked_touch(&mut touches, &mut input, id, Moved, [190.0, 190.0]);
+                locked_touch(&mut touches, &mut input, id, Ended, [190.0, 190.0]);
+            }
+            assert_eq!(touches.movement_axis(), Vec2::ZERO);
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+            start_pinch(&mut touches, &mut input);
+            assert_eq!(input.zoom_delta, 0.0);
+            locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+            assert_eq!(input.zoom_delta, 1.0);
+        }
+    }
+
+    #[test]
+    fn touch_clear_discards_pinch_and_ignores_stale_moves() {
+        let mut touches = TouchControls::default();
+        let mut input = InputFrame::default();
+        locked_touch(&mut touches, &mut input, 10, Started, [20.0, 100.0]);
+        start_pinch(&mut touches, &mut input);
+        locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+        // Focus loss and text focus clear touch ownership and pending camera input.
+        touches.clear();
+        input.clear_transient();
+        assert!(touches.movement.is_none());
+        assert!(touches.look.is_none());
+        assert!(touches.pinch.is_none());
+        for id in [1, 2, 10] {
+            locked_touch(&mut touches, &mut input, id, Moved, [190.0, 190.0]);
+        }
+        assert_eq!(touches.movement_axis(), Vec2::ZERO);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(input.zoom_delta, 0.0);
+        locked_touch(&mut touches, &mut input, 1, Started, [190.0, 180.0]);
+        locked_touch(&mut touches, &mut input, 1, Moved, [188.0, 176.0]);
+        assert_eq!(input.look_delta, Vec2::new(-2.0, -4.0));
+        assert_eq!(input.zoom_delta, 0.0);
+    }
+
+    #[test]
+    fn pointer_mode_changes_cancel_pinch_and_ignore_stale_fingers() {
+        for mode in [PointerMode::OrbitDrag, PointerMode::None] {
+            let mut touches = TouchControls::default();
+            let mut input = InputFrame::default();
+            locked_touch(&mut touches, &mut input, 10, Started, [20.0, 100.0]);
+            start_pinch(&mut touches, &mut input);
+            locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+            touches.sync_mode(mode, &mut input);
+            assert!(touches.movement.is_none());
+            assert!(touches.look.is_none());
+            assert!(touches.pinch.is_none());
+            for id in [1, 2, 10] {
+                touches.handle(mode, id, Moved, Vec2::splat(190.0), 200.0, &mut input);
+            }
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+            touches.sync_mode(PointerMode::LockedLook, &mut input);
+            locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+            assert!(touches.look.is_none());
+            start_pinch(&mut touches, &mut input);
+            locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+            // Touch events, not only redraws, must observe mode changes.
+            touches.handle(mode, 2, Moved, Vec2::splat(190.0), 200.0, &mut input);
+            assert!(touches.look.is_none());
+            assert!(touches.pinch.is_none());
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+        }
+    }
+
+    #[test]
+    fn orbit_and_none_do_not_pinch_or_promote_unowned_fingers() {
+        for mode in [PointerMode::OrbitDrag, PointerMode::None] {
+            let mut touches = TouchControls::default();
+            let mut input = InputFrame::default();
+            for (id, position) in [(1, Vec2::new(120.0, 40.0)), (2, Vec2::new(150.0, 80.0))] {
+                touches.handle(mode, id, Started, position, 200.0, &mut input);
+            }
+            touches.handle(mode, 2, Moved, Vec2::new(180.0, 120.0), 200.0, &mut input);
+            touches.handle(mode, 1, Moved, Vec2::new(125.0, 50.0), 200.0, &mut input);
+            assert_eq!(
+                input.look_delta,
+                if mode == PointerMode::OrbitDrag {
+                    Vec2::new(5.0, 10.0)
+                } else {
+                    Vec2::ZERO
+                }
+            );
+            assert_eq!(input.zoom_delta, 0.0);
+            assert!(touches.pinch.is_none());
+            assert_eq!(touches.movement_axis(), Vec2::ZERO);
+            input.clear_transient();
+            touches.handle(mode, 1, Ended, Vec2::ZERO, 200.0, &mut input);
+            touches.handle(mode, 2, Moved, Vec2::splat(190.0), 200.0, &mut input);
+            assert!(touches.look.is_none());
+            assert_eq!(input.look_delta, Vec2::ZERO);
+            assert_eq!(input.zoom_delta, 0.0);
+        }
+    }
+
+    #[test]
+    fn pinch_zoom_is_finite_and_bounded() {
+        let mut touches = TouchControls::default();
+        let mut input = InputFrame::default();
+        for (position, width) in [
+            ([f32::NAN, 40.0], 200.0),
+            ([120.0, f32::INFINITY], 200.0),
+            ([120.0, 40.0], 0.0),
+            ([120.0, 40.0], -200.0),
+            ([120.0, 40.0], f32::INFINITY),
+            ([120.0, 40.0], f32::NAN),
+        ] {
+            touches.handle(
+                PointerMode::LockedLook,
+                1,
+                Started,
+                Vec2::from_array(position),
+                width,
+                &mut input,
+            );
+            assert!(!touches.owns(1));
+        }
+        start_pinch(&mut touches, &mut input);
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for id in [1, 2] {
+                locked_touch(&mut touches, &mut input, id, Moved, [invalid; 2]);
+            }
+        }
+        assert_eq!(input.zoom_delta, 0.0);
+        locked_touch(&mut touches, &mut input, 2, Moved, [180.0, 120.0]);
+        assert_eq!(input.zoom_delta, 1.0);
+        input.clear_transient();
+        for step in 1..=16 {
+            locked_touch(
+                &mut touches,
+                &mut input,
+                2,
+                Moved,
+                [180.0, 120.0 + 50.0 * step as f32],
+            );
+            assert!(input.zoom_delta.is_finite());
+            assert!(f64::from(input.zoom_delta.abs()) <= TouchControls::MAX_PINCH_ZOOM_DELTA);
+        }
+        assert_eq!(
+            f64::from(input.zoom_delta),
+            TouchControls::MAX_PINCH_ZOOM_DELTA
+        );
+        input.clear_transient();
+        for step in (0..16).rev() {
+            locked_touch(
+                &mut touches,
+                &mut input,
+                2,
+                Moved,
+                [180.0, 120.0 + 50.0 * step as f32],
+            );
+        }
+        assert_eq!(
+            f64::from(input.zoom_delta),
+            -TouchControls::MAX_PINCH_ZOOM_DELTA
+        );
+        for (zoom, position) in [
+            (f32::NAN, [f32::MAX; 2]),
+            (f32::INFINITY, [-f32::MAX; 2]),
+            (f32::NEG_INFINITY, [f32::MAX, -f32::MAX]),
+            (f32::MAX, [180.0, 120.0]),
+        ] {
+            input.zoom_delta = zoom;
+            locked_touch(&mut touches, &mut input, 2, Moved, position);
+            assert!(input.zoom_delta.is_finite());
+            assert!(f64::from(input.zoom_delta.abs()) <= TouchControls::MAX_PINCH_ZOOM_DELTA);
+            assert_eq!(input.look_delta, Vec2::ZERO);
+        }
     }
 
     #[test]
     fn orbit_touch_drags_and_clears_on_focus_loss() {
         let mut touches = TouchControls::default();
-        let mut look_delta = glam::Vec2::ZERO;
+        let mut input = InputFrame::default();
         touches.handle(
-            weaver_app_core::PointerMode::OrbitDrag,
+            PointerMode::OrbitDrag,
             7,
-            winit::event::TouchPhase::Started,
-            glam::Vec2::new(10.0, 20.0),
+            Started,
+            Vec2::new(10.0, 20.0),
             200.0,
-            &mut look_delta,
+            &mut input,
         );
         touches.handle(
-            weaver_app_core::PointerMode::OrbitDrag,
+            PointerMode::OrbitDrag,
             7,
-            winit::event::TouchPhase::Moved,
-            glam::Vec2::new(15.0, 12.0),
+            Moved,
+            Vec2::new(15.0, 12.0),
             200.0,
-            &mut look_delta,
+            &mut input,
         );
-        assert_eq!(look_delta, glam::Vec2::new(5.0, -8.0));
+        assert_eq!(input.look_delta, Vec2::new(5.0, -8.0));
+        assert_eq!(input.zoom_delta, 0.0);
         touches.clear();
         assert!(touches.look.is_none());
     }
