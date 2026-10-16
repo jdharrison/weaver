@@ -16,7 +16,7 @@ export async function loadTheaterSchedule(path: string, origin: string, signal: 
 }
 
 export interface TheaterScheduleControllerOptions {
-  player: Pick<TheaterVideoPlayer, "state" | "setSource" | "seek" | "pause" | "play" | "enableSound" | "scheduledAutoplay">;
+  player: Pick<TheaterVideoPlayer, "state" | "setSource" | "seek" | "pause" | "play" | "enableSound" | "scheduledAutoplay"> & Partial<Pick<TheaterVideoPlayer, "setMuted">>;
   media: Pick<TheaterVideoMedia, "src" | "loop" | "seeking" | "ended">;
   path: string;
   origin: string;
@@ -39,6 +39,7 @@ export class TheaterScheduleController {
   private schedule: TheaterSchedule | null = null;
   private readonly abort = new AbortController();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private timerGeneration = 0;
   private following = true;
   private visible: boolean;
   private disposed = false;
@@ -49,6 +50,9 @@ export class TheaterScheduleController {
   private autoplayBlocked = false;
   private userPaused = false;
   private resumeBlocked = false;
+  private playbackEstablished = false;
+  private resumeOnVisible = false;
+  private resumeLocal = false;
   private lastTick: number | null = null;
   private loopPlaying = false;
   private resumeLoop = false;
@@ -60,6 +64,8 @@ export class TheaterScheduleController {
   private loadFailed = false;
   private awaitingStart: boolean;
   private reloadSource = false;
+  private continueWithoutSound = false;
+  private fallbackSelected = false;
 
   constructor(private readonly options: TheaterScheduleControllerOptions) {
     this.visible = options.visible ?? true;
@@ -79,6 +85,7 @@ export class TheaterScheduleController {
     this.loading = loadTheaterSchedule(options.path, options.origin, this.abort.signal, options.fetcher).then((schedule) => {
       if (this.disposed) return;
       this.schedule = schedule;
+      this.fallbackSelected = false;
       // An optional world observer must never break playback or its polling loop.
       try { this.options.onScheduleLoaded?.(schedule); } catch { /* Observer is isolated. */ }
       this.update();
@@ -87,6 +94,7 @@ export class TheaterScheduleController {
       if (this.disposed) return;
       this.loadFailed = true;
       if (this.following) this.status = "Schedule unavailable · retry or continue without sound";
+      if (this.continueWithoutSound) this.selectSilentFallback();
     }).finally(() => {
       this.loadPending = false;
       if (!this.disposed) this.publish();
@@ -112,6 +120,8 @@ export class TheaterScheduleController {
     }
     if (!this.options.player.state.failed && !reloadCurrent) return;
     this.awaitingStart = this.options.waitForGesture ?? false;
+    this.playbackEstablished = false;
+    this.resumeLocal = false;
     this.entryKey = "";
     this.reloadSource = true;
     this.attempted = false;
@@ -125,18 +135,36 @@ export class TheaterScheduleController {
   /** The shell mutes first. A slow initial download need not block entry. */
   continueMuted(): void {
     if (this.disposed || !this.visible) return;
+    this.continueWithoutSound = true;
+    this.options.player.setMuted?.(true);
     this.awaitingStart = false;
     this.userPaused = false;
     this.resumeBlocked = false;
     this.attempted = false;
     this.force = true;
+    if (this.loadFailed && !this.schedule) { this.selectSilentFallback(); return; }
     if (this.options.player.state.ready) this.play();
     else this.update();
+  }
+
+  private selectSilentFallback(): void {
+    this.status = "Schedule unavailable · local silent fallback · retry schedule";
+    if (!this.fallbackSelected) {
+      this.fallbackSelected = true;
+      this.attempted = false;
+      this.options.player.setMuted?.(true);
+      this.options.media.loop = true;
+      this.options.player.setSource(this.options.localSource ?? DEFAULT_THEATER_VIDEO);
+    }
+    this.playerChanged();
+    this.publish();
   }
 
   setFollowing(following: boolean): void {
     if (this.disposed) return;
     this.following = following;
+    this.resumeOnVisible = false;
+    this.resumeLocal = false;
     this.resumeLoop = false;
     this.loopPlaying = false;
     this.force = true;
@@ -158,6 +186,9 @@ export class TheaterScheduleController {
   pause(): void {
     if (this.disposed) return;
     this.userPaused = true;
+    this.playbackEstablished = false;
+    this.resumeOnVisible = false;
+    this.resumeLocal = false;
     this.loopPlaying = false;
     this.resumeLoop = false;
     this.options.player.pause();
@@ -165,12 +196,13 @@ export class TheaterScheduleController {
 
   /** No await: seek and existing play remain in the original user gesture. */
   play(enableSound = false): void {
-    if (this.disposed || !this.visible || (this.following && !this.schedule)) return;
+    if (this.disposed || !this.visible || (this.following && !this.schedule && !this.fallbackSelected)) return;
     this.userPaused = false;
     this.resumeBlocked = false;
+    this.resumeLocal = false;
     this.attempted = true;
     this.force = true;
-    if (!this.following || this.update(true)) {
+    if (!this.following || this.fallbackSelected || this.update(true)) {
       this.awaitingStart = false;
       // Alignment can emit the old blocked state synchronously. Clear our latch
       // only after alignment, immediately before the gesture's existing play().
@@ -181,11 +213,42 @@ export class TheaterScheduleController {
     }
   }
 
-  playerChanged(): void {
-    if (this.disposed) return;
-    // Capture synchronous playing notifications even while update is guarded.
+  /** The player's bounded decoder reload restores metadata/time before calling this. */
+  recoverPlayback(): void {
+    if (this.disposed || !this.visible) return;
     const state = this.options.player.state;
     this.rememberAutoplayBlock(state.autoplayBlocked);
+    // A timed-out initial silent play can recover before playback is established;
+    // an unsettled audible gesture cannot grant the same delayed permission.
+    const silentAttempt = this.attempted && (state.muted || state.volume === 0);
+    if ((!this.playbackEstablished && !silentAttempt) || !this.canAutoplay() || state.soundPending || this.options.media.ended) return;
+    this.force = true;
+    this.resumeLoop = false;
+    this.attempted = false;
+    this.resumeLocal = !this.following;
+    this.playerChanged();
+  }
+
+  playerChanged(): void {
+    if (this.disposed) return;
+    // Capture settled playback even while update is guarded, not an unsettled sound gesture.
+    const state = this.options.player.state;
+    this.rememberAutoplayBlock(state.autoplayBlocked);
+    if (state.failed) {
+      this.playbackEstablished = false;
+      this.resumeOnVisible = false;
+      this.resumeLocal = false;
+    }
+    if (state.playing && !state.soundPending && this.canAutoplay()) this.playbackEstablished = true;
+    if (!this.following || (this.fallbackSelected && !this.schedule)) {
+      if ((this.resumeLocal || this.fallbackSelected) && this.canAutoplay() && state.ready &&
+          !state.soundPending && !this.options.media.seeking && !this.options.media.ended && !this.attempted) {
+        this.attempted = true;
+        this.resumeLocal = false;
+        if (!this.options.player.scheduledAutoplay()) { this.attempted = false; this.resumeLocal = true; }
+      }
+      return;
+    }
     if (this.following && state.playing && !this.autoplayBlocked) this.loopPlaying = true;
     if (this.updating) return;
     const ready = state.ready && state.duration > 0;
@@ -196,16 +259,27 @@ export class TheaterScheduleController {
   }
 
   setVisible(visible: boolean): void {
-    if (this.disposed) return;
+    if (this.disposed || visible === this.visible) return;
     if (!visible) {
+      const state = this.options.player.state;
+      this.rememberAutoplayBlock(state.autoplayBlocked);
+      this.resumeOnVisible = this.playbackEstablished && this.canAutoplay() && !state.soundPending && !this.options.media.ended;
       this.resumeBlocked = true;
       this.loopPlaying = false;
       this.resumeLoop = false;
       this.cancelTimer();
+    } else {
+      // Only release the visibility pause, never an earlier clock/startup/manual block.
+      if (this.resumeOnVisible) {
+        this.resumeBlocked = false;
+        this.attempted = false;
+        this.resumeLocal = !this.following;
+      }
+      this.resumeOnVisible = false;
     }
     this.visible = visible;
     this.force = true;
-    if (visible) { this.loadLocalSource(); this.update(); this.arm(); }
+    if (visible) { this.loadLocalSource(); this.playerChanged(); this.arm(); }
   }
 
   dispose(): void {
@@ -223,9 +297,18 @@ export class TheaterScheduleController {
 
   private now(): number { return this.options.now?.() ?? Date.now() / 1000; }
 
+  private canAutoplay(): boolean {
+    const state = this.options.player.state;
+    return this.visible && !this.awaitingStart && !this.userPaused && !this.resumeBlocked &&
+      !this.autoplayBlocked && !state.autoplayBlocked && !state.failed && !state.disposed;
+  }
+
   private rememberAutoplayBlock(blocked: boolean): void {
     if (!blocked) return;
     this.autoplayBlocked = true;
+    this.playbackEstablished = false;
+    this.resumeOnVisible = false;
+    this.resumeLocal = false;
     this.loopPlaying = false;
     this.resumeLoop = false;
   }
@@ -234,6 +317,9 @@ export class TheaterScheduleController {
     this.force = true;
     this.resumeBlocked = true;
     this.attempted = true;
+    this.playbackEstablished = false;
+    this.resumeOnVisible = false;
+    this.resumeLocal = false;
     this.loopPlaying = false;
     this.resumeLoop = false;
     this.waitingForSeek = false;
@@ -303,6 +389,7 @@ export class TheaterScheduleController {
       }
       this.status = `${slot.entry.title} · ${utc} UTC · drift ${drift.toFixed(1)}s · ${this.schedule.revision}${hold ? " · source ended (holding final frame)" : ""}`;
       if (hold) {
+        this.playbackEstablished = false;
         this.resumeLoop = false;
         if (state.playing) this.options.player.pause();
       }
@@ -324,7 +411,9 @@ export class TheaterScheduleController {
   private publish(): void { this.options.onChange(this.status, this.following); }
   private arm(): void {
     if (this.disposed || !this.visible || !this.schedule || this.timer !== null) return;
+    const generation = ++this.timerGeneration;
     this.timer = (this.options.setTimeout ?? setTimeout)(() => {
+      if (generation !== this.timerGeneration) return;
       this.timer = null;
       if (this.disposed || !this.visible) return;
       try {
@@ -336,6 +425,7 @@ export class TheaterScheduleController {
     }, 1000);
   }
   private cancelTimer(): void {
+    this.timerGeneration += 1;
     if (this.timer !== null) (this.options.clearTimeout ?? clearTimeout)(this.timer);
     this.timer = null;
     this.lastTick = null;

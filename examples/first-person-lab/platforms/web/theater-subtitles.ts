@@ -3,8 +3,8 @@ export interface SubtitleStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
-export function subtitlePolicy(preferred: boolean, audible: boolean): { enabled: boolean; forced: boolean; panel: number } {
-  return { enabled: preferred || !audible, forced: !audible, panel: !audible ? 6 : preferred ? 3 : 1 };
+export function subtitlePolicy(preferred: boolean, _audible: boolean): { enabled: boolean; forced: boolean; panel: number } {
+  return { enabled: preferred, forced: false, panel: preferred ? 3 : 1 };
 }
 export function captionSource(entry: { source: string; captions?: string } | undefined, mediaSource: string, origin: string): string | undefined {
   if (!entry?.captions || !mediaSource) return undefined;
@@ -67,8 +67,9 @@ export class TheaterSubtitles {
     if ((this.media.getAttribute("src") ?? "") !== this.mediaSource) this.setSource(undefined);
     this.publish();
   }
+  get enabled(): boolean { return this.preferred; }
   toggle(): void {
-    if (this.disposed || !this.audible) return;
+    if (this.disposed) return;
     this.preferred = !this.preferred;
     try { this.storage.setItem(SUBTITLE_PREFERENCE_KEY, this.preferred ? "on" : "off"); } catch { /* Keep the session preference. */ }
     this.publish();
@@ -128,10 +129,10 @@ export class TheaterSubtitles {
   }
   private publish(): void {
     const state = subtitlePolicy(this.preferred, this.audible);
-    this.button.disabled = this.disposed || state.forced;
+    this.button.disabled = this.disposed;
     this.button.setAttribute("aria-pressed", String(state.enabled));
-    this.button.textContent = state.forced ? "Subtitles: on (required)" : state.enabled ? "Subtitles: on" : "Subtitles: off";
-    this.explanation.textContent = state.forced ? "Subtitles stay on while movie audio is not audible. Your preference returns when sound resumes. Captions appear when available." : "Show available movie captions.";
+    this.button.textContent = state.enabled ? "Subtitles: on" : "Subtitles: off";
+    this.explanation.textContent = "Show available movie captions.";
     this.panel(this.disposed ? 0 : state.panel);
     this.render();
   }

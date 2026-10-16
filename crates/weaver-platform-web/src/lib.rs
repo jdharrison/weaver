@@ -55,6 +55,24 @@ pub fn generate_user_id() -> String {
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
+fn physical_canvas_size(width: f64, height: f64, scale: f64) -> Option<glam::UVec2> {
+    let width = (width * scale).round();
+    let height = (height * scale).round();
+    if !scale.is_finite()
+        || scale <= 0.0
+        || !width.is_finite()
+        || !height.is_finite()
+        || width < 1.0
+        || height < 1.0
+        || width > f64::from(u32::MAX)
+        || height > f64::from(u32::MAX)
+    {
+        return None;
+    }
+    Some(glam::UVec2::new(width as u32, height as u32))
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
 const MAX_REALTIME_EVENTS: usize = 256;
 #[cfg(target_arch = "wasm32")]
 const MAX_REALTIME_COMMANDS_PER_REDRAW: usize = 32;
@@ -679,6 +697,7 @@ mod browser {
                     return;
                 }
             };
+
             for mesh in &self.app.assets().meshes {
                 if let Err(error) = renderer.upload_mesh(mesh.handle, &mesh.vertices, &mesh.indices)
                 {
@@ -967,10 +986,26 @@ mod browser {
                     for event in drain_realtime_events() {
                         self.app.handle_realtime_event(event);
                     }
-                    let viewport_size = self.window.as_ref().map_or(glam::UVec2::ZERO, |window| {
-                        let size = window.inner_size();
-                        glam::UVec2::new(size.width, size.height)
-                    });
+                    // Rotation can settle after Winit's resize notification. Read the
+                    // live CSS bounds rather than its cached inner_size so projection,
+                    // surface attachments, and app overlays use the same final size.
+                    let viewport_size = self
+                        .window
+                        .as_ref()
+                        .and_then(|window| window.canvas())
+                        .and_then(|canvas| {
+                            let bounds = canvas.get_bounding_client_rect();
+                            let scale = web_sys::window()?.device_pixel_ratio();
+                            super::physical_canvas_size(bounds.width(), bounds.height(), scale)
+                        })
+                        .unwrap_or(glam::UVec2::ZERO);
+                    if viewport_size.x > 0 && viewport_size.y > 0 {
+                        if let Some(renderer) = self.renderer.as_mut() {
+                            if renderer.context().size != (viewport_size.x, viewport_size.y) {
+                                renderer.resize(viewport_size.x, viewport_size.y);
+                            }
+                        }
+                    }
                     self.app.update(
                         FrameContext {
                             delta_seconds: delta,
@@ -1002,8 +1037,9 @@ mod browser {
                                     error,
                                     weaver_render_wgpu::WgpuRenderError::SurfaceAcquisitionFailed
                                 ) {
-                                    let size = window.inner_size();
-                                    renderer.resize(size.width, size.height);
+                                    if viewport_size.x > 0 && viewport_size.y > 0 {
+                                        renderer.resize(viewport_size.x, viewport_size.y);
+                                    }
                                 }
                             }
                             Err(error) => {
@@ -1093,6 +1129,36 @@ fn recoverable_surface_error(error: &weaver_render_wgpu::WgpuRenderError) -> boo
 mod tests {
     use super::*;
     use glam::Vec2;
+
+    #[test]
+    fn canvas_size_tracks_rotation_and_delayed_layout_at_current_dpr() {
+        for (width, height, scale, expected) in [
+            (390.0, 844.0, 3.0, glam::UVec2::new(1170, 2532)),
+            (844.0, 390.0, 3.0, glam::UVec2::new(2532, 1170)),
+            (844.0, 350.0, 3.0, glam::UVec2::new(2532, 1050)),
+            (390.0, 844.0, 2.0, glam::UVec2::new(780, 1688)),
+            (390.5, 843.5, 1.5, glam::UVec2::new(586, 1265)),
+        ] {
+            assert_eq!(physical_canvas_size(width, height, scale), Some(expected));
+        }
+    }
+
+    #[test]
+    fn hidden_or_invalid_canvas_bounds_do_not_resize_the_surface() {
+        for (width, height, scale) in [
+            (0.0, 844.0, 3.0),
+            (390.0, 0.0, 3.0),
+            (-390.0, 844.0, 3.0),
+            (390.0, 844.0, 0.0),
+            (390.0, 844.0, -1.0),
+            (f64::NAN, 844.0, 3.0),
+            (390.0, f64::INFINITY, 3.0),
+            (390.0, 844.0, f64::NAN),
+            (f64::MAX, 844.0, 3.0),
+        ] {
+            assert_eq!(physical_canvas_size(width, height, scale), None);
+        }
+    }
     use weaver_app_core::{AppAssets, InputFrame, PointerMode, WeaverApp};
     use weaver_render::SceneSnapshot;
     use winit::event::TouchPhase::{self, Cancelled, Ended, Moved, Started};

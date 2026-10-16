@@ -84,14 +84,14 @@ function inputFixture() {
     onActivate: (callback) => { onActivate = callback; } };
 }
 
-test("subtitle panel accepts mouse and touch activation", () => {
-  for (const pointerType of ["mouse", "touch"]) {
+test("subtitle panel and both portfolio halves accept mouse and touch activation", () => {
+  for (const target of [3, 4, 5]) for (const pointerType of ["mouse", "touch"]) {
     const f = inputFixture();
-    f.setHit(3);
+    f.setHit(target);
     f.send("pointerdown", { pointerType });
     f.send("pointerup", { pointerType });
     f.send("click");
-    assert.deepEqual(f.actions, [3]);
+    assert.deepEqual(f.actions, [target]);
     f.remove();
   }
 });
@@ -239,7 +239,7 @@ test("seated exit allows touch and locked mouse, but an unlocked mouse click rem
 
 test("unknown targets, untrusted input, inert canvases and invalid coordinates fail closed", () => {
   const f = inputFixture();
-  for (const target of [0, 4, 99, 124, 199, 201, 100.5, NaN, Infinity]) {
+  for (const target of [0, 6, 99, 124, 199, 201, 100.5, NaN, Infinity]) {
     f.setHit(target);
     assert.equal(f.send("pointerdown").consumed, false);
   }
@@ -256,7 +256,7 @@ test("unknown targets, untrusted input, inert canvases and invalid coordinates f
 });
 
 test("touch release must retain the exact seat or panel target, never merely the target kind", () => {
-  for (const [start, end] of [[100, 101], [100, 200], [200, 100], [100, 1], [1, 100]]) {
+  for (const [start, end] of [[100, 101], [100, 200], [200, 100], [100, 1], [1, 100], [4, 5], [5, 4], [4, 100]]) {
     const f = inputFixture(), touch = { pointerType: "touch" };
     f.setHit(start); f.send("pointerdown", touch);
     f.setHit(end); f.send("pointerup", { ...touch, timeStamp: 100 });

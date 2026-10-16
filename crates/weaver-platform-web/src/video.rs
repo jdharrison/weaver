@@ -71,7 +71,7 @@ impl<T> VideoSlot<T> {
         self.remove = true;
     }
 
-    fn fail(&mut self, message: String) {
+    fn fail(&mut self, message: &str) {
         self.detach();
         self.device_limit = 0;
         // Preserve only the first error and bound browser-visible error storage.
@@ -134,7 +134,7 @@ pub(crate) fn initialize(renderer: &weaver_render_wgpu::WgpuRenderer, has_target
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn fail(message: String) {
-    VIDEO.with(|state| state.borrow_mut().fail(message));
+    VIDEO.with(|state| state.borrow_mut().fail(&message));
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -258,7 +258,7 @@ mod tests {
         slot.defer_frame();
         assert_eq!(slot.take_frame(), None);
         assert!(slot.attach(2, 638, 360));
-        slot.fail("decode failed".into());
+        slot.fail("decode failed");
         slot.defer_frame();
         assert_eq!(slot.take_frame(), None);
     }
@@ -288,8 +288,8 @@ mod tests {
     fn failure_is_bounded_disables_attach_and_cancels_pending_work() {
         let mut slot = ready_slot();
         assert!(slot.attach(1, 1, 1));
-        slot.fail("x".repeat(2000));
-        slot.fail("later error".into());
+        slot.fail(&"x".repeat(2000));
+        slot.fail("later error");
         assert_eq!(slot.fatal.as_ref().unwrap().len(), 1024);
         assert!(!slot.attach(2, 1, 1));
         assert_eq!(slot.take_frame(), None);

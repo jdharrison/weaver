@@ -1,6 +1,16 @@
 //! Sealed booth facade and inexpensive, movie-textured projection haze.
 
-use super::*;
+use super::{
+    DEFAULT_VIDEO_ASPECT, HEIGHT, MIN_Z, SCREEN_ASPECT, SCREEN_BOTTOM, SCREEN_CENTER_X,
+    SCREEN_HEIGHT, SCREEN_WIDTH, Theater,
+};
+use glam::{Vec2, Vec3};
+use weaver_app_core::MeshAsset;
+use weaver_render::{
+    MeshHandle, MeshInstance, MeshLighting, MeshRenderMode, MeshTextureFit, RenderTransform,
+    SpriteHandle,
+};
+use weaver_render_wgpu::Vertex;
 
 #[cfg(test)]
 pub(crate) const MESH_COUNT: usize = 8;
@@ -122,7 +132,7 @@ pub(super) fn append(scene: &mut Theater) {
                     positions[i] = near.lerp(far, t);
                     // A ray keeps its image coordinate, rather than repeating the
                     // movie along the beam. Subdivision limits affine UV distortion.
-                    uvs[i] = [(offset.x + 1.0) * 0.5, (1.0 - offset.y) * 0.5];
+                    uvs[i] = [f32::midpoint(offset.x, 1.0), (1.0 - offset.y) * 0.5];
                     let edge = (1.0 - s * s).powi(2);
                     let ends = (t * 8.0).min(1.0) * ((1.0 - t) * 4.0).min(1.0);
                     alpha[i] = 0.045 * edge * ends;
@@ -200,6 +210,9 @@ impl Geometry {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        AUDITORIUM_MAX, AUDITORIUM_MIN, apply_room_lighting, fit_screen, floor_height,
+    };
     use super::*;
 
     #[test]

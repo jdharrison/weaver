@@ -1,0 +1,696 @@
+{
+  "project": "Starlit Cinema",
+  "version": 2,
+  "state": "seated",
+  "avatar_count": 9,
+  "image_count": 27,
+  "views": [
+    "front",
+    "left_side",
+    "back"
+  ],
+  "format": "PNG RGBA",
+  "canvas": [
+    1024,
+    1536
+  ],
+  "chairs_included": false,
+  "coordinate_system": "pixels, origin top-left, bbox right/bottom exclusive",
+  "assets": [
+    {
+      "avatar": "01_rust_drifter",
+      "view": "front",
+      "filename": "01_rust_drifter/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        114,
+        36,
+        910,
+        1465
+      ],
+      "fully_transparent_fraction": 0.5609,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "091c049e4bfea80f9e46611947408c97044ad92c3562fe2cad0dc2d0b96a60c5",
+      "standing_reference": "avatar_01_rust_drifter.png",
+      "standing_reference_sha256": "999b2498fd8b4ac33f099155586cc985afb2a91ab7a2891363bde2d9c32c91d8"
+    },
+    {
+      "avatar": "01_rust_drifter",
+      "view": "left_side",
+      "filename": "01_rust_drifter/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        66,
+        23,
+        963,
+        1478
+      ],
+      "fully_transparent_fraction": 0.6086,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "00747eab2103317260cb7196181e5037381fc3404e5ca24a80700747ebe35318",
+      "standing_reference": "01_rust_drifter/left_side.png",
+      "standing_reference_sha256": "9f5ade9b05e296fe509fa176c622911fc562ac7093dec9820dc9285b822153db"
+    },
+    {
+      "avatar": "01_rust_drifter",
+      "view": "back",
+      "filename": "01_rust_drifter/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        116,
+        34,
+        908,
+        1463
+      ],
+      "fully_transparent_fraction": 0.5972,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "86b9667e6f7365f44220fab5527428382f354d4a2eae3cb6c978f7556ed35075",
+      "standing_reference": "01_rust_drifter/back.png",
+      "standing_reference_sha256": "8051ed26d1e1d565c93da907088ba6efeaf362aba4bdd8037e6557b8564da87f"
+    },
+    {
+      "avatar": "02_chrome_usher",
+      "view": "front",
+      "filename": "02_chrome_usher/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        221,
+        45,
+        803,
+        1477
+      ],
+      "fully_transparent_fraction": 0.6831,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "5040cb67ebc048ce125596b83a65ad297b59e3d7c9fffc51121f19013c5c5472",
+      "standing_reference": "avatar_02_chrome_usher.png",
+      "standing_reference_sha256": "ad0932486ea3d5901db699d3eb95ce81120c38f8d631a16af1a03ce86c90a859"
+    },
+    {
+      "avatar": "02_chrome_usher",
+      "view": "left_side",
+      "filename": "02_chrome_usher/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        73,
+        32,
+        879,
+        1476
+      ],
+      "fully_transparent_fraction": 0.7094,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "5e65f2abd5af1639f175cde39c4d92d9bb6a57b22731e547ed64adc6eb74061f",
+      "standing_reference": "02_chrome_usher/left_side.png",
+      "standing_reference_sha256": "83a377e7170a6da6b2cba73519698a49d5b886e1812bf047213da095995c622f"
+    },
+    {
+      "avatar": "02_chrome_usher",
+      "view": "back",
+      "filename": "02_chrome_usher/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        181,
+        20,
+        844,
+        1480
+      ],
+      "fully_transparent_fraction": 0.6511,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "8efe9dc253215c6e7ba0d5ebf69643975439c6d46258e589bafb0dffc563d3e7",
+      "standing_reference": "02_chrome_usher/back.png",
+      "standing_reference_sha256": "4237a89e15a058c3886351307f50be0a0c32946cbb3565641c2c79856fb3d222"
+    },
+    {
+      "avatar": "03_moth_mechanic",
+      "view": "front",
+      "filename": "03_moth_mechanic/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        16,
+        37,
+        1008,
+        1472
+      ],
+      "fully_transparent_fraction": 0.4859,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "2438e9e114233a5d0e443e38156e9be573a45dc6d97019261c935076847eb892",
+      "standing_reference": "avatar_03_moth_mechanic.png",
+      "standing_reference_sha256": "ed22286c3ee39c41086d314986af3c8fa885a9af40f7b530204c75e7dc232626"
+    },
+    {
+      "avatar": "03_moth_mechanic",
+      "view": "left_side",
+      "filename": "03_moth_mechanic/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        16,
+        14,
+        1012,
+        1449
+      ],
+      "fully_transparent_fraction": 0.5485,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "a1f9c0a4743ca434bfd9b0f7124aeef697cc76e0078cf2fb7df4b63454701f62",
+      "standing_reference": "03_moth_mechanic/left_side.png",
+      "standing_reference_sha256": "78bdbe7245d085e69730131dd592fb52bb1234561363063a9c997e7204ca12ec"
+    },
+    {
+      "avatar": "03_moth_mechanic",
+      "view": "back",
+      "filename": "03_moth_mechanic/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        53,
+        49,
+        977,
+        1492
+      ],
+      "fully_transparent_fraction": 0.4815,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "3d6cfb86faa1facca259718caad1916912d89dc2994b59bb4040f83b572ccd81",
+      "standing_reference": "03_moth_mechanic/back.png",
+      "standing_reference_sha256": "477b83ef6b2a2d716639c6d39ec28d4342926073a9c3c1a2b28f92d560760d97"
+    },
+    {
+      "avatar": "04_velvet_bones",
+      "view": "front",
+      "filename": "04_velvet_bones/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        108,
+        19,
+        919,
+        1483
+      ],
+      "fully_transparent_fraction": 0.5579,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "335d4cf45615708b9f57d7d06ae071078484dfb817fab239c4dca214b764c6f5",
+      "standing_reference": "avatar_04_velvet_bones.png",
+      "standing_reference_sha256": "63b25bbe1bd2a16f19f082f34183291e3d03b23230120122d7f9719a43454582"
+    },
+    {
+      "avatar": "04_velvet_bones",
+      "view": "left_side",
+      "filename": "04_velvet_bones/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        28,
+        23,
+        996,
+        1469
+      ],
+      "fully_transparent_fraction": 0.6015,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "b9c033cc6c7f8828b61febbc089c940ffb65797fbee0fb95294eb1224e62da8b",
+      "standing_reference": "04_velvet_bones/left_side.png",
+      "standing_reference_sha256": "3fcaf4d05b754a69a1656c0d7c94634a1ef3be91bd5d1ed468a1ac036ab5d4f4"
+    },
+    {
+      "avatar": "04_velvet_bones",
+      "view": "back",
+      "filename": "04_velvet_bones/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        53,
+        20,
+        972,
+        1486
+      ],
+      "fully_transparent_fraction": 0.5409,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "d4b8b00a7b79ed2605049813bd2c3f79e9bbd2e6a8903ec20422faf9bd414c00",
+      "standing_reference": "04_velvet_bones/back.png",
+      "standing_reference_sha256": "35777dd710e5a887ac8f6b40aad828427de28ce951214116395de777caf4265c"
+    },
+    {
+      "avatar": "05_spore_scout",
+      "view": "front",
+      "filename": "05_spore_scout/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        209,
+        33,
+        832,
+        1431
+      ],
+      "fully_transparent_fraction": 0.6106,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "77278c7732b2635f862e00441fcf88a176204e0840cf80b25e3a4a29ad21cd8e",
+      "standing_reference": "avatar_05_spore_scout.png",
+      "standing_reference_sha256": "47759049276ba78faebb8f10d7818875bd9162b7c26a590c5f1370094bec1d83"
+    },
+    {
+      "avatar": "05_spore_scout",
+      "view": "left_side",
+      "filename": "05_spore_scout/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        51,
+        34,
+        1006,
+        1467
+      ],
+      "fully_transparent_fraction": 0.6079,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "9d290b46d44cd01532fe646db4ae4e51c8f2532c28ad510314674fd07cca1461",
+      "standing_reference": "05_spore_scout/left_side.png",
+      "standing_reference_sha256": "a4f55f53296f4f958324aadc75e15559ed22f9cff0b2bb8eefc3859806cbc07d"
+    },
+    {
+      "avatar": "05_spore_scout",
+      "view": "back",
+      "filename": "05_spore_scout/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        117,
+        12,
+        905,
+        1455
+      ],
+      "fully_transparent_fraction": 0.5681,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "0e4f07f54a441377baa5966986c0730cb5301b81f7ba44dbdbfe5de7f3de222d",
+      "standing_reference": "05_spore_scout/back.png",
+      "standing_reference_sha256": "5981f7ad07ad130a69f7bcbcc9a084c58c1fc2320fc0e7e1f361b723ffc6d4d8"
+    },
+    {
+      "avatar": "06_canid_courier",
+      "view": "front",
+      "filename": "06_canid_courier/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        196,
+        16,
+        832,
+        1478
+      ],
+      "fully_transparent_fraction": 0.6319,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "3aaf41e438247f0c69dcd666f0588702dca214e665bfc556506b6694268c4011",
+      "standing_reference": "avatar_06_canid_courier.png",
+      "standing_reference_sha256": "c5afba687840f53738f8b8f8bd319c6c3d673339cc7e349f9db0e568ae7278c0"
+    },
+    {
+      "avatar": "06_canid_courier",
+      "view": "left_side",
+      "filename": "06_canid_courier/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        20,
+        9,
+        960,
+        1480
+      ],
+      "fully_transparent_fraction": 0.6152,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "4784640cb5fda14f3c55af73aa028d2c29500187a69361546907472545af8fe8",
+      "standing_reference": "06_canid_courier/left_side.png",
+      "standing_reference_sha256": "8066750c141ca1030c69f0977724d44e2ea97f8369573f6cb74c55718babf9af"
+    },
+    {
+      "avatar": "06_canid_courier",
+      "view": "back",
+      "filename": "06_canid_courier/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        139,
+        17,
+        935,
+        1463
+      ],
+      "fully_transparent_fraction": 0.5786,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "8e83bac093e46b9bfec858caa747ed4048d924e1d8824448efdc3cca35a600b8",
+      "standing_reference": "06_canid_courier/back.png",
+      "standing_reference_sha256": "e2484358a982dcc27b9914993f1786c795c9fa8ab980ddc62cbed8b9ce48bb3a"
+    },
+    {
+      "avatar": "07_puddle_kid",
+      "view": "front",
+      "filename": "07_puddle_kid/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        171,
+        40,
+        862,
+        1453
+      ],
+      "fully_transparent_fraction": 0.5632,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "dffab4d0730de80342b20fc1b9a74b4820fc56df6220f966607443359671d858",
+      "standing_reference": "avatar_07_puddle_kid.png",
+      "standing_reference_sha256": "f6a0d07adb00706557ca2c8e1ae00ae7c6180b0b718e10f54fb725b39945d5bd"
+    },
+    {
+      "avatar": "07_puddle_kid",
+      "view": "left_side",
+      "filename": "07_puddle_kid/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        70,
+        108,
+        983,
+        1439
+      ],
+      "fully_transparent_fraction": 0.6317,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "1b6db52a5c1dc58e9b8381108e5c38123ade88639baa7ef3f70dd9835f5ac406",
+      "standing_reference": "07_puddle_kid/left_side.png",
+      "standing_reference_sha256": "3e48aa41afe6e9b4f3efb07c2e6c51016d841de73bf1b61c9bd6724fb16d591a"
+    },
+    {
+      "avatar": "07_puddle_kid",
+      "view": "back",
+      "filename": "07_puddle_kid/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        96,
+        71,
+        928,
+        1468
+      ],
+      "fully_transparent_fraction": 0.5531,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "e82b2c65d780cde58fde4475c54650e9033420bc8eae42c905b3dd8ba206f629",
+      "standing_reference": "07_puddle_kid/back.png",
+      "standing_reference_sha256": "7cd59a08c2600f7bfc3c86b491792637b0ec073e72a240929064ec7a23cd4fd5"
+    },
+    {
+      "avatar": "08_aviary_pilot",
+      "view": "front",
+      "filename": "08_aviary_pilot/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        95,
+        26,
+        920,
+        1467
+      ],
+      "fully_transparent_fraction": 0.5673,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "b7eb93281667fc092f45756ac9ca41ce7dc8a2997b887e85730928e9cc3670a0",
+      "standing_reference": "avatar_08_aviary_pilot.png",
+      "standing_reference_sha256": "1f3816079abb2707e0c681d1880008ed0e036a31c0209c73ec1f90a181dc2594"
+    },
+    {
+      "avatar": "08_aviary_pilot",
+      "view": "left_side",
+      "filename": "08_aviary_pilot/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        20,
+        48,
+        1008,
+        1453
+      ],
+      "fully_transparent_fraction": 0.5877,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "854a329af0485853907708ed84ff6397a1da747096df3085e9105eb254b5203a",
+      "standing_reference": "08_aviary_pilot/left_side.png",
+      "standing_reference_sha256": "d58d04abc968eb26ba1c32cb85550216d4cd42b53e82bbe8e0b0f573397013e2"
+    },
+    {
+      "avatar": "08_aviary_pilot",
+      "view": "back",
+      "filename": "08_aviary_pilot/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        95,
+        22,
+        937,
+        1472
+      ],
+      "fully_transparent_fraction": 0.5333,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "4ec650ce7cc4bd2db79082769145d493dea11c7a9b12b6a0ad1b1e5033c161fb",
+      "standing_reference": "08_aviary_pilot/back.png",
+      "standing_reference_sha256": "c73c285db979bf675d737578aa4ccdac0773eb9ef4e50bc81238a82423b4328c"
+    },
+    {
+      "avatar": "09_tortoise_miner",
+      "view": "front",
+      "filename": "09_tortoise_miner/seated_front.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        134,
+        67,
+        914,
+        1453
+      ],
+      "fully_transparent_fraction": 0.5417,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "e50f028ab46d9fb6024938ffad2c12a15f4859d9e6c26d56cb1f07b22eca6241",
+      "standing_reference": "avatar_09_tortoise_miner.png",
+      "standing_reference_sha256": "aea51a94235234a1b5891883f87c0e25b44964abe7c136482dd7af9731b542ae"
+    },
+    {
+      "avatar": "09_tortoise_miner",
+      "view": "left_side",
+      "filename": "09_tortoise_miner/seated_left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        11,
+        84,
+        1022,
+        1472
+      ],
+      "fully_transparent_fraction": 0.5428,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "298505f22784c985d887ebe5b5d9867aea8e3668d6fee4ad1836fdaa344dec4d",
+      "standing_reference": "09_tortoise_miner/left_side.png",
+      "standing_reference_sha256": "69189d12305606184b4484dad31b287a2fbbb7a8682894aad88721636357bc75"
+    },
+    {
+      "avatar": "09_tortoise_miner",
+      "view": "back",
+      "filename": "09_tortoise_miner/seated_back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "content_bbox_alpha_ge_16": [
+        70,
+        26,
+        965,
+        1449
+      ],
+      "fully_transparent_fraction": 0.4849,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "border_pixels_alpha_ge_16": 0,
+      "sha256": "d81427b2f8112e716f61b4ff6b22d8669fde0c6b51c9bbfd1b5f212dbd76a855",
+      "standing_reference": "09_tortoise_miner/back.png",
+      "standing_reference_sha256": "45ceb7c60b0294a1ad5ff23ee8b333db986f92e17169c4d408dc19f4c2f83155"
+    }
+  ]
+}

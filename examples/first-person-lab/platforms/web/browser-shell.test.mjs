@@ -3,6 +3,83 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 
+// Strict contract for this static shell's markup, not a replacement for browser DOM QA.
+// Unlike the event fixture, this rejects malformed tags and verifies actual nesting.
+function parseShellMarkup(html) {
+  const root = { tag: "#document", children: [] }, stack = [root], byId = new Map();
+  const voidTags = new Set(["meta", "link", "img", "input", "br", "hr", "source", "track"]);
+  const tokens = /<!--[\s\S]*?-->|<!doctype[^>]*>|<\/?[a-z][^<>]*>/gi;
+  let end = 0;
+  for (const match of html.matchAll(tokens)) {
+    assert.doesNotMatch(html.slice(end, match.index), /[<>]/, "Malformed tag in shell HTML");
+    end = match.index + match[0].length;
+    const token = match[0];
+    if (token.startsWith("<!")) continue;
+    if (token.startsWith("</")) {
+      const closing = /^<\/([a-z][\w-]*)\s*>$/i.exec(token);
+      assert.ok(closing, `Malformed closing tag: ${token}`);
+      assert.equal(stack.at(-1).tag, closing[1], `Unbalanced tag: ${token}`);
+      stack.pop();
+      continue;
+    }
+    const opening = /^<([a-z][\w-]*)([\s\S]*?)>$/i.exec(token);
+    assert.ok(opening, `Malformed opening tag: ${token}`);
+    const attributes = new Map();
+    let rest = opening[2];
+    while (rest.trim()) {
+      const attr = /^\s+([a-z][\w:-]*)(?:\s*=\s*"([^"]*)")?/i.exec(rest);
+      assert.ok(attr, `Malformed attributes: ${token}`);
+      assert.equal(attributes.has(attr[1]), false, `Duplicate attribute: ${token}`);
+      attributes.set(attr[1], attr[2] ?? "");
+      rest = rest.slice(attr[0].length);
+    }
+    const node = { tag: opening[1], attributes, children: [], parent: stack.at(-1) };
+    node.parent.children.push(node);
+    const id = attributes.get("id");
+    if (id) { assert.equal(byId.has(id), false, `Duplicate id: ${id}`); byId.set(id, node); }
+    if (!voidTags.has(node.tag)) stack.push(node);
+  }
+  assert.doesNotMatch(html.slice(end), /[<>]/, "Malformed trailing shell HTML");
+  assert.equal(stack.length, 1, "Unclosed shell tags");
+  return { root, byId };
+}
+const shellHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+const shellMarkup = parseShellMarkup(shellHtml);
+
+test("actual HUD markup contains a valid launcher image, nested dialog and three accessible native rows", () => {
+  const node = id => { const value = shellMarkup.byId.get(id); assert.ok(value, `Missing HTML id: ${id}`); return value; };
+  const launcher = node("controller-launcher"), overlay = node("controller-overlay"), dialog = node("controller-dialog");
+  assert.equal(launcher.tag, "button");
+  assert.equal(launcher.attributes.get("type"), "button");
+  assert.equal(launcher.attributes.get("aria-controls"), "controller-dialog");
+  assert.equal(launcher.children.length, 1);
+  assert.equal(launcher.children[0].tag, "img");
+  assert.equal(launcher.children[0].attributes.get("src"), "/weaver/assets/controller/collapsed_state.png");
+  assert.equal(launcher.children[0].attributes.get("alt"), "");
+  assert.equal(overlay.tag, "div"); assert.equal(dialog.parent, overlay);
+  assert.equal(dialog.tag, "section"); assert.equal(dialog.attributes.get("role"), "dialog");
+  assert.equal(dialog.attributes.get("aria-modal"), "true");
+  assert.deepEqual(dialog.children.filter(child => child.tag === "button").map(child => child.attributes.get("id")),
+    ["controller-audio", "controller-subtitles", "controller-fullscreen"]);
+  for (const id of ["controller-audio", "controller-subtitles", "controller-fullscreen"]) {
+    const button = node(id);
+    assert.equal(button.parent, dialog); assert.equal(button.attributes.get("type"), "button");
+    assert.ok(button.attributes.get("aria-label"));
+    assert.match(button.attributes.get("aria-pressed"), /^(true|false)$/);
+  }
+  for (const element of shellMarkup.byId.values()) {
+    for (const attribute of ["aria-controls", "aria-describedby", "aria-labelledby"]) {
+      for (const id of (element.attributes.get(attribute) ?? "").split(/\s+/).filter(Boolean)) node(id);
+    }
+  }
+  assert.doesNotMatch(shellHtml, /Subtitles: on \(required\)|Subtitles stay on|using Sound in the room/);
+});
+
+test("markup contract rejects the reported broken image and section tags", () => {
+  assert.throws(() => parseShellMarkup(shellHtml.replace('<img src=', '<img</button> src=')), /Malformed tag/);
+  assert.throws(() => parseShellMarkup(shellHtml.replace('<section id="controller-dialog"', '<se</div>ction id="controller-dialog"')), /Malformed tag/);
+});
+
 // A unit-test bundle only: no real Woven client, generated WASM, or output files.
 const bundled = await build({ entryPoints: ["main.ts"], bundle: true, write: false,
   format: "esm", platform: "browser", target: "es2022",
@@ -97,7 +174,7 @@ function soundPanelClick(f) {
 class KeyboardFixtureEvent extends Event {
   constructor(type, options = {}) {
     super(type, { cancelable: true, ...options });
-    for (const [name, fallback] of Object.entries({ key: "", code: "", repeat: false, isComposing: false, shiftKey: false })) {
+    for (const [name, fallback] of Object.entries({ key: "", code: "", repeat: false, isComposing: false, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false })) {
       this[name] = options[name] ?? fallback;
     }
   }
@@ -127,6 +204,7 @@ class Element extends EventTarget {
   } };
   contains(target) { return target === this || this.children.some(child => child.contains(target)); }
   getBoundingClientRect() { return { left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }; }
+  append(...children) { this.children.push(...children); }
   remove() { this.removed = true; }
   setCustomValidity() {}
   checkValidity() { return true; }
@@ -221,15 +299,31 @@ async function shell(t, options = {}) {
         "theater-controls", "theater-play", "theater-restart", "theater-mute", "theater-volume", "theater-seek", "theater-time", "theater-status",
         "theater-lobby-light", "theater-auditorium-light", "theater-follow-schedule", "theater-schedule-status",
         "scene-instructions", "connection-controls", "theater-startup", "theater-startup-status",
-        "theater-startup-play", "theater-startup-retry", "theater-startup-continue"]
-    .map((id) => [id, new Element()]));
+        "theater-startup-play", "theater-startup-retry", "theater-startup-continue",
+        "controller-launcher", "controller-overlay", "controller-dialog", "controller-audio", "controller-subtitles", "controller-fullscreen", "controller-status"]
+    .map((id) => {
+      const markup = shellMarkup.byId.get(id);
+      assert.ok(markup, `Fixture id must exist in actual HTML: ${id}`);
+      const element = new Element(); element.tagName = markup.tag.toUpperCase();
+      return [id, element];
+    }));
   for (const [id, value] of Object.entries({ "woven-auth": "bearer", "woven-url": TARGET.url,
-    "woven-namespace": "2", "woven-session": "2", "woven-space": "3", "woven-epoch": "1",
-        "theater-lobby-light": "1", "theater-auditorium-light": "0.20" })) elements.get(id).value = value;
-  elements.set("theater-video", new VideoElement());
+    "woven-namespace": "2", "woven-session": "2", "woven-space": "3", "woven-epoch": "1" })) elements.get(id).value = value;
+  for (const id of ["theater-lobby-light", "theater-auditorium-light"]) {
+    elements.get(id).value = shellMarkup.byId.get(id).attributes.get("value");
+  }
+  const video = new VideoElement(), videoFrames = new Map();
+  let nextVideoFrame = 0;
+  if (options.videoFrames) {
+    video.requestVideoFrameCallback = (callback) => { videoFrames.set(++nextVideoFrame, callback); return nextVideoFrame; };
+    video.cancelVideoFrameCallback = (id) => videoFrames.delete(id);
+  }
+  elements.set("theater-video", video);
   const rafs = new Map();
   let nextRaf = 0;
   const document = Object.assign(new EventTarget(), {
+    head: new Element(),
+    createElement: tag => { const element = new Element(); element.tagName = tag.toUpperCase(); return element; },
     visibilityState: options.visibility ?? "visible",
     activeElement: null,
     pointerLockElement: null,
@@ -245,7 +339,10 @@ async function shell(t, options = {}) {
   });
   for (const element of elements.values()) element.ownerDocument = document;
   elements.get("theater-startup").children = ["theater-startup-play", "theater-startup-retry", "theater-startup-continue"].map(id => elements.get(id));
-  const storage = new Map();
+  elements.get("controller-dialog").children = ["controller-audio", "controller-subtitles", "controller-fullscreen", "controller-status"].map(id => elements.get(id));
+    elements.get("controller-overlay").children = [elements.get("controller-dialog")];
+    for (const id of ["controller-launcher", "controller-audio", "controller-subtitles", "controller-fullscreen"]) elements.get(id).tagName = "BUTTON";
+    const storage = new Map();
   const window = Object.assign(new EventTarget(), { navigator: { onLine: options.onLine ?? true }, isSecureContext: true, location: { origin: options.origin ?? "https://portfolio.test" },
     requestAnimationFrame: (callback) => { rafs.set(++nextRaf, callback); return nextRaf; },
     cancelAnimationFrame: (id) => rafs.delete(id),
@@ -357,10 +454,36 @@ async function shell(t, options = {}) {
     const video = elements.get("theater-video");
     video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata")); video.dispatchEvent(new Event("loadeddata"));
   };
-  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs, metadata,
+  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs, videoFrames, metadata,
     continueMuted: () => elements.get("theater-startup-continue").dispatchEvent(new Event("click")),
     setUnixNow: (value) => { unixNow = value; } };
 }
+
+test("room light controls match scene defaults and preserve the other room on first adjustment", async (t) => {
+  const rust = readFileSync(new URL("../../src/theater.rs", import.meta.url), "utf8");
+  const defaults = new Map();
+  for (const [id, constant] of [["theater-lobby-light", "LOBBY_LIGHT_LEVEL"],
+    ["theater-auditorium-light", "AUDITORIUM_LIGHT_LEVEL"]]) {
+    const match = rust.match(new RegExp(constant + ": f32 = ([0-9.]+);"));
+    assert.ok(match, `Missing Rust room-light default: ${constant}`);
+    const value = Number(match[1]);
+    defaults.set(id, value);
+    assert.equal(Number(shellMarkup.byId.get(id).attributes.get("value")), value);
+  }
+  const f = await shell(t, { visitor: false, noWebTransport: true, readyOnStart: true });
+  await f.advance(0);
+  const lobby = f.elements.get("theater-lobby-light");
+  const auditorium = f.elements.get("theater-auditorium-light");
+  assert.equal(f.harness.videoEvents.some(([event]) => event === "light"), false);
+  lobby.value = "0.95";
+  lobby.dispatchEvent(new Event("input"));
+  assert.deepEqual(f.harness.videoEvents.filter(([event]) => event === "light"),
+    [["light", 0.95, defaults.get("theater-auditorium-light")]]);
+  auditorium.value = "0.45";
+  auditorium.dispatchEvent(new Event("input"));
+  assert.deepEqual(f.harness.videoEvents.filter(([event]) => event === "light").at(-1),
+    ["light", 0.95, 0.45]);
+});
 
 const npcContext = (sequence = "1") => ({
   version: 1, npcId: "concession_support", profile: "npc_concession_support", displayName: "Concession Support",
@@ -564,7 +687,7 @@ test("theater starts once in a later task, never in the synchronous ready callba
   assert.deepEqual(video.sources, [SCHEDULED_VIDEO]); assert.deepEqual(video.loads, [SCHEDULED_VIDEO]);
   globalThis.weaverSceneReady(); f.metadata(); await f.advance(0);
   assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
-  assert.equal(video.playCount, 0);
+  assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   assert.equal(f.elements.get("theater-startup").dataset.state, "ready");
   f.continueMuted();
   assert.equal(video.playCount, 1);
@@ -591,7 +714,7 @@ test("slow manifest cannot block ready and selects the current UTC slot only whe
   assert.deepEqual(video.sources, ["/second.mp4"]); assert.equal(video.playCount, 0);
   assert.deepEqual(f.harness.npcCycles, [[0, 120]]);
   f.metadata(); await flush();
-  assert.equal(video.currentTime, 25); assert.equal(video.playCount, 0);
+  assert.equal(video.currentTime, 25); assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   f.continueMuted();
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
 });
@@ -606,8 +729,10 @@ test("startup Play accepts metadata, stays synchronous, and waits for observed s
   assert.equal(f.harness.scheduleFetches.length, 0);
   await f.advance(0);
   video.readyState = 1; video.dispatchEvent(new Event("loadedmetadata"));
+  await flush();
   assert.equal(dialog.dataset.state, "ready"); assert.equal(play.disabled, false);
-  assert.equal(video.playCount, 0); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  assert.equal(video.playCount, 1); assert.equal(video.muted, true); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  await flush(); // Settle the independent silent autoplay before the sound gesture.
   let gesture = false;
   video.play = () => {
     assert.equal(gesture, true); assert.equal(video.muted, false);
@@ -615,9 +740,9 @@ test("startup Play accepts metadata, stays synchronous, and waits for observed s
     return Promise.resolve(); // Neither a playing notification nor a decoded frame.
   };
   f.setUnixNow(17000);
-  play.dispatchEvent(new Event("click")); assert.equal(video.playCount, 0);
+  play.dispatchEvent(new Event("click")); assert.equal(video.playCount, 1);
   gesture = true; trustedClick(play); gesture = false;
-  assert.equal(video.playCount, 1); assert.equal(video.currentTime, 17);
+  assert.equal(video.playCount, 2); assert.equal(video.currentTime, 17);
   assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "starting");
   await flush(); assert.equal(dialog.hidden, false);
   video.dispatchEvent(new Event("playing")); assert.equal(dialog.hidden, false);
@@ -655,12 +780,13 @@ test("startup Retry reloads only on failure or an explicit slow retry and bounds
   assert.equal(dialog.dataset.state, "failed");
   video.error = null; trustedClick(retry); await flush();
   assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
-  f.metadata(); assert.equal(dialog.dataset.state, "ready"); assert.equal(video.playCount, 0);
+  f.metadata(); await flush(); assert.equal(dialog.dataset.state, "ready"); assert.equal(video.playCount, 1);
+  video.pause(); // Exercise a blocked restart, not an already-observed muted playback unmute.
   video.playError = new Error("NotAllowedError");
   trustedClick(f.elements.get("theater-startup-play")); await flush();
   assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "failed");
   video.playError = null; trustedClick(retry);
-  assert.equal(video.playCount, 2); assert.equal(video.muted, false);
+  assert.equal(video.playCount, 4); assert.equal(video.muted, false);
   assert.equal(dialog.hidden, true);
 });
 
@@ -717,13 +843,13 @@ test("pending Sound reopens confirmation and slow Retry reloads once without rep
   await f.advance(12_000); assert.equal(dialog.dataset.state, "slow");
   trustedClick(retry);
   assert.deepEqual(video.sources, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
-  assert.equal(dialog.dataset.state, "preparing"); assert.equal(retry.hidden, true);
+  assert.equal(dialog.dataset.state, "starting"); assert.equal(retry.hidden, true);
   trustedClick(retry); assert.equal(video.sources.length, 2);
   video.playPromise = null; pending.resolve(); await flush(); f.metadata(); await flush();
   assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "ready");
-  assert.equal(video.playCount, 1); assert.equal(video.muted, true);
+  assert.equal(video.playCount, 2); assert.equal(video.muted, true);
   trustedClick(f.elements.get("theater-startup-play"));
-  assert.equal(video.playCount, 2); assert.equal(video.muted, false); assert.equal(dialog.hidden, true);
+  assert.equal(video.playCount, 3); assert.equal(video.muted, false); assert.equal(dialog.hidden, true);
 });
 
 test("startup visibility pauses the slow indication and disposal cancels late UI work", async (t) => {
@@ -764,7 +890,7 @@ test("startup traps focus, releases held input and pointer lock, blocks chat/gam
   for (const pressed of ["w", "e", "Enter"]) assert.equal(key(f, "keydown", pressed).defaultPrevented, true);
   f.window.dispatchEvent(new Event("beforeinput", { cancelable: true }));
   assert.equal(nativeInput, 0); assert.equal(requests, 0);
-  await f.advance(0); f.metadata();
+  await f.advance(0); f.metadata(); await flush();
   key(f, "keydown", "Tab"); assert.equal(f.document.activeElement, play);
   key(f, "keydown", "Tab", { shiftKey: true }); assert.equal(f.document.activeElement, continued);
   for (const type of ["keydown", "keyup"]) {
@@ -845,6 +971,69 @@ for (const initiallyHidden of [false, true]) {
   });
 }
 
+test("shell onRecover wiring realigns and replays a watchdog decoder reload while schedule polling continues without video callbacks", async (t) => {
+  const f = await shell(t, { visitor: false, unixNow: 123_000, videoFrames: true });
+  const video = f.elements.get("theater-video"), starts = [];
+  const load = video.load.bind(video), play = video.play.bind(video);
+  video.load = () => { load(); video.currentTime = 0; video.paused = true; };
+  video.play = () => { starts.push({ source: video.src, time: video.currentTime }); return play(); };
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  assert.equal(f.videoFrames.size, 1); assert.equal(video.playCount, 1);
+  for (let second = 1; second <= 16; second++) {
+    f.setUnixNow((123 + second) * 1000); await f.advance(1000);
+    video.dispatchEvent(new Event("timeupdate"));
+    if (second === 8) { assert.equal(video.playCount, 2); assert.equal(video.loads.length, 1); }
+  }
+  assert.deepEqual(video.loads, [SCHEDULED_VIDEO, SCHEDULED_VIDEO]);
+  assert.equal(video.readyState, 0); assert.equal(video.playCount, 2); assert.equal(f.videoFrames.size, 0);
+  assert.equal(f.elements.get("theater-play").disabled, true);
+  assert.match(f.elements.get("theater-schedule-status").textContent, /waiting for media/);
+  f.setUnixNow(140_000); f.metadata(); await flush();
+  assert.deepEqual(starts, [{ source: SCHEDULED_VIDEO, time: 123 }, { source: SCHEDULED_VIDEO, time: 129 }, { source: SCHEDULED_VIDEO, time: 140 }]);
+  assert.equal(video.paused, false); assert.equal(video.muted, true); assert.equal(f.videoFrames.size, 1);
+  assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+});
+
+test("established playback resumes once across hidden/pagehide/BFCache events without network rejoin or input recapture", async (t) => {
+  const f = await shell(t, { unixNow: 9000 });
+  const video = f.elements.get("theater-video"), canvas = f.elements.get("scene");
+  let locks = 0; canvas.requestPointerLock = () => { locks++; };
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  assert.equal(video.playCount, 1); assert.equal(video.currentTime, 9);
+  await f.visible("hidden"); f.window.dispatchEvent(new Event("pagehide")); await f.advance(10_000);
+  assert.equal(video.paused, true); assert.equal(video.playCount, 1); assert.equal(f.rafs.size, 0);
+  f.setUnixNow(17_000); f.document.visibilityState = "visible";
+  const restored = new Event("pageshow"); Object.defineProperty(restored, "persisted", { value: true });
+  f.window.dispatchEvent(restored); await flush(); await f.visible("visible");
+  assert.equal(video.playCount, 2); assert.equal(video.paused, false); assert.equal(video.currentTime, 17);
+  assert.equal(video.muted, true); assert.equal(f.rafs.size, 1);
+  assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
+  assert.equal(f.client.closed(), true); assert.equal(f.clients.length, 1); assert.equal(f.harness.fetches.length, 1);
+  assert.equal(locks, 0); assert.equal(f.elements.get("theater-startup").hidden, true);
+  f.elements.get("theater-play").dispatchEvent(new Event("click"));
+  await f.visible("hidden"); f.window.dispatchEvent(new Event("pagehide")); await f.visible("visible");
+  assert.equal(video.paused, true); assert.equal(video.playCount, 2);
+  globalThis.weaverDisposeTheaterVideo(); await f.visible("hidden"); await f.visible("visible");
+  f.metadata(); await f.advance(30_000); assert.equal(video.playCount, 2); assert.equal(video.src, "");
+});
+
+test("visibility restoration waits for asynchronous live alignment before resuming muted playback", async (t) => {
+  const f = await shell(t, { visitor: false, unixNow: 12_000 });
+  const video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  await f.visible("hidden"); f.setUnixNow(14_000);
+  let position = video.currentTime;
+  Object.defineProperty(video, "currentTime", { configurable: true, get: () => position,
+    set: (value) => { position = value; video.seeking = true; video.dispatchEvent(new Event("seeking")); } });
+  await f.visible("visible");
+  assert.equal(video.currentTime, 14); assert.equal(video.seeking, true);
+  assert.equal(video.playCount, 1); assert.equal(video.paused, true);
+  video.seeking = false; video.dispatchEvent(new Event("seeked")); await flush();
+  assert.equal(video.playCount, 2); assert.equal(video.paused, false); assert.equal(video.muted, true);
+  assert.equal(f.harness.scheduleFetches.length, 1);
+});
+
 test("explicit local selection before ready remains lazy, honors its configured source, and can rejoin the schedule", async (t) => {
   const f = await shell(t, { visitor: false, localSource: "/diagnostics.mp4", unixNow: 17000 });
   const video = f.elements.get("theater-video"), follow = f.elements.get("theater-follow-schedule");
@@ -856,7 +1045,7 @@ test("explicit local selection before ready remains lazy, honors its configured 
   assert.deepEqual(video.sources, ["/diagnostics.mp4"]); assert.equal(video.playCount, 0);
   follow.checked = true; follow.dispatchEvent(new Event("change"));
   assert.deepEqual(video.sources, ["/diagnostics.mp4", SCHEDULED_VIDEO]);
-  f.metadata(); await flush(); assert.equal(video.currentTime, 17); assert.equal(video.playCount, 0);
+  f.metadata(); await flush(); assert.equal(video.currentTime, 17); assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   f.continueMuted(); assert.equal(video.playCount, 1);
 });
 
@@ -1095,11 +1284,13 @@ test("shell surfaces blocked muted autoplay and permits one manual Play retry", 
   for (const event of ["loadedmetadata", "loadeddata", "canplay", "timeupdate"]) video.dispatchEvent(new Event(event));
   await flush(); assert.equal(video.playCount, 1);
   video.playError = null;
+  await f.visible("hidden"); await f.visible("visible"); await f.advance(1000);
+  assert.equal(video.playCount, 1); assert.equal(video.paused, true);
   play.dispatchEvent(new Event("click")); await flush();
   assert.equal(video.playCount, 2); assert.equal(video.paused, false); assert.equal(video.muted, true);
   assert.equal(play.textContent, "Pause");
   await f.visible("hidden"); await f.visible("visible");
-  assert.equal(video.playCount, 2); assert.equal(video.paused, true);
+  assert.equal(video.playCount, 3); assert.equal(video.paused, false);
   globalThis.weaverDisposeTheaterVideo();
 });
 
@@ -1124,9 +1315,8 @@ test("movie audio controls synchronize external changes and preserve explicit mu
   play.dispatchEvent(new Event("click")); play.dispatchEvent(new Event("click")); await flush();
   assert.equal(video.muted, true); assert.equal(video.paused, false);
   await f.visible("hidden"); await f.visible("visible");
-  assert.equal(video.paused, true); assert.equal(video.volume, 0.25);
-  play.dispatchEvent(new Event("click")); await flush();
-  assert.equal(video.muted, true);
+  assert.equal(video.paused, false); assert.equal(video.volume, 0.25);
+  assert.equal(video.playCount, 3); assert.equal(video.muted, true);
   mute.dispatchEvent(new Event("click"));
   assert.equal(video.paused, false); assert.equal(video.muted, false);
   video.volume = 0.6; video.muted = true;
@@ -1260,9 +1450,9 @@ test("badge waits through boot, admission and subscription for accepted assigned
   admission.resolve({ kind: "admission", result: { status: 1 } }); await flush();
   badge(f, "Connecting");
   assignment.resolve(); await flush();
-  badge(f, "Connected");
+  badge(f, "CONNECTED");
   await f.advance(120_000);
-  badge(f, "Connected"); // A quiet room is not a transport failure.
+  badge(f, "CONNECTED"); // A quiet room is not a transport failure.
 });
 
 for (const [name, options, label] of [
@@ -1279,7 +1469,7 @@ for (const [name, options, label] of [
 for (const loss of ["recv null", "datagram null", "recv error", "publish error", "manual", "hidden", "pagehide", "fatal", "offline"]) {
   test(`badge leaves green on ${loss} and only reconnects explicitly`, async (t) => {
     const f = await online(t);
-    badge(f, "Connected");
+    badge(f, "CONNECTED");
     if (loss === "recv null") f.client.send(null);
     if (loss === "datagram null") f.client.sendDatagram(null);
     if (loss === "recv error") f.client.close();
@@ -1310,7 +1500,7 @@ for (const loss of ["recv null", "datagram null", "recv error", "publish error",
     if (loss === "fatal") { globalThis.weaverSceneReady(); badge(f, "Unavailable"); return; }
     f.elements.get("join-network").dispatchEvent(new Event("click"));
     badge(f, "Connecting");
-    await flush(); badge(f, "Connected");
+    await flush(); badge(f, "CONNECTED");
   });
 }
 
@@ -2117,4 +2307,261 @@ test("physical mobile Enter and focus work when the browser has no pointer-lock 
   assert.equal(requests, 1);
   assert.equal(globalThis.weaverSetChatFocus(true), true);
   assert.equal(globalThis.weaverSetChatFocus(false), true);
+});
+
+function hudPointer(f, type, target) {
+  const event = new Event(type, { cancelable: true });
+  Object.defineProperty(event, "target", { value: target });
+  f.window.dispatchEvent(event);
+  return event;
+}
+
+async function hudShell(t, options = {}) {
+  const f = await shell(t, { visitor: false, presentation: "minimal", ...options });
+  globalThis.weaverSceneReady(); await f.advance(0);
+  f.metadata(); await flush(); f.continueMuted(); await flush();
+  return f;
+}
+
+function q(f, type = "keydown", options = {}) {
+  return key(f, type, "q", { code: "KeyQ", ...options });
+}
+
+test("minimal HUD Q owns input, clears movement before guards, restores prior lock only on explicit dismissal", async (t) => {
+  const f = await hudShell(t);
+  const canvas = f.elements.get("scene"), overlay = f.elements.get("controller-overlay");
+  const audio = f.elements.get("controller-audio");
+  const transitions = [], releases = [];
+  f.window.addEventListener("weaver-controller-change", event => transitions.push(event.detail.open));
+  canvas.addEventListener("keyup", event => releases.push([event.code, f.harness.chatFocus.at(-1)]));
+  let locks = 0;
+  canvas.requestPointerLock = () => { locks++; };
+  canvas.focus(); f.document.pointerLockElement = canvas;
+  key(f, "keydown", "w", { code: "KeyW" });
+  assert.equal(q(f).defaultPrevented, true);
+  assert.deepEqual(releases, [["KeyW", false]]);
+  assert.equal(overlay.hidden, false); assert.equal(canvas.inert, true);
+  assert.equal(f.document.activeElement, audio); assert.equal(f.document.pointerLockExits, 1);
+  assert.equal(f.harness.chatFocus.at(-1), true);
+  assert.equal(globalThis.weaverResumeGameInput(), false);
+  assert.equal(key(f, "keydown", "w", { code: "KeyW" }).defaultPrevented, true);
+  q(f, "keydown", { repeat: true }); assert.equal(overlay.hidden, false);
+  q(f); assert.equal(overlay.hidden, false);
+  q(f, "keyup"); q(f);
+  assert.equal(overlay.hidden, true); assert.equal(canvas.inert, false); assert.equal(locks, 1);
+  assert.deepEqual(transitions, [true, false]);
+  assert.equal(key(f, "keydown", "w", { code: "KeyW", repeat: true }).defaultPrevented, true);
+  q(f, "keyup"); canvas.focus(); f.document.pointerLockElement = canvas; q(f);
+  assert.equal(globalThis.weaverSetChatFocus(true), true);
+  assert.equal(overlay.hidden, true); assert.equal(locks, 1);
+  q(f, "keyup"); q(f); assert.equal(overlay.hidden, true);
+  globalThis.weaverSetChatFocus(false);
+  q(f, "keyup"); canvas.focus(); q(f);
+  await f.visible("hidden"); assert.equal(overlay.hidden, true); assert.equal(locks, 1);
+  await f.visible("visible"); assert.equal(overlay.hidden, true); assert.equal(locks, 1);
+  globalThis.weaverDisposeTheaterVideo();
+  assert.equal(f.elements.get("controller-launcher").hidden, true);
+  q(f, "keyup"); q(f); assert.equal(overlay.hidden, true);
+});
+
+test("HUD ignores editing, modifiers, composition and startup; completed outside click consumes the gesture", async (t) => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  globalThis.weaverSceneReady(); await f.advance(0);
+  const overlay = f.elements.get("controller-overlay"), dialog = f.elements.get("controller-dialog");
+  q(f); assert.equal(overlay.hidden, true); // Startup owns focus and launcher is inert.
+  f.continueMuted(); q(f, "keyup");
+  for (const options of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }, { isComposing: true }, { repeat: true }]) {
+    q(f, "keydown", options); assert.equal(overlay.hidden, true); q(f, "keyup");
+  }
+  const input = new Element(); input.tagName = "INPUT"; f.document.activeElement = input;
+  q(f); assert.equal(overlay.hidden, true); q(f, "keyup");
+  f.elements.get("scene").focus(); trustedClick(f.elements.get("controller-launcher"));
+  assert.equal(overlay.hidden, false);
+  let leaked = 0;
+  f.window.addEventListener("click", () => leaked++);
+  assert.equal(hudPointer(f, "pointerdown", overlay).defaultPrevented, true);
+  hudPointer(f, "pointerup", overlay); assert.equal(overlay.hidden, false);
+  assert.equal(hudPointer(f, "click", overlay).defaultPrevented, true);
+  assert.equal(overlay.hidden, true); assert.equal(leaked, 0);
+  q(f); assert.equal(overlay.hidden, false);
+  hudPointer(f, "pointerdown", dialog); hudPointer(f, "pointerup", overlay); hudPointer(f, "click", overlay);
+  assert.equal(overlay.hidden, false); // A drag starting inside is not an outside click.
+  assert.equal(hudPointer(f, "wheel", f.elements.get("scene")).defaultPrevented, true);
+  key(f, "keydown", "Tab"); assert.equal(f.document.activeElement, f.elements.get("controller-subtitles"));
+  key(f, "keydown", "Tab", { shiftKey: true }); assert.equal(f.document.activeElement, f.elements.get("controller-audio"));
+  key(f, "keydown", "Escape"); assert.equal(overlay.hidden, true);
+});
+
+test("HUD audio and fullscreen run directly in the gesture, audio art follows preference and controls stay open", async (t) => {
+  const f = await hudShell(t);
+  const video = f.elements.get("theater-video"), audio = f.elements.get("controller-audio");
+  const full = f.elements.get("controller-fullscreen"), subs = f.elements.get("controller-subtitles");
+  let gesture = false, toggles = 0;
+  let fullscreen = { available: true, active: false, pending: false, error: false };
+  f.window.jdharrisonGetFullscreenState = () => fullscreen;
+  f.window.jdharrisonToggleFullscreen = () => { assert.equal(gesture, true); toggles++; };
+  q(f);
+  assert.equal(audio.dataset.state, "off");
+  const nativePlay = video.play.bind(video);
+  video.play = () => { assert.equal(gesture, true); return nativePlay(); };
+  gesture = true; trustedClick(audio); gesture = false;
+  assert.equal(video.muted, false); assert.equal(audio.dataset.state, "on");
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+  trustedClick(audio); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
+  trustedClick(subs); assert.equal(subs.dataset.state, "off");
+  assert.equal(f.harness.panelStates.filter(([id]) => id === 3).at(-1)[1], 1);
+  gesture = true; trustedClick(full); gesture = false;
+  assert.equal(toggles, 1); assert.equal(full.dataset.state, "off");
+  fullscreen = { ...fullscreen, active: true, pending: true };
+  f.window.dispatchEvent(new CustomEvent("jdharrison-fullscreen-state", { detail: fullscreen }));
+  assert.equal(full.dataset.state, "on"); assert.equal(full.disabled, true);
+  fullscreen = { ...fullscreen, pending: false, error: true };
+  f.window.dispatchEvent(new CustomEvent("jdharrison-fullscreen-state", { detail: fullscreen }));
+  assert.equal(full.disabled, false); assert.match(f.elements.get("controller-status").textContent, /Fullscreen failed/);
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+  assert.equal(video.paused, false);
+});
+
+test("HUD preparing and failed audio never queues a delayed audible attempt or reopens startup", async (t) => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); q(f);
+  const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
+  trustedClick(audio); assert.equal(video.playCount, 0);
+  f.metadata(); await flush(); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
+  video.playError = new Error("NotAllowedError"); trustedClick(audio); await flush();
+  assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, true);
+  assert.equal(f.elements.get("controller-status").textContent, "");
+  trustedClick(audio); assert.equal(audio.dataset.state, "off");
+  video.playError = null;
+  trustedClick(audio); await flush(); assert.equal(audio.dataset.state, "on");
+  video.error = { code: 4 }; video.dispatchEvent(new Event("error")); video.error = null;
+  trustedClick(audio); assert.equal(audio.dataset.state, "off");
+  trustedClick(audio); await flush();
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+  f.metadata(); await flush(); assert.equal(video.muted, true);
+  assert.equal(audio.dataset.state, "off");
+  globalThis.weaverDisposeTheaterVideo();
+  const plays = video.playCount; trustedClick(audio); await flush(); assert.equal(video.playCount, plays);
+});
+
+test("HUD leaves the live connection/movie running and resets Q across suspension without recapture", async (t) => {
+  const f = await hudShell(t, { visitor: true });
+  const canvas = f.elements.get("scene"), overlay = f.elements.get("controller-overlay");
+  assert.equal(f.clients.length, 1); assert.equal(f.client.closed(), false);
+  const video = f.elements.get("theater-video"), pauses = video.pauseCount;
+  let locks = 0; canvas.requestPointerLock = () => { locks++; };
+  q(f);
+  assert.equal(f.client.closed(), false); assert.equal(video.pauseCount, pauses);
+  assert.equal(video.paused, false);
+  f.document.pointerLockElement = canvas;
+  f.document.dispatchEvent(new Event("pointerlockchange"));
+  assert.equal(f.document.pointerLockElement, null);
+  f.elements.get("controller-audio").focus();
+  key(f, "keydown", "Tab", { shiftKey: true });
+  // No host fullscreen bridge in this fixture, so the last enabled button is Subtitles.
+  assert.equal(f.document.activeElement, f.elements.get("controller-subtitles"));
+  await f.visible("hidden"); await f.visible("visible");
+  assert.equal(overlay.hidden, true); assert.equal(locks, 0);
+  q(f); assert.equal(overlay.hidden, false); // Fresh press, even without a hidden-tab keyup.
+  globalThis.weaverDisposeTheaterVideo();
+  assert.equal(overlay.hidden, true); assert.equal(canvas.inert, false); assert.equal(locks, 0);
+});
+
+test("launcher click followed by outside dismissal focuses canvas and never invents a prior pointer lock", async t => {
+  const f = await hudShell(t);
+  const launcher = f.elements.get("controller-launcher"), canvas = f.elements.get("scene");
+  const overlay = f.elements.get("controller-overlay");
+  let locks = 0; canvas.requestPointerLock = () => { locks++; };
+  launcher.focus(); trustedClick(launcher);
+  assert.equal(overlay.hidden, false);
+  hudPointer(f, "pointerdown", overlay); hudPointer(f, "pointerup", overlay);
+  const click = hudPointer(f, "click", overlay);
+  assert.equal(click.defaultPrevented, true);
+  assert.equal(overlay.hidden, true); assert.equal(f.document.activeElement, canvas);
+  assert.equal(locks, 0);
+  f.document.pointerLockElement = canvas;
+  launcher.focus(); trustedClick(launcher);
+  hudPointer(f, "pointerdown", overlay); hudPointer(f, "pointerup", overlay); hudPointer(f, "click", overlay);
+  assert.equal(f.document.activeElement, canvas); assert.equal(locks, 1);
+});
+
+for (const presentation of ["minimal", "full"]) {
+  test(`controller image preloads are early, nonblocking and minimal-only (${presentation})`, async t => {
+    const f = await shell(t, { visitor: false, presentation });
+    assert.equal(f.document.head.children.length, presentation === "minimal" ? 8 : 0);
+    assert.equal(f.harness.scheduleFetches.length, 0); // Hints do not require renderer/media readiness.
+    if (presentation === "minimal") {
+      globalThis.weaverSceneReady(); f.continueMuted();
+      trustedClick(f.elements.get("controller-launcher"));
+      assert.equal(f.elements.get("controller-overlay").hidden, false);
+      assert.equal(f.document.head.children.length, 8);
+    }
+  });
+}
+
+test("HUD starts with desired Audio ON despite silent autoplay; startup Continue explicitly selects OFF", async t => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
+  assert.equal(audio.dataset.state, "on"); assert.equal(audio.getAttribute("aria-pressed"), "true");
+  assert.equal(video.muted, true);
+  globalThis.weaverSceneReady(); await f.advance(0); f.metadata(); await flush();
+  assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, true);
+  assert.equal(f.elements.get("controller-status").textContent, "");
+  assert.equal(f.elements.get("theater-startup").hidden, false);
+  assert.equal(f.elements.get("theater-startup-play").disabled, false);
+  f.continueMuted(); await flush();
+  assert.equal(audio.dataset.state, "off"); assert.equal(audio.getAttribute("aria-pressed"), "false");
+  assert.equal(video.muted, true);
+});
+
+test("HUD permits OFF while enabling is pending but cannot enqueue a second enabling gesture", async t => {
+  const f = await hudShell(t);
+  const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
+  const pending = deferred(), plays = video.playCount;
+  q(f); video.playPromise = pending.promise;
+  trustedClick(audio);
+  assert.equal(video.playCount, plays + 1); assert.equal(audio.dataset.state, "on");
+  assert.equal(audio.disabled, false); assert.equal(audio.getAttribute("aria-busy"), "true");
+  // Waiting removes observed audibility but must not turn the desired ON artwork off.
+  video.dispatchEvent(new Event("waiting"));
+  assert.equal(audio.dataset.state, "on");
+  trustedClick(audio);
+  assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
+  assert.equal(audio.disabled, true);
+  assert.equal(f.document.activeElement, f.elements.get("controller-subtitles"));
+  trustedClick(audio); assert.equal(video.playCount, plays + 1); assert.equal(audio.dataset.state, "off");
+  video.playPromise = null; pending.resolve(); await flush();
+  assert.equal(audio.disabled, false); assert.equal(audio.dataset.state, "off");
+  assert.equal(video.muted, true); assert.equal(video.playCount, plays + 1);
+  let gesture = false;
+  const nativePlay = video.play.bind(video);
+  video.play = () => { assert.equal(gesture, true); return nativePlay(); };
+  gesture = true; trustedClick(audio); gesture = false;
+  assert.equal(video.playCount, plays + 2); assert.equal(audio.dataset.state, "on");
+  assert.equal(video.muted, false);
+});
+
+test("second-finger launcher pointerup opens HUD while a canvas movement touch remains held, without click", async t => {
+  const f = await hudShell(t);
+  const canvas = f.elements.get("scene"), launcher = f.elements.get("controller-launcher"), overlay = f.elements.get("controller-overlay");
+  f.harness.panelHit = 0;
+  canvas.focus(); key(f, "keydown", "w", { code: "KeyW" });
+  scenePointer(f, "pointerdown", { target: canvas, pointerType: "touch", pointerId: 1, isPrimary: true, timeStamp: 100 });
+  const releases = [], transitions = [], invalidations = f.harness.sceneInvalidations;
+  canvas.addEventListener("keyup", event => releases.push([event.code, f.harness.chatFocus.at(-1)]));
+  f.window.addEventListener("weaver-controller-change", event => transitions.push(event.detail.open));
+  const second = { target: launcher, pointerType: "touch", pointerId: 2, isPrimary: false, timeStamp: 120 };
+  assert.equal(scenePointer(f, "pointerdown", second).defaultPrevented, true);
+  assert.equal(overlay.hidden, true);
+  assert.equal(scenePointer(f, "pointerup", { ...second, timeStamp: 200 }).defaultPrevented, true);
+  assert.equal(overlay.hidden, false); assert.equal(canvas.inert, true);
+  assert.deepEqual(releases, [["KeyW", false]]); assert.equal(f.harness.chatFocus.at(-1), true);
+  assert.ok(f.harness.sceneInvalidations > invalidations);
+  assert.equal(globalThis.weaverResumeGameInput(), false);
+  // Late compatibility clicks must neither dismiss the new backdrop nor reopen after dismissal.
+  assert.equal(scenePointer(f, "click", { ...second, target: overlay }).defaultPrevented, true);
+  key(f, "keydown", "Escape"); assert.equal(overlay.hidden, true);
+  assert.equal(scenePointer(f, "click", second).defaultPrevented, true);
+  assert.equal(overlay.hidden, true); assert.deepEqual(transitions, [true, false]);
+  assert.equal(key(f, "keydown", "w", { code: "KeyW", repeat: true }).defaultPrevented, true);
 });

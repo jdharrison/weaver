@@ -1,0 +1,208 @@
+{
+  "project": "Starlit Cinema",
+  "count": 18,
+  "views": [
+    "left_side",
+    "back"
+  ],
+  "assets": [
+    {
+      "avatar": "01_rust_drifter",
+      "view": "left_side",
+      "source_name": "side_profile_steampunk_robot_gunslinger.png",
+      "filename": "01_rust_drifter/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "9f5ade9b05e296fe509fa176c622911fc562ac7093dec9820dc9285b822153db"
+    },
+    {
+      "avatar": "01_rust_drifter",
+      "view": "back",
+      "source_name": "rear_view_steampunk_robot_gunslinger.png",
+      "filename": "01_rust_drifter/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "8051ed26d1e1d565c93da907088ba6efeaf362aba4bdd8037e6557b8564da87f"
+    },
+    {
+      "avatar": "02_chrome_usher",
+      "view": "left_side",
+      "source_name": "side_profile_steampunk_robot_bellhop.png",
+      "filename": "02_chrome_usher/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "83a377e7170a6da6b2cba73519698a49d5b886e1812bf047213da095995c622f"
+    },
+    {
+      "avatar": "02_chrome_usher",
+      "view": "back",
+      "source_name": "steampunk_robot_bellhop_back_view.png",
+      "filename": "02_chrome_usher/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "4237a89e15a058c3886351307f50be0a0c32946cbb3565641c2c79856fb3d222"
+    },
+    {
+      "avatar": "03_moth_mechanic",
+      "view": "left_side",
+      "source_name": "robotic_moth_side_profile_character_render.png",
+      "filename": "03_moth_mechanic/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "78bdbe7245d085e69730131dd592fb52bb1234561363063a9c997e7204ca12ec"
+    },
+    {
+      "avatar": "03_moth_mechanic",
+      "view": "back",
+      "source_name": "mothwing_engineer_back_view.png",
+      "filename": "03_moth_mechanic/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "477b83ef6b2a2d716639c6d39ec28d4342926073a9c3c1a2b28f92d560760d97"
+    },
+    {
+      "avatar": "04_velvet_bones",
+      "view": "left_side",
+      "source_name": "steampunk_robot_gunslinger_profile.png",
+      "filename": "04_velvet_bones/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "3fcaf4d05b754a69a1656c0d7c94634a1ef3be91bd5d1ed468a1ac036ab5d4f4"
+    },
+    {
+      "avatar": "04_velvet_bones",
+      "view": "back",
+      "source_name": "steampunk_robot_gunslinger_back_view.png",
+      "filename": "04_velvet_bones/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "35777dd710e5a887ac8f6b40aad828427de28ce951214116395de777caf4265c"
+    },
+    {
+      "avatar": "05_spore_scout",
+      "view": "left_side",
+      "source_name": "mushroom_traveler_side_profile_turnaround.png",
+      "filename": "05_spore_scout/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "a4f55f53296f4f958324aadc75e15559ed22f9cff0b2bb8eefc3859806cbc07d"
+    },
+    {
+      "avatar": "05_spore_scout",
+      "view": "back",
+      "source_name": "mushroom_wanderer_worn_sci_fi_explorer.png",
+      "filename": "05_spore_scout/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "5981f7ad07ad130a69f7bcbcc9a084c58c1fc2320fc0e7e1f361b723ffc6d4d8"
+    },
+    {
+      "avatar": "06_canid_courier",
+      "view": "left_side",
+      "source_name": "cyberpunk_fox_android_traveler.png",
+      "filename": "06_canid_courier/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "8066750c141ca1030c69f0977724d44e2ea97f8369573f6cb74c55718babf9af"
+    },
+    {
+      "avatar": "06_canid_courier",
+      "view": "back",
+      "source_name": "rear_view_robotic_canine_survivor.png",
+      "filename": "06_canid_courier/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "e2484358a982dcc27b9914993f1786c795c9fa8ab980ddc62cbed8b9ce48bb3a"
+    },
+    {
+      "avatar": "07_puddle_kid",
+      "view": "left_side",
+      "source_name": "side_profile_slime_scout_traveler.png",
+      "filename": "07_puddle_kid/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "3e48aa41afe6e9b4f3efb07c2e6c51016d841de73bf1b61c9bd6724fb16d591a"
+    },
+    {
+      "avatar": "07_puddle_kid",
+      "view": "back",
+      "source_name": "backpack_slime_traveler_rear_view.png",
+      "filename": "07_puddle_kid/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "7cd59a08c2600f7bfc3c86b491792637b0ec073e72a240929064ec7a23cd4fd5"
+    },
+    {
+      "avatar": "08_aviary_pilot",
+      "view": "left_side",
+      "source_name": "steampunk_bird_aviator_profile.png",
+      "filename": "08_aviary_pilot/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "d58d04abc968eb26ba1c32cb85550216d4cd42b53e82bbe8e0b0f573397013e2"
+    },
+    {
+      "avatar": "08_aviary_pilot",
+      "view": "back",
+      "source_name": "weathered_steampunk_avian_explorer_back_view.png",
+      "filename": "08_aviary_pilot/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "c73c285db979bf675d737578aa4ccdac0773eb9ef4e50bc81238a82423b4328c"
+    },
+    {
+      "avatar": "09_tortoise_miner",
+      "view": "left_side",
+      "source_name": "industrial_turtle_miner_profile.png",
+      "filename": "09_tortoise_miner/left_side.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "69189d12305606184b4484dad31b287a2fbbb7a8682894aad88721636357bc75"
+    },
+    {
+      "avatar": "09_tortoise_miner",
+      "view": "back",
+      "source_name": "weathered_turtle_miner_s_industrial_pack.png",
+      "filename": "09_tortoise_miner/back.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "45ceb7c60b0294a1ad5ff23ee8b333db986f92e17169c4d408dc19f4c2f83155"
+    }
+  ]
+}

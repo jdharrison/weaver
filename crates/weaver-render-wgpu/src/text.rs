@@ -111,7 +111,12 @@ impl TextPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         runs: &[weaver_render::TextRun],
+        layout_size: (u32, u32),
     ) -> Result<(), WgpuRenderError> {
+        let resolution = self.viewport.resolution();
+        // Rasterize at the final drawing-buffer size instead of shrinking glyph bitmaps
+        // laid out for a larger HiDPI window into the capped browser surface.
+        let runs = surface_text_runs(runs, layout_size, (resolution.width, resolution.height));
         self.buffers.truncate(runs.len());
         for (index, run) in runs.iter().enumerate() {
             let changed = self
@@ -208,6 +213,26 @@ impl TextPipeline {
     }
 }
 
+fn surface_text_runs(
+    runs: &[weaver_render::TextRun],
+    layout_size: (u32, u32),
+    surface_size: (u32, u32),
+) -> Vec<weaver_render::TextRun> {
+    let scale = glam::Vec2::new(
+        surface_size.0.max(1) as f32 / layout_size.0.max(1) as f32,
+        surface_size.1.max(1) as f32 / layout_size.1.max(1) as f32,
+    );
+    runs.iter()
+        .map(|run| {
+            let mut run = run.clone();
+            run.position *= scale;
+            run.size *= scale.min_element();
+            run.bounds = run.bounds.map(|bounds| bounds * scale);
+            run
+        })
+        .collect()
+}
+
 fn measure(buffer: &Buffer) -> (f32, f32) {
     let mut width = 0.0f32;
     let mut height = 0.0f32;
@@ -235,6 +260,26 @@ pub fn measure_text(text: &str, size: f32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_rasterizes_at_surface_resolution_with_layout_anchors_preserved() {
+        let run = weaver_render::TextRun {
+            text: "Click / tap to sit".into(),
+            position: glam::Vec2::new(1920.0, 1200.0),
+            size: 52.0,
+            anchor: weaver_render::TextAnchor::TopCenter,
+            bounds: Some(glam::Vec2::new(540.0, 104.0)),
+            ..Default::default()
+        };
+        let scaled = surface_text_runs(std::slice::from_ref(&run), (3840, 2160), (1920, 1080));
+        assert_eq!(scaled[0].position, glam::Vec2::new(960.0, 600.0));
+        assert_eq!(scaled[0].size, 26.0);
+        assert_eq!(scaled[0].bounds, Some(glam::Vec2::new(270.0, 52.0)));
+        assert_eq!(scaled[0].anchor, run.anchor);
+        let native = surface_text_runs(std::slice::from_ref(&run), (1920, 1080), (1920, 1080));
+        assert_eq!(native[0].size, run.size);
+        assert_eq!(native[0].position, run.position);
+    }
 
     #[test]
     fn bundled_fonts_shape_with_real_weights_without_system_fonts() {

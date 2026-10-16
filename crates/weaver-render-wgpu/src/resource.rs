@@ -2,6 +2,7 @@
 
 use crate::error::WgpuRenderError;
 use bytemuck::{Pod, Zeroable};
+use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 /// A vertex with position, normal, color, and UV.
@@ -115,6 +116,19 @@ fn next_mip_size(width: u32, height: u32) -> (u32, u32) {
     ((width / 2).max(1), (height / 2).max(1))
 }
 
+const STATIC_TEXTURE_DIMENSION_LIMIT: u32 = if cfg!(target_arch = "wasm32") {
+    2048
+} else {
+    u32::MAX
+};
+
+fn capped_mip_size(mut width: u32, mut height: u32, dimension_limit: u32) -> (u32, u32) {
+    while width.max(height) > dimension_limit.max(1) {
+        (width, height) = next_mip_size(width, height);
+    }
+    (width, height)
+}
+
 fn srgb_decode_table() -> [f64; 256] {
     std::array::from_fn(|value| {
         let encoded = value as f64 / 255.0;
@@ -189,6 +203,27 @@ fn downsample_rgba(
     Ok(output)
 }
 
+fn prepare_static_rgba<'a>(
+    width: u32,
+    height: u32,
+    data: &'a [u8],
+    dimension_limit: u32,
+    linear: &[f64; 256],
+) -> Result<(u32, u32, Cow<'a, [u8]>), WgpuRenderError> {
+    validate_rgba(width, height, data.len(), u32::MAX)?;
+    let upload_size = capped_mip_size(width, height, dimension_limit);
+    let (mut mip_width, mut mip_height) = (width, height);
+    let mut pixels = Cow::Borrowed(data);
+    // Omit large mip levels before allocation, using the same alpha-aware filter
+    // as the remaining chain. Only adjacent generated levels coexist.
+    while (mip_width, mip_height) != upload_size {
+        let next = downsample_rgba(mip_width, mip_height, &pixels, linear)?;
+        pixels = Cow::Owned(next);
+        (mip_width, mip_height) = next_mip_size(mip_width, mip_height);
+    }
+    Ok((mip_width, mip_height, pixels))
+}
+
 /// A texture stored on the GPU.
 pub struct GpuTexture {
     /// Texture handle.
@@ -197,7 +232,8 @@ pub struct GpuTexture {
     pub view: wgpu::TextureView,
     /// Sampler.
     pub sampler: wgpu::Sampler,
-    /// Dimensions.
+    /// Original logical dimensions used for sprite sizing and aspect ratio.
+    /// Browser static textures may have smaller GPU dimensions.
     pub size: (u32, u32),
 }
 
@@ -219,6 +255,9 @@ impl GpuTexture {
 
     /// Upload a static straight-alpha sRGB image with trilinear mip filtering.
     ///
+    /// Browser uploads omit large mip levels until both dimensions are at most
+    /// 2048 pixels. Logical `size` retains the original dimensions on all platforms.
+    ///
     /// `anisotropy` is clamped to 1..=8. The caller must pass 1 when the
     /// adapter does not support anisotropic filtering.
     ///
@@ -239,26 +278,26 @@ impl GpuTexture {
             data.len(),
             device.limits().max_texture_dimension_2d,
         )?;
+        let linear = srgb_decode_table();
+        let (mut mip_width, mut mip_height, mut pixels) =
+            prepare_static_rgba(width, height, data, STATIC_TEXTURE_DIMENSION_LIMIT, &linear)?;
+        let levels = mip_level_count(mip_width, mip_height);
         let size = wgpu::Extent3d {
-            width,
-            height,
+            width: mip_width,
+            height: mip_height,
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("gpu-texture"),
             size,
-            mip_level_count: mip_level_count(width, height),
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let linear = srgb_decode_table();
-        // Borrow the original pixels; only adjacent generated levels coexist.
-        let mut pixels = std::borrow::Cow::Borrowed(data);
-        let (mut mip_width, mut mip_height) = (width, height);
-        for mip_level in 0..mip_level_count(width, height) {
+        for mip_level in 0..levels {
             let mut destination = texture.as_image_copy();
             destination.mip_level = mip_level;
             queue.write_texture(
@@ -279,7 +318,7 @@ impl GpuTexture {
                 break;
             }
             let next = downsample_rgba(mip_width, mip_height, &pixels, &linear)?;
-            pixels = std::borrow::Cow::Owned(next);
+            pixels = Cow::Owned(next);
             (mip_width, mip_height) = next_mip_size(mip_width, mip_height);
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -305,6 +344,143 @@ mod tests {
 
     fn mip(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
         downsample_rgba(width, height, data, &srgb_decode_table()).unwrap()
+    }
+
+    #[test]
+    fn static_upload_plans_browser_cap_without_allocating_large_images() {
+        for (width, height, expected_512, expected_1024) in [
+            (1, 1, (1, 1), (1, 1)),
+            (384, 128, (384, 128), (384, 128)),
+            (512, 512, (512, 512), (512, 512)),
+            (513, 1, (256, 1), (513, 1)),
+            (1, 513, (1, 256), (1, 513)),
+            (513, 257, (256, 128), (513, 257)),
+            (1024, 1024, (512, 512), (1024, 1024)),
+            (1025, 1023, (512, 511), (512, 511)),
+            (1086, 1448, (271, 362), (543, 724)),
+            (1024, 1536, (256, 384), (512, 768)),
+        ] {
+            assert_eq!(capped_mip_size(width, height, 512), expected_512);
+            assert_eq!(capped_mip_size(width, height, 1024), expected_1024);
+            assert_eq!(capped_mip_size(width, height, u32::MAX), (width, height));
+            assert_eq!(
+                capped_mip_size(width, height, STATIC_TEXTURE_DIMENSION_LIMIT),
+                (width, height)
+            );
+        }
+        for (width, height, expected) in [
+            (1086, 1448, (1086, 1448)),
+            (1024, 1536, (1024, 1536)),
+            (2048, 2048, (2048, 2048)),
+            (2049, 1025, (1024, 512)),
+            (4096, 2160, (2048, 1080)),
+        ] {
+            assert_eq!(capped_mip_size(width, height, 2048), expected);
+            assert_eq!(
+                capped_mip_size(width, height, STATIC_TEXTURE_DIMENSION_LIMIT),
+                if cfg!(target_arch = "wasm32") {
+                    expected
+                } else {
+                    (width, height)
+                }
+            );
+        }
+        assert_eq!(capped_mip_size(7, 3, 0), (1, 1));
+    }
+
+    #[test]
+    fn static_upload_borrows_small_images_without_changing_bytes() {
+        let linear = srgb_decode_table();
+        for (width, height) in [(1, 1), (3, 5), (512, 1), (1, 512), (1024, 1), (1, 1024)] {
+            let data: Vec<_> = (0..rgba_byte_len(width, height).unwrap())
+                .map(|index| index as u8)
+                .collect();
+            for limit in [1024, u32::MAX] {
+                let (upload_width, upload_height, pixels) =
+                    prepare_static_rgba(width, height, &data, limit, &linear).unwrap();
+                assert_eq!((upload_width, upload_height), (width, height));
+                assert!(matches!(&pixels, Cow::Borrowed(_)));
+                assert_eq!(pixels.as_ref(), data.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn static_upload_handles_npot_thin_sizes_and_complete_mips() {
+        let linear = srgb_decode_table();
+        for (width, height, limit, expected) in [
+            (7, 5, 3, (3, 2)),
+            (1, 9, 2, (1, 2)),
+            (9, 1, 2, (2, 1)),
+            (13, 7, 3, (3, 1)),
+            (513, 1, 512, (256, 1)),
+            (1, 513, 512, (1, 256)),
+            (513, 3, 512, (256, 1)),
+            (1025, 1, 512, (512, 1)),
+            (2049, 1, 1024, (1024, 1)),
+            (1, 2049, 1024, (1, 1024)),
+        ] {
+            let data = [80, 120, 200, 64].repeat((width * height) as usize);
+            let (mut w, mut h, pixels) =
+                prepare_static_rgba(width, height, &data, limit, &linear).unwrap();
+            assert_eq!((w, h), expected);
+            assert!(matches!(&pixels, Cow::Owned(_)));
+            let mut pixels = pixels.into_owned();
+            let mut levels = 0;
+            loop {
+                assert_eq!(pixels.len(), rgba_byte_len(w, h).unwrap());
+                assert!(
+                    pixels
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .all(|pixel| *pixel == [80, 120, 200, 64])
+                );
+                levels += 1;
+                if (w, h) == (1, 1) {
+                    break;
+                }
+                pixels = downsample_rgba(w, h, &pixels, &linear).unwrap();
+                (w, h) = next_mip_size(w, h);
+            }
+            assert_eq!(levels, mip_level_count(expected.0, expected.1));
+        }
+    }
+
+    #[test]
+    fn static_upload_preserves_linear_light_and_straight_alpha() {
+        let linear = srgb_decode_table();
+        for (data, expected) in [
+            (vec![0, 0, 0, 255, 255, 255, 255, 255], [188, 188, 188, 255]),
+            (vec![255, 0, 0, 255, 0, 255, 0, 0], [255, 0, 0, 128]),
+            (vec![255, 255, 255, 192, 0, 0, 0, 64], [225, 225, 225, 128]),
+            (vec![255, 0, 0, 0, 0, 255, 0, 0], [0; 4]),
+            ([255, 0, 0, 255, 0, 255, 0, 0].repeat(4), [255, 0, 0, 128]),
+        ] {
+            let (width, height, pixels) =
+                prepare_static_rgba((data.len() / 4) as u32, 1, &data, 1, &linear).unwrap();
+            assert_eq!((width, height), (1, 1));
+            assert_eq!(pixels.as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn static_upload_validates_source_dimensions_and_byte_lengths_before_reduction() {
+        let linear = srgb_decode_table();
+        for (width, height, length) in [
+            (0, 1, 0),
+            (1, 0, 0),
+            (1, 1, 3),
+            (1, 1, 5),
+            (513, 1, 4),
+            (u32::MAX, 1, 0),
+            (u32::MAX / 4, u32::MAX, 0),
+        ] {
+            assert!(matches!(
+                prepare_static_rgba(width, height, &vec![0; length], 512, &linear),
+                Err(WgpuRenderError::Texture(_))
+            ));
+        }
     }
 
     #[test]

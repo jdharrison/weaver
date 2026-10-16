@@ -12,11 +12,11 @@
 //! occur at the door. Skipped positions are never replayed, but physical room
 //! counts remain within 1–2 lobby / 2–3 auditorium at every sample and freeze.
 
-use crate::{avatars, theater};
+use crate::{avatars, motion::WalkWobble, theater};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use weaver_render::{SceneSnapshot, SpriteHandle};
+use weaver_render::SceneSnapshot;
 
 const NPC_COUNT: usize = 5;
 const MAX_ACTIONS: usize = 32;
@@ -236,7 +236,7 @@ fn grounded_eye(mut position: Vec3) -> Vec3 {
 fn waypoint(point: &str) -> Vec3 {
     theater::seat(point).map_or_else(
         || grounded_eye(theater::npc_waypoint(point).expect("validated ambient waypoint")),
-        |seat| seat.approach(),
+        theater::Seat::approach,
     )
 }
 
@@ -415,14 +415,14 @@ fn compile_slots(
         }
     }
     for slot in &slots {
-        if let Slot::DoorVisit { timeline, .. } = slot {
-            if timeline.iter().any(|segment| {
+        if let Slot::DoorVisit { timeline, .. } = slot
+            && timeline.iter().any(|segment| {
                 segment
                     .seat
                     .is_some_and(|index| permanent[usize::from(index)])
-            }) {
-                return Err("visitor seat overlaps resident allocation");
-            }
+            })
+        {
+            return Err("visitor seat overlaps resident allocation");
         }
     }
     // Residents never leave their physical rooms. At most one other portrait
@@ -434,10 +434,14 @@ fn compile_slots(
 struct NpcPose {
     eye: Vec3,
     seat: Option<u8>,
+    forward: Vec3,
+    walking: bool,
 }
 
 fn pose_at(slot: &Slot, cycle_phase: f64) -> Option<NpcPose> {
     let mut seat = None;
+    let mut forward = Vec3::NEG_Z;
+    let mut walking = false;
     let eye = match slot {
         Slot::ResidentSeat(index) => {
             seat = Some(*index);
@@ -456,10 +460,21 @@ fn pose_at(slot: &Slot, cycle_phase: f64) -> Option<NpcPose> {
                 return None;
             }
             let phase = cycle_phase - offset_seconds;
-            let segment = timeline
-                .iter()
-                .find(|segment| phase < segment.start_seconds + segment.duration_seconds)
-                .unwrap_or_else(|| timeline.last().expect("validated nonempty door route"));
+            let mut active = timeline.last().expect("validated nonempty door route");
+            for segment in timeline {
+                let tangent = (segment.to - segment.from) * Vec3::new(1.0, 0.0, 1.0);
+                if segment.seat.is_some() {
+                    forward = Vec3::NEG_Z;
+                } else if tangent.length_squared() > 0.0 {
+                    forward = tangent.normalize();
+                }
+                active = segment;
+                if phase < segment.start_seconds + segment.duration_seconds {
+                    walking = segment.seat.is_none() && tangent.length_squared() > 0.0;
+                    break;
+                }
+            }
+            let segment = active;
             seat = segment.seat;
             let blend =
                 ((phase - segment.start_seconds) / segment.duration_seconds).clamp(0.0, 1.0) as f32;
@@ -474,6 +489,8 @@ fn pose_at(slot: &Slot, cycle_phase: f64) -> Option<NpcPose> {
             |index| theater::SEATS[usize::from(index)].seated_eye(),
         ),
         seat,
+        forward,
+        walking,
     })
 }
 
@@ -483,6 +500,8 @@ pub(crate) struct NpcRuntime {
     poses: [Option<NpcPose>; NPC_COUNT],
     last_accepted_unix_seconds: Option<f64>,
     player_occupied: [bool; theater::SEAT_COUNT],
+    wobble: [WalkWobble; NPC_COUNT],
+    rocks: [f32; NPC_COUNT],
 }
 
 impl NpcRuntime {
@@ -505,6 +524,8 @@ impl NpcRuntime {
             poses,
             last_accepted_unix_seconds: None,
             player_occupied: [false; theater::SEAT_COUNT],
+            wobble: std::array::from_fn(|_| WalkWobble::default()),
+            rocks: [0.0; NPC_COUNT],
         }
     }
 
@@ -520,8 +541,15 @@ impl NpcRuntime {
 
     pub(crate) fn set_player_occupied_seats(&mut self, occupied: [bool; theater::SEAT_COUNT]) {
         self.player_occupied = occupied;
+        let previous = self.poses;
         // Reconcile contention even while UTC is frozen, without advancing the schedule.
         self.sample_poses(self.last_accepted_unix_seconds.unwrap_or(0.0));
+        for (index, before) in previous.iter().enumerate() {
+            if *before != self.poses[index] || !self.poses[index].is_some_and(|pose| pose.walking) {
+                self.wobble[index] = WalkWobble::default();
+                self.rocks[index] = 0.0;
+            }
+        }
     }
 
     fn sample_poses(&mut self, seconds: f64) {
@@ -554,27 +582,58 @@ impl NpcRuntime {
         {
             // Rejected clocks cannot rewind across an arrival/departure or reset
             // the acceptance watermark. Before any valid sample, phase zero holds.
+            self.clear_wobble();
             return;
         }
+        let previous = self.poses;
+        let advances = self
+            .last_accepted_unix_seconds
+            .is_some_and(|last| unix_seconds > last);
         self.sample_poses(unix_seconds);
         self.last_accepted_unix_seconds = Some(unix_seconds);
+        if !advances {
+            self.clear_wobble();
+        }
+        for (index, before) in previous.iter().enumerate() {
+            let Some(pose) = self.poses[index] else {
+                self.wobble[index] = WalkWobble::default();
+                self.rocks[index] = 0.0;
+                continue;
+            };
+            let continuous_walk = advances
+                && pose.walking
+                && before.is_some_and(|before| before.walking && before.seat == pose.seat);
+            if !continuous_walk {
+                self.wobble[index] = WalkWobble::default();
+            }
+            // Exactly one visual sample per accepted update; occupancy sampling
+            // and sprite/nameplate queries never accumulate walking distance.
+            self.rocks[index] = self.wobble[index].sample(pose.eye, unix_seconds, continuous_walk);
+        }
+    }
+
+    fn clear_wobble(&mut self) {
+        self.wobble = std::array::from_fn(|_| WalkWobble::default());
+        self.rocks = [0.0; NPC_COUNT];
     }
 
     pub(crate) fn append_sprites(
         &self,
         scene: &mut SceneSnapshot,
-        avatars: &[SpriteHandle; avatars::AVATAR_COUNT],
+        avatars: &[avatars::AvatarTextures; avatars::AVATAR_COUNT],
         lobby_light: f32,
         auditorium_light: f32,
     ) {
         for (index, pose) in self.poses.iter().enumerate() {
             let Some(pose) = pose else { continue };
             // Catalog validation fixes guest_01..05 to avatar_01..05.
-            let mut sprite = crate::posed_avatar_instance(
+            let mut sprite = avatars::sprite(
                 avatars[index],
                 pose.eye,
                 scene.camera.eye,
+                pose.forward,
                 pose.seat.is_some(),
+                self.rocks[index],
             );
             let light = if zone(pose.eye) == Zone::Auditorium {
                 auditorium_light
@@ -693,6 +752,14 @@ pub fn get_npc_definitions() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use weaver_render::SpriteHandle;
+
+    fn textures() -> [avatars::AvatarTextures; avatars::AVATAR_COUNT] {
+        std::array::from_fn(|_| avatars::AvatarTextures {
+            standing: std::array::from_fn(|_| SpriteHandle::new()),
+            seated: std::array::from_fn(|_| SpriteHandle::new()),
+        })
+    }
 
     fn runtime() -> (NpcRuntime, Vec<theater::Collider>) {
         let colliders = theater::Theater::new().colliders;
@@ -739,9 +806,186 @@ mod tests {
     }
 
     #[test]
+    fn analytical_headings_follow_route_tangents_and_hold_through_waits() {
+        let (runtime, _) = runtime();
+        for slot in &runtime.slots {
+            let Slot::DoorVisit {
+                offset_seconds,
+                timeline,
+                ..
+            } = slot
+            else {
+                let pose = pose_at(slot, 0.0).unwrap();
+                assert_eq!(pose.forward, Vec3::NEG_Z);
+                assert!(!pose.walking);
+                continue;
+            };
+            let mut expected = Vec3::NEG_Z;
+            for segment in timeline {
+                let tangent = (segment.to - segment.from) * Vec3::new(1.0, 0.0, 1.0);
+                if segment.seat.is_some() {
+                    expected = Vec3::NEG_Z;
+                } else if tangent.length_squared() > 0.0 {
+                    expected = tangent.normalize();
+                }
+                let time = offset_seconds + segment.start_seconds + segment.duration_seconds * 0.5;
+                let pose = pose_at(slot, time).unwrap();
+                assert!(pose.forward.abs_diff_eq(expected, 0.000_001));
+                assert_eq!(pose.forward.y, 0.0);
+                assert_eq!(
+                    pose.walking,
+                    segment.seat.is_none() && tangent.length_squared() > 0.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wobble_is_bounded_and_only_walks_even_when_chairs_are_occupied() {
+        for occupied in [false, true] {
+            let (mut runtime, colliders) = runtime();
+            runtime.set_player_occupied_seats([occupied; theater::SEAT_COUNT]);
+            let mut walked = [false; NPC_COUNT];
+            let mut waited = false;
+            let mut sat_or_yielded = false;
+            for step in 0..18_000 {
+                let time = f64::from(step) / 30.0;
+                let previous = runtime.poses;
+                sample(&mut runtime, time, &colliders);
+                for (index, pose) in runtime.poses.iter().enumerate() {
+                    let rock = runtime.rocks[index];
+                    assert!(rock.is_finite() && rock.abs() <= 0.1);
+                    let Some(pose) = pose else {
+                        assert_eq!(rock, 0.0);
+                        continue;
+                    };
+                    if pose.walking {
+                        if !previous[index].is_some_and(|before| before.walking) {
+                            assert_eq!(rock, 0.0, "spawn/departure must not bob");
+                        }
+                        walked[index] |= rock.abs() > 0.000_01;
+                    } else {
+                        assert_eq!(rock, 0.0);
+                        if index >= 3 {
+                            waited = true;
+                            let authored = pose_at(&runtime.slots[index], time).unwrap();
+                            if authored.seat.is_some() {
+                                sat_or_yielded = true;
+                                assert_eq!(pose.forward, Vec3::NEG_Z);
+                                assert_eq!(pose.seat.is_none(), occupied);
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(walked, [false, false, false, true, true]);
+            assert!(waited && sat_or_yielded);
+        }
+    }
+
+    fn walking_runtime() -> (NpcRuntime, Vec<theater::Collider>, f64, usize) {
+        let (mut runtime, colliders) = runtime();
+        let (index, start) = runtime
+            .slots
+            .iter()
+            .enumerate()
+            .find_map(|(index, slot)| {
+                let Slot::DoorVisit {
+                    offset_seconds,
+                    timeline,
+                    ..
+                } = slot
+                else {
+                    return None;
+                };
+                timeline
+                    .iter()
+                    .find(|segment| {
+                        segment.seat.is_none()
+                            && segment.from != segment.to
+                            && segment.duration_seconds > 3.0
+                    })
+                    .map(|segment| (index, offset_seconds + segment.start_seconds))
+            })
+            .unwrap();
+        for step in 0..120 {
+            let time = start + f64::from(step) / 60.0;
+            sample(&mut runtime, time, &colliders);
+            if runtime.rocks[index].abs() > 0.000_01 {
+                return (runtime, colliders, time, index);
+            }
+        }
+        panic!("authored walking must produce visual rock");
+    }
+
+    #[test]
+    fn occupancy_and_render_queries_never_advance_visual_motion() {
+        let (mut runtime, _, time, _) = walking_runtime();
+        let poses = runtime.poses;
+        let rocks = runtime.rocks;
+        let textures = textures();
+        for _ in 0..20 {
+            runtime.sample_poses(time);
+            runtime.set_player_occupied_seats(runtime.player_occupied);
+            let mut scene = SceneSnapshot::default();
+            runtime.append_sprites(&mut scene, &textures, 1.0, 1.0);
+            assert_eq!(runtime.nameplates().count(), runtime.visible_count());
+            assert_eq!(runtime.poses, poses);
+            assert_eq!(runtime.rocks, rocks);
+        }
+    }
+
+    #[test]
+    fn clock_resync_and_seat_reconciliation_suppress_visual_rock() {
+        for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+            let (mut runtime, colliders, time, _) = walking_runtime();
+            let poses = runtime.poses;
+            sample(&mut runtime, invalid, &colliders);
+            assert_eq!(runtime.poses, poses);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+            sample(&mut runtime, time + 1.0 / 60.0, &colliders);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+        }
+        for delta in [-1.0, 0.0, 600.0, 60_000.0] {
+            let (mut runtime, colliders, time, _) = walking_runtime();
+            sample(&mut runtime, time + delta, &colliders);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+        }
+        let (mut runtime, colliders) = runtime();
+        let sit_time = match &runtime.slots[3] {
+            Slot::DoorVisit {
+                offset_seconds,
+                timeline,
+                ..
+            } => {
+                offset_seconds
+                    + timeline
+                        .iter()
+                        .find(|segment| segment.seat.is_some())
+                        .unwrap()
+                        .start_seconds
+                    + 1.0
+            }
+            _ => unreachable!(),
+        };
+        sample(&mut runtime, sit_time, &colliders);
+        // Seed stale visual state to prove reconciliation clears it immediately,
+        // without relying on another accepted clock update.
+        runtime.rocks[3] = 0.02;
+        runtime.set_player_occupied_seats([true; theater::SEAT_COUNT]);
+        assert_eq!(runtime.rocks[3], 0.0);
+        assert_eq!(runtime.poses[3].unwrap().forward, Vec3::NEG_Z);
+        assert!(!runtime.poses[3].unwrap().walking);
+        runtime.rocks[3] = 0.02;
+        runtime.set_player_occupied_seats([false; theater::SEAT_COUNT]);
+        assert_eq!(runtime.rocks[3], 0.0);
+        assert_eq!(runtime.last_accepted_unix_seconds, Some(sit_time));
+    }
+
+    #[test]
     fn authored_sits_yield_retry_render_and_release_without_rephasing() {
         let (runtime, colliders) = runtime();
-        let textures = std::array::from_fn(|_| SpriteHandle::new());
+        let textures = textures();
         for visitor in [3, 4] {
             let Slot::DoorVisit {
                 offset_seconds,
@@ -780,9 +1024,12 @@ mod tests {
                 let sprite = scene
                     .sprites
                     .iter()
-                    .find(|sprite| sprite.sprite == textures[visitor])
+                    .find(|sprite| textures[visitor].seated.contains(&sprite.sprite))
                     .unwrap();
-                assert_eq!(sprite.uv_rect, [0.0, 0.0, 1.0, 0.58]);
+                assert!(
+                    sprite.uv_rect == [0.0, 0.0, 1.0, 1.0]
+                        || sprite.uv_rect == [1.0, 0.0, -1.0, 1.0]
+                );
                 assert_eq!(
                     sampled
                         .nameplates()
@@ -811,7 +1058,7 @@ mod tests {
                 assert!(sampled.occupied_seats()[18]);
                 assert_eq!(sampled.last_accepted_unix_seconds, Some(time));
             }
-            sample(&mut sampled, end + 0.000001, &colliders);
+            sample(&mut sampled, end + 0.000_001, &colliders);
             assert!(!sampled.occupied_seats()[23]);
             assert!(
                 sampled.poses[visitor]
@@ -1038,7 +1285,7 @@ mod tests {
         let mut auditorium_extremes = (usize::MAX, 0);
         let mut saw_corridor = false;
         let mut saw_hidden = [false; 2];
-        let textures = [SpriteHandle::new(); avatars::AVATAR_COUNT];
+        let textures = textures();
         for step in 0..=30_000 {
             let time = runtime.period_seconds * f64::from(step) / 30_000.0;
             sample(&mut runtime, time, &colliders);
@@ -1051,12 +1298,12 @@ mod tests {
             );
             for (index, pose) in runtime.poses[3..].iter().enumerate() {
                 saw_hidden[index] |= pose.is_none();
-                if let Some(pose) = pose {
-                    if zone(pose.eye) == Zone::Corridor {
-                        saw_corridor = true;
-                        // Neither minimum relies on the traveler being en route.
-                        assert_eq!(runtime.room_counts(), (1, 2));
-                    }
+                if let Some(pose) = pose
+                    && zone(pose.eye) == Zone::Corridor
+                {
+                    saw_corridor = true;
+                    // Neither minimum relies on the traveler being en route.
+                    assert_eq!(runtime.room_counts(), (1, 2));
                 }
             }
             if step % 100 == 0 {
@@ -1276,7 +1523,7 @@ mod tests {
     #[test]
     fn all_five_portraits_stay_grounded_with_room_lighting_without_talk_overlays() {
         let (mut runtime, colliders) = runtime();
-        let textures = std::array::from_fn(|_| SpriteHandle::new());
+        let textures = textures();
         let mut seen = [false; NPC_COUNT];
         for step in 0..7200 {
             let time = f64::from(step) / 12.0;
@@ -1290,22 +1537,31 @@ mod tests {
             for (index, pose) in runtime.poses.iter().enumerate() {
                 let Some(pose) = pose else { continue };
                 let sprite = sprites.next().unwrap();
-                let base = crate::posed_avatar_instance(
+                let base = avatars::sprite(
                     textures[index],
                     pose.eye,
                     scene.camera.eye,
+                    pose.forward,
                     pose.seat.is_some(),
+                    runtime.rocks[index],
                 );
                 seen[index] = true;
                 assert_eq!(sprite.transform.translation, base.transform.translation);
-                assert_eq!(sprite.sprite, textures[index]);
+                let views = if pose.seat.is_some() {
+                    textures[index].seated
+                } else {
+                    textures[index].standing
+                };
+                assert!(views.contains(&sprite.sprite));
                 assert_eq!(sprite.transform.rotation, base.transform.rotation);
                 assert_eq!(sprite.transform.scale, base.transform.scale);
-                let bottom = sprite.transform.translation.y - sprite.transform.scale * 0.5;
-                let expected_bottom = pose.seat.map_or(theater::floor_height(pose.eye), |index| {
-                    theater::SEATS[usize::from(index)].position.y + 0.48
-                });
-                assert!((bottom - expected_bottom).abs() < 0.01);
+                // Texture calibration and the foot pivot belong to avatars::sprite;
+                // canonical eyes and nameplates remain on the physical surface.
+                let expected_eye = pose.seat.map_or_else(
+                    || grounded_eye(pose.eye),
+                    |index| theater::SEATS[usize::from(index)].seated_eye(),
+                );
+                assert_eq!(pose.eye, expected_eye);
                 let light = if zone(pose.eye) == Zone::Auditorium {
                     0.12
                 } else {
@@ -1320,7 +1576,7 @@ mod tests {
     #[test]
     fn nameplates_follow_live_grounded_portraits_and_exact_departure_boundaries() {
         let (mut runtime, colliders) = runtime();
-        let textures = std::array::from_fn(|_| SpriteHandle::new());
+        let textures = textures();
         for (visitor, start, duration) in visit_windows(&runtime) {
             for time in [
                 start,
@@ -1336,7 +1592,10 @@ mod tests {
                 for ((name, eye), sprite) in labels.iter().zip(&scene.sprites) {
                     let index = textures
                         .iter()
-                        .position(|texture| *texture == sprite.sprite)
+                        .position(|texture| {
+                            texture.standing.contains(&sprite.sprite)
+                                || texture.seated.contains(&sprite.sprite)
+                        })
                         .unwrap();
                     let pose = runtime.poses[index].unwrap();
                     assert_eq!(*name, config().definitions[index].display_name);
@@ -1346,11 +1605,13 @@ mod tests {
                         |index| theater::SEATS[usize::from(index)].seated_eye(),
                     );
                     assert_eq!(*eye, expected_eye);
-                    let expected_center = crate::posed_avatar_instance(
+                    let expected_center = avatars::sprite(
                         textures[index],
                         *eye,
                         scene.camera.eye,
+                        pose.forward,
                         pose.seat.is_some(),
+                        runtime.rocks[index],
                     )
                     .transform
                     .translation;

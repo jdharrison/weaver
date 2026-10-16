@@ -22,6 +22,7 @@ const CENTERS: [Vec3; 3] = [
 ];
 struct Bridge {
     disposed: bool,
+    world_panels: bool,
     states: [usize; 3],
     snapshot: Option<Snapshot>,
     player_eye: Vec3,
@@ -35,6 +36,7 @@ impl Default for Bridge {
     fn default() -> Self {
         Self {
             disposed: false,
+            world_panels: true,
             states: [0, 0, 3],
             snapshot: None,
             player_eye: Vec3::NAN,
@@ -135,6 +137,7 @@ fn browser_now() -> Option<f64> {
     Some(window.performance()?.now())
 }
 
+/// Scene targets: 1–3 legacy controls, 4 GitHub, 5 LinkedIn, 100+ seat, 200 exit.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn pick_scene_interaction(x: f32, y: f32) -> u32 {
@@ -180,6 +183,9 @@ impl Bridge {
         if panel != 0 {
             return panel;
         }
+        if let Some(target) = Self::pick_portfolio(snapshot, origin, direction) {
+            return target;
+        }
         if self.seated.is_some() {
             return 200;
         }
@@ -205,6 +211,27 @@ impl Bridge {
             return 0;
         }
         100 + index as u32
+    }
+
+    fn pick_portfolio(snapshot: &Snapshot, origin: Vec3, direction: Vec3) -> Option<u32> {
+        use theater::decor::{
+            PORTFOLIO_BOTTOM, PORTFOLIO_CENTER, PORTFOLIO_HALF_WIDTH, PORTFOLIO_TOP,
+        };
+        if origin.z <= PORTFOLIO_CENTER.z || direction.z >= -f32::EPSILON {
+            return None;
+        }
+        let distance = (PORTFOLIO_CENTER.z - origin.z) / direction.z;
+        if !(0.0..=MAX_RANGE).contains(&distance) {
+            return None;
+        }
+        let hit = origin + direction * distance;
+        if (hit.x - PORTFOLIO_CENTER.x).abs() > PORTFOLIO_HALF_WIDTH
+            || !(PORTFOLIO_BOTTOM..=PORTFOLIO_TOP).contains(&hit.y)
+            || !theater::has_line_of_sight(origin, hit, &snapshot.colliders)
+        {
+            return None;
+        }
+        Some(if hit.x < PORTFOLIO_CENTER.x { 4 } else { 5 })
     }
 
     fn queue(&mut self, target: u32, now: f64) -> bool {
@@ -262,6 +289,9 @@ impl Bridge {
     }
 
     fn pick_panel(&self, ndc: Vec2, now: f64, include_unavailable: bool) -> u32 {
+        if !self.world_panels {
+            return 0;
+        }
         let Some(snapshot) = &self.snapshot else {
             return 0;
         };
@@ -366,60 +396,76 @@ impl Snapshot {
 
 pub(crate) struct ControlPanels {
     bridge: Rc<RefCell<Bridge>>,
+    world: Option<WorldPanels>,
+}
+
+struct WorldPanels {
     mesh_indices: [usize; 3],
     textures: [[SpriteHandle; STATE_COUNT]; 3],
 }
 
 impl ControlPanels {
-    pub(crate) fn new(assets: &mut AppAssets, meshes: &mut Vec<MeshInstance>) -> Self {
-        let bridge = Rc::new(RefCell::new(Bridge::default()));
+    pub(crate) fn new(
+        assets: &mut AppAssets,
+        meshes: &mut Vec<MeshInstance>,
+        world_panels: bool,
+    ) -> Self {
+        let bridge = Rc::new(RefCell::new(Bridge {
+            world_panels,
+            ..Bridge::default()
+        }));
         BRIDGE.with(|slot| *slot.borrow_mut() = Rc::clone(&bridge));
-        let textures = std::array::from_fn(|panel| {
-            std::array::from_fn(|state| {
-                let texture = label_texture(panel, state);
-                let handle = texture.handle;
-                assets.textures.push(texture);
-                handle
-            })
-        });
-        let mesh_indices = std::array::from_fn(|panel| {
-            let center = CENTERS[panel];
-            let offsets = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
-            let vertices = offsets
-                .into_iter()
-                .map(|(x, y)| Vertex {
-                    position: (center + Vec3::new(x * WIDTH, y * HEIGHT, 0.0)).to_array(),
-                    normal: Vec3::Z.to_array(),
-                    color: [1.0; 4],
-                    uv: [x + 0.5, 0.5 - y],
+        let world = world_panels.then(|| {
+            let textures = std::array::from_fn(|panel| {
+                std::array::from_fn(|state| {
+                    let texture = label_texture(panel, state);
+                    let handle = texture.handle;
+                    assets.textures.push(texture);
+                    handle
                 })
-                .collect();
-            let handle = MeshHandle::new();
-            assets
-                .meshes
-                .push(MeshAsset::new(handle, vertices, vec![0, 1, 2, 0, 2, 3]));
-            let mut mesh = MeshInstance::new(handle, RenderTransform::default());
-            mesh.texture = Some(textures[panel][bridge.borrow().display_state(panel)]);
-            mesh.lighting = Some(MeshLighting {
-                position: Vec3::ZERO,
-                ambient: 1.0,
-                intensity: 0.0,
             });
-            let index = meshes.len();
-            meshes.push(mesh);
-            index
+            let mesh_indices = std::array::from_fn(|panel| {
+                let center = CENTERS[panel];
+                let offsets = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
+                let vertices = offsets
+                    .into_iter()
+                    .map(|(x, y)| Vertex {
+                        position: (center + Vec3::new(x * WIDTH, y * HEIGHT, 0.0)).to_array(),
+                        normal: Vec3::Z.to_array(),
+                        color: [1.0; 4],
+                        uv: [x + 0.5, 0.5 - y],
+                    })
+                    .collect();
+                let handle = MeshHandle::new();
+                assets
+                    .meshes
+                    .push(MeshAsset::new(handle, vertices, vec![0, 1, 2, 0, 2, 3]));
+                let mut mesh = MeshInstance::new(handle, RenderTransform::default());
+                mesh.texture = Some(textures[panel][bridge.borrow().display_state(panel)]);
+                mesh.lighting = Some(MeshLighting {
+                    position: Vec3::ZERO,
+                    ambient: 1.0,
+                    intensity: 0.0,
+                });
+                let index = meshes.len();
+                meshes.push(mesh);
+                index
+            });
+            WorldPanels {
+                mesh_indices,
+                textures,
+            }
         });
-        Self {
-            bridge,
-            mesh_indices,
-            textures,
-        }
+        Self { bridge, world }
     }
 
     pub(crate) fn refresh_meshes(&self, meshes: &mut [MeshInstance]) {
+        let Some(world) = &self.world else {
+            return;
+        };
         let bridge = self.bridge.borrow();
-        for (panel, index) in self.mesh_indices.iter().enumerate() {
-            meshes[*index].texture = Some(self.textures[panel][bridge.display_state(panel)]);
+        for (panel, index) in world.mesh_indices.iter().enumerate() {
+            meshes[*index].texture = Some(world.textures[panel][bridge.display_state(panel)]);
             // Room lighting changes must not darken the control's own display.
             meshes[*index].lighting = Some(MeshLighting {
                 position: Vec3::ZERO,
@@ -517,7 +563,7 @@ fn label_texture(panel: usize, state: usize) -> TextureAsset {
     } else {
         "CLICK PANEL"
     };
-    for (text, top, scale) in [(title, 18, 3), (status, 55, 3), (hint, 99, 2)] {
+    for (text, top, scale) in [(title, 10, 4), (status, 51, 4), (hint, 96, 3)] {
         let left = (W - (text.len() * 6 - 1) * scale) / 2;
         for (letter, character) in text.chars().enumerate() {
             for (row, bits) in glyph(character).iter().enumerate() {
@@ -566,6 +612,78 @@ mod tests {
             ..Bridge::default()
         }
     }
+    fn portfolio_bridge(target: Vec3) -> Bridge {
+        let mut bridge = bridge();
+        bridge.world_panels = false;
+        bridge.player_eye = theater::SPAWN;
+        bridge.snapshot.as_mut().unwrap().camera.target = target;
+        bridge
+    }
+
+    #[test]
+    fn portfolio_picks_board_halves_before_seat_exit_without_legacy_panels() {
+        use theater::decor::PORTFOLIO_CENTER;
+        for (x, expected) in [(-0.6, 4), (0.6, 5)] {
+            let mut bridge = portfolio_bridge(PORTFOLIO_CENTER + Vec3::X * x);
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), expected);
+            assert_eq!(bridge.pick(Vec2::ZERO, 100.0), 0);
+            bridge.world_panels = true;
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), expected);
+            bridge.seated = Some(0);
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), expected);
+            assert!(!bridge.queue(expected, 100.0));
+            assert!(bridge.pending.is_none());
+        }
+    }
+
+    #[test]
+    fn portfolio_rejects_canvas_lamps_outside_board_and_back_face() {
+        use theater::decor::{
+            PORTFOLIO_BOTTOM, PORTFOLIO_CENTER, PORTFOLIO_HALF_WIDTH, PORTFOLIO_TOP,
+        };
+        for target in [
+            PORTFOLIO_CENTER + Vec3::X * (PORTFOLIO_HALF_WIDTH + 0.02),
+            PORTFOLIO_CENTER - Vec3::X * (PORTFOLIO_HALF_WIDTH + 0.02),
+            Vec3::new(0.0, PORTFOLIO_BOTTOM - 0.02, PORTFOLIO_CENTER.z),
+            Vec3::new(0.0, PORTFOLIO_TOP + 0.02, PORTFOLIO_CENTER.z),
+            Vec3::new(1.7, PORTFOLIO_CENTER.y, PORTFOLIO_CENTER.z),
+            Vec3::new(0.0, 4.35, PORTFOLIO_CENTER.z),
+        ] {
+            assert_eq!(portfolio_bridge(target).pick_scene(Vec2::ZERO, 100.0), 0);
+        }
+        let mut bridge = portfolio_bridge(PORTFOLIO_CENTER);
+        let snapshot = bridge.snapshot.as_mut().unwrap();
+        snapshot.colliders.clear();
+        snapshot.camera.eye = PORTFOLIO_CENTER - Vec3::Z * 2.0;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+    }
+
+    #[test]
+    fn portfolio_obeys_freshness_range_los_and_input_lifecycle() {
+        use theater::decor::PORTFOLIO_CENTER;
+        let mut bridge = portfolio_bridge(PORTFOLIO_CENTER - Vec3::X * 0.5);
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 350.0), 4);
+        for now in [99.0, 350.01, f64::NAN] {
+            assert_eq!(bridge.pick_scene(Vec2::ZERO, now), 0);
+        }
+        assert_eq!(bridge.pick_scene(Vec2::NAN, 100.0), 0);
+        bridge.snapshot.as_mut().unwrap().camera.eye = Vec3::new(0.0, 3.3, 11.0);
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        // The lobby ceiling is a real occluder even when the camera is close.
+        bridge.snapshot.as_mut().unwrap().camera.eye = Vec3::new(0.0, 5.0, 3.0);
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        bridge.snapshot.as_mut().unwrap().colliders.clear();
+        // Ceiling/floor occlusion is independent of the explicit collider list.
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        bridge.snapshot.as_mut().unwrap().camera.eye = theater::SPAWN;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 4);
+        bridge.snapshot.as_mut().unwrap().enabled = false;
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+        bridge.snapshot.as_mut().unwrap().enabled = true;
+        bridge.invalidate();
+        assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
+    }
+
     fn seat_bridge(index: usize) -> Bridge {
         let mut bridge = bridge();
         let seat = theater::SEATS[index];
@@ -574,6 +692,103 @@ mod tests {
         snapshot.camera.eye = seat.approach();
         snapshot.camera.target = seat.position + Vec3::Y * 0.5;
         bridge
+    }
+
+    #[test]
+    fn no_world_panels_allocate_nothing_and_never_own_a_hit() {
+        let mut assets = AppAssets::default();
+        let mut meshes = Vec::new();
+        let panels = ControlPanels::new(&mut assets, &mut meshes, false);
+        assert!(panels.world.is_none());
+        assert!(assets.meshes.is_empty());
+        assert!(assets.textures.is_empty());
+        assert!(meshes.is_empty());
+        let source = bridge();
+        let mut snapshot = source.snapshot.unwrap();
+        for (index, center) in CENTERS.iter().enumerate() {
+            snapshot.camera.target = *center;
+            // Compatibility state updates must not enable invisible targets.
+            assert!(panels.bridge.borrow_mut().set_state(index as u32 + 1, 3));
+            panels.publish(
+                &snapshot.camera,
+                snapshot.viewport,
+                &snapshot.colliders,
+                100.0,
+                true,
+            );
+            assert_eq!(panels.bridge.borrow().pick(Vec2::ZERO, 100.0), 0);
+            // The enlarged plaque is behind the absent sound panel, but the
+            // invisible control must never intercept its independently picked link.
+            let link = if index == 0 { 5 } else { 0 };
+            assert_eq!(pick_current_interaction(Vec2::ZERO, 100.0), link);
+            set_seating_context(theater::SPAWN, Some(0), [false; theater::SEAT_COUNT]);
+            assert_eq!(
+                pick_current_interaction(Vec2::ZERO, 100.0),
+                if link != 0 { link } else { 200 }
+            );
+            assert_eq!(queue_seat_request(200, 100.0), link == 0);
+            assert_eq!(
+                take_seat_request(),
+                if link == 0 { Some(200) } else { None }
+            );
+            set_seating_context(theater::SPAWN, None, [false; theater::SEAT_COUNT]);
+        }
+        panels.refresh_meshes(&mut meshes);
+        assert!(assets.meshes.is_empty());
+        assert!(assets.textures.is_empty());
+        assert!(meshes.is_empty());
+    }
+
+    #[test]
+    fn no_world_panels_preserve_seating_suspension_and_retirement() {
+        let mut assets = AppAssets::default();
+        let mut meshes = Vec::new();
+        let panels = ControlPanels::new(&mut assets, &mut meshes, false);
+        for index in 0..theater::SEAT_COUNT {
+            let source = seat_bridge(index);
+            let snapshot = source.snapshot.unwrap();
+            let target = 100 + index as u32;
+            set_seating_context(source.player_eye, None, [false; theater::SEAT_COUNT]);
+            panels.publish(
+                &snapshot.camera,
+                snapshot.viewport,
+                &snapshot.colliders,
+                100.0,
+                true,
+            );
+            assert_eq!(pick_current_interaction(Vec2::ZERO, 100.0), target);
+            assert!(queue_seat_request(target, 100.0));
+            invalidate_scene_interactions();
+            assert_eq!(take_seat_request(), None);
+            assert_eq!(pick_current_interaction(Vec2::ZERO, 100.0), 0);
+            panels.publish(
+                &snapshot.camera,
+                snapshot.viewport,
+                &snapshot.colliders,
+                101.0,
+                true,
+            );
+            assert_eq!(pick_current_interaction(Vec2::ZERO, 101.0), target);
+            assert!(queue_seat_request(target, 101.0));
+            assert_eq!(take_seat_request(), Some(target));
+        }
+        let bridge = Rc::clone(&panels.bridge);
+        bridge.borrow_mut().invalidate();
+        let snapshot = seat_bridge(0).snapshot.unwrap();
+        panels.publish(
+            &snapshot.camera,
+            snapshot.viewport,
+            &snapshot.colliders,
+            102.0,
+            true,
+        );
+        assert!(bridge.borrow().snapshot.is_none());
+        assert!(!bridge.borrow_mut().set_state(1, 3));
+        assert_eq!(pick_current_interaction(Vec2::ZERO, 102.0), 0);
+        assert!(!queue_seat_request(100, 102.0));
+        drop(panels);
+        assert!(bridge.borrow().disposed);
+        assert!(bridge.borrow().snapshot.is_none());
     }
 
     #[test]
@@ -647,7 +862,8 @@ mod tests {
 
     #[test]
     fn walls_and_nearest_occupied_chairs_block_seat_picking() {
-        let mut bridge = seat_bridge(0);
+        // Aim outside the portfolio plaque so this specifically tests the wall.
+        let mut bridge = seat_bridge(9);
         let snapshot = bridge.snapshot.as_mut().unwrap();
         snapshot.camera.eye = theater::SPAWN;
         assert_eq!(bridge.pick_scene(Vec2::ZERO, 100.0), 0);
@@ -664,7 +880,7 @@ mod tests {
     fn thread_local_binding_publish_suppression_and_revival() {
         let mut assets = AppAssets::default();
         let mut meshes = Vec::new();
-        let panels = ControlPanels::new(&mut assets, &mut meshes);
+        let panels = ControlPanels::new(&mut assets, &mut meshes, true);
         let source = seat_bridge(0);
         let snapshot = source.snapshot.unwrap();
         set_seating_context(source.player_eye, None, [false; theater::SEAT_COUNT]);
@@ -804,7 +1020,7 @@ mod tests {
     fn subtitle_textures_follow_effective_state_without_reallocating() {
         let mut assets = AppAssets::default();
         let mut meshes = Vec::new();
-        let panels = ControlPanels::new(&mut assets, &mut meshes);
+        let panels = ControlPanels::new(&mut assets, &mut meshes, true);
         let handles: Vec<_> = assets
             .textures
             .iter()
@@ -814,7 +1030,10 @@ mod tests {
             panels.bridge.borrow_mut().set_state(1, sound);
             panels.bridge.borrow_mut().set_state(3, subtitles);
             panels.refresh_meshes(&mut meshes);
-            assert_eq!(meshes[2].texture, Some(panels.textures[2][expected]));
+            assert_eq!(
+                meshes[2].texture,
+                Some(panels.world.as_ref().unwrap().textures[2][expected])
+            );
             assert_eq!(meshes[2].lighting.as_ref().unwrap().ambient, 1.0);
             assert_eq!(meshes[2].lighting.as_ref().unwrap().intensity, 0.0);
         }
@@ -902,8 +1121,8 @@ mod tests {
         assert_ne!(app.scene.camera.eye, app.view.player.eye);
         assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
         assert_eq!(
-            app.scene.meshes[app.control_panels.mesh_indices[0]].texture,
-            Some(app.control_panels.textures[0][3])
+            app.scene.meshes[app.control_panels.world.as_ref().unwrap().mesh_indices[0]].texture,
+            Some(app.control_panels.world.as_ref().unwrap().textures[0][3])
         );
         app.update(
             frame,
@@ -919,7 +1138,7 @@ mod tests {
         );
         app.set_room_lighting(0.0, 0.0);
         assert_eq!(
-            app.scene.meshes[app.control_panels.mesh_indices[0]]
+            app.scene.meshes[app.control_panels.world.as_ref().unwrap().mesh_indices[0]]
                 .lighting
                 .as_ref()
                 .unwrap()
@@ -938,10 +1157,13 @@ mod tests {
     fn mesh_textures_are_distinct_persistent_and_unlit() {
         let mut assets = AppAssets::default();
         let mut meshes = Vec::new();
-        let panels = ControlPanels::new(&mut assets, &mut meshes);
+        let panels = ControlPanels::new(&mut assets, &mut meshes, true);
         assert_eq!(assets.meshes.len(), 3);
         assert_eq!(assets.textures.len(), 3 * STATE_COUNT);
-        assert_eq!(meshes[2].texture, Some(panels.textures[2][3]));
+        assert_eq!(
+            meshes[2].texture,
+            Some(panels.world.as_ref().unwrap().textures[2][3])
+        );
         assert_eq!(assets.meshes[0].vertices[0].uv, [0.0, 1.0]);
         let off = assets.textures[1].rgba.clone();
         assert_ne!(off, assets.textures[3].rgba);

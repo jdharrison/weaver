@@ -1,0 +1,2559 @@
+{
+  "archives": [
+    {
+      "bytes": 16141264,
+      "filename": "starlit_cinema_modular_poster_and_widget_pack.zip",
+      "id": "modular",
+      "sha256": "333cb6f838903713984cfb60543f33f38a58dd32245fd2782107f318e4dc3af7"
+    },
+    {
+      "bytes": 41637045,
+      "filename": "starlit_cinema_texture_pack_v3.zip",
+      "id": "textures",
+      "sha256": "7b1af8b3dd4d424e6a06ddedddd9d85634959495f44cb0f31debcc9171d9a7e0"
+    }
+  ],
+  "assets": [
+    {
+      "bytes": 384081,
+      "decoded_bytes": 1114112,
+      "filename": "curtain_left.png",
+      "height": 1024,
+      "intended_use": "existing_environment_transparent_sprite",
+      "mode": "RGBA",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source, associated-alpha Lanczos resize, straight-alpha RGBA PNG; preserve aspect"
+      },
+      "rgba8_base_bytes": 1114112,
+      "rgba8_full_mip_chain_bytes": 1485404,
+      "rgba_sha256": "5b6d243371c943bb31093ff1ab49f19c8a5801b11667f8f682e13c216214c0d6",
+      "sha256": "3055e1b38a281d36200d8ab34044874b1c3d0c4d1dc6e66b840f53334468b8c1",
+      "sources": [
+        "modular:widgets/curtain_left.png"
+      ],
+      "width": 272
+    },
+    {
+      "bytes": 382281,
+      "decoded_bytes": 1114112,
+      "filename": "curtain_right.png",
+      "height": 1024,
+      "intended_use": "existing_environment_transparent_sprite",
+      "mode": "RGBA",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source, associated-alpha Lanczos resize, straight-alpha RGBA PNG; preserve aspect"
+      },
+      "rgba8_base_bytes": 1114112,
+      "rgba8_full_mip_chain_bytes": 1485404,
+      "rgba_sha256": "6f6ddb58fa2491e3b6b06d1b48c2976550ff9f8956ac33a52a0f994e54cedd5a",
+      "sha256": "6f9fc05b61783d0d24790ec65c30a723896e58d63f9bef34fc623e518f952693",
+      "sources": [
+        "modular:widgets/curtain_right.png"
+      ],
+      "width": 272
+    },
+    {
+      "bytes": 2045275,
+      "decoded_bytes": 3145728,
+      "filename": "door_sci_fi_trim_panels.png",
+      "height": 1024,
+      "intended_use": "existing_sealed_door_only",
+      "mode": "RGB",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source RGB Lanczos resize; preserve aspect; max edge 1024"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "748951b69193fbafd38c99831ce7fb66740186a6d9e213b3b11891be0a3b9015",
+      "sha256": "ae04032627e35700adfefeb5924f11fec1f2037abe7ae6df2c3b6f0fc76aa989",
+      "sources": [
+        "textures:wall_sci_fi_trim_panels.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 541881,
+      "decoded_bytes": 786432,
+      "filename": "ground_auditorium_carpet_base.png",
+      "height": 512,
+      "intended_use": "seamless_repeating_auditorium_floor_base_not_compass",
+      "mode": "RGB",
+      "processing": {
+        "crop_bounds": "[x0,y0,x1,y1), source pixels, origin top-left",
+        "operation": "Undecorated 256px burgundy crop, unresampled; 2x2 mirror/flip tiling, no color adjustment",
+        "quadrants": [
+          "original",
+          "mirror_horizontal",
+          "mirror_vertical",
+          "mirror_both"
+        ],
+        "source_crop_px": [
+          144,
+          144,
+          400,
+          400
+        ]
+      },
+      "rgba8_base_bytes": 1048576,
+      "rgba8_full_mip_chain_bytes": 1398100,
+      "rgba_sha256": "9b41a0c061be6c9c8877397a3e6a0d8114bbd49c2ab19daae129ae4d2f9f0c03",
+      "sha256": "a443796ba5097ea0785e7856e09e8338068f5e455ae8be7b2eaa73c93bb1140e",
+      "sources": [
+        "textures:ground_auditorium_compass_carpet.png"
+      ],
+      "width": 512
+    },
+    {
+      "bytes": 2288852,
+      "decoded_bytes": 3145728,
+      "filename": "ground_compass_rug.png",
+      "height": 1024,
+      "intended_use": "one_full_compass_floor_overlay",
+      "mode": "RGB",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source RGB Lanczos resize; preserve aspect; max edge 1024"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "224a73845d1bded70eee91f626e1d314408e4436307dbbae2601e4310c3f9f60",
+      "sha256": "eaf361311fdd6edaf6c141de66e97ab2799483e29992363e02ed601dc5527493",
+      "sources": [
+        "textures:ground_auditorium_compass_carpet.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 2291526,
+      "decoded_bytes": 3145728,
+      "filename": "ground_lobby_stone_tiles.png",
+      "height": 1024,
+      "intended_use": "existing_lobby_floor",
+      "mode": "RGB",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source RGB Lanczos resize; preserve aspect; max edge 1024"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "69638c9ccd2aed6f76322ca70b3f6244298a51b5c671b7807dfc67ee4e220224",
+      "sha256": "8a4cd56ea527035c42abdcecc88661a45e05a56dd95e73b3f69541c9bbf45fd7",
+      "sources": [
+        "textures:ground_lobby_alt_stone_tiles.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 122129,
+      "decoded_bytes": 2867200,
+      "filename": "poster_frame_01.png",
+      "height": 1024,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          2.0,
+          3.0
+        ],
+        "art_size_m_exact": [
+          "2",
+          "3"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          158,
+          24
+        ],
+        "ideal_outer_aspect_exact": "54/79",
+        "nominal_opening_bounds_px": [
+          25.925925925925927,
+          25.924050632911392,
+          674.074074074074,
+          998.0759493670886
+        ],
+        "nominal_opening_uv": [
+          0.037037037037037035,
+          0.02531645569620253,
+          0.9629629629629629,
+          0.9746835443037974
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              23,
+              25
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              676,
+              1,
+              697,
+              25
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              999,
+              24,
+              1023
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              676,
+              999,
+              697,
+              1023
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              301,
+              1,
+              399,
+              25
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              303,
+              999,
+              396,
+              1023
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              446,
+              25,
+              578
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              675,
+              446,
+              699,
+              577
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          2.16,
+          3.16
+        ],
+        "outer_size_m_exact": [
+          "54/25",
+          "79/25"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 0.68359375,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          25,
+          25,
+          675,
+          999
+        ],
+        "transparent_opening_uv": [
+          0.03571428571428571,
+          0.0244140625,
+          0.9642857142857143,
+          0.9755859375
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          24,
+          158
+        ]
+      },
+      "rgba8_base_bytes": 2867200,
+      "rgba8_full_mip_chain_bytes": 3822284,
+      "rgba_sha256": "26f6c73d563023f4ff19fc8be977e001b22b490d22eabb2e543ae1e9575e785f",
+      "sha256": "a1139ce27aba51648fccd87c67d1d1b7b85f464b1c4e86075efc810dbc182cb2",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 700
+    },
+    {
+      "bytes": 89606,
+      "decoded_bytes": 3518464,
+      "filename": "poster_frame_02.png",
+      "height": 859,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          3.6,
+          2.994392523364486
+        ],
+        "art_size_m_exact": [
+          "18/5",
+          "1602/535"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          131,
+          20
+        ],
+        "ideal_outer_aspect_exact": "5029/4219",
+        "nominal_opening_bounds_px": [
+          21.78723404255319,
+          21.785494192936714,
+          1002.2127659574468,
+          837.2145058070632
+        ],
+        "nominal_opening_uv": [
+          0.02127659574468085,
+          0.025361460061625977,
+          0.9787234042553191,
+          0.974638539938374
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              19,
+              21
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1004,
+              1,
+              1021,
+              21
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              838,
+              20,
+              858
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1004,
+              838,
+              1022,
+              858
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              471,
+              1,
+              553,
+              21
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              473,
+              838,
+              551,
+              858
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              374,
+              21,
+              484
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1003,
+              375,
+              1023,
+              484
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          3.76,
+          3.154392523364486
+        ],
+        "outer_size_m_exact": [
+          "94/25",
+          "8438/2675"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.1920838183934808,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          21,
+          21,
+          1003,
+          838
+        ],
+        "transparent_opening_uv": [
+          0.0205078125,
+          0.024447031431897557,
+          0.9794921875,
+          0.9755529685681025
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          20,
+          131
+        ]
+      },
+      "rgba8_base_bytes": 3518464,
+      "rgba8_full_mip_chain_bytes": 4688956,
+      "rgba_sha256": "0c9b6c7fb663b1116e5b8b0b66c261e942b0bfb19798be5550b9a517aac815c5",
+      "sha256": "22213ad3ae8dc88f4d625fa3f94895da7cf7ad2ba0b6302875177bae6cf0daf5",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 59492,
+      "decoded_bytes": 2424832,
+      "filename": "poster_frame_03.png",
+      "height": 592,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          4.2,
+          2.3625
+        ],
+        "art_size_m_exact": [
+          "21/5",
+          "189/80"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          112,
+          17
+        ],
+        "ideal_outer_aspect_exact": "1744/1009",
+        "nominal_opening_bounds_px": [
+          18.788990825688074,
+          18.775024777006937,
+          1005.2110091743119,
+          573.2249752229931
+        ],
+        "nominal_opening_uv": [
+          0.01834862385321101,
+          0.031714568880079286,
+          0.981651376146789,
+          0.9682854311199207
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              17,
+              18
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1007,
+              1,
+              1022,
+              18
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              574,
+              17,
+              591
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1007,
+              574,
+              1022,
+              591
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              477,
+              1,
+              547,
+              18
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              479,
+              574,
+              545,
+              591
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              249,
+              18,
+              343
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1006,
+              249,
+              1023,
+              342
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          4.36,
+          2.5225
+        ],
+        "outer_size_m_exact": [
+          "109/25",
+          "1009/400"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.7297297297297298,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          18,
+          18,
+          1006,
+          574
+        ],
+        "transparent_opening_uv": [
+          0.017578125,
+          0.030405405405405407,
+          0.982421875,
+          0.9695945945945946
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          17,
+          112
+        ]
+      },
+      "rgba8_base_bytes": 2424832,
+      "rgba8_full_mip_chain_bytes": 3233004,
+      "rgba_sha256": "11c007f8736b4be295bf8c1dda57e089a9ce4a1b45f6a3b56fbbfb179b6ecf14",
+      "sha256": "b386b034d3808025b73578fe858a6fd16cfe3c8b2fbd738588e8b20260976f6c",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 64258,
+      "decoded_bytes": 2428928,
+      "filename": "poster_frame_04.png",
+      "height": 593,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          4.0,
+          2.25
+        ],
+        "art_size_m_exact": [
+          "4",
+          "9/4"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          118,
+          18
+        ],
+        "ideal_outer_aspect_exact": "416/241",
+        "nominal_opening_bounds_px": [
+          19.692307692307693,
+          19.684647302904565,
+          1004.3076923076923,
+          573.3153526970955
+        ],
+        "nominal_opening_uv": [
+          0.019230769230769232,
+          0.03319502074688797,
+          0.9807692307692307,
+          0.966804979253112
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              18,
+              19
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1006,
+              1,
+              1021,
+              19
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              574,
+              18,
+              592
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1006,
+              574,
+              1022,
+              592
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              475,
+              1,
+              549,
+              19
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              477,
+              574,
+              547,
+              592
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              247,
+              19,
+              346
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1005,
+              247,
+              1023,
+              345
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          4.16,
+          2.41
+        ],
+        "outer_size_m_exact": [
+          "104/25",
+          "241/100"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.72681281618887,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          19,
+          19,
+          1005,
+          574
+        ],
+        "transparent_opening_uv": [
+          0.0185546875,
+          0.03204047217537943,
+          0.9814453125,
+          0.9679595278246206
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          18,
+          118
+        ]
+      },
+      "rgba8_base_bytes": 2428928,
+      "rgba8_full_mip_chain_bytes": 3237100,
+      "rgba_sha256": "bbb5b2a8a4fc84efeb9c0511bed75366f540e443a65bffbbbcd861069614ea27",
+      "sha256": "cd44d90ff60176c99cea698212373e656a92ec377aceec253d4e6243a821f12b",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 64258,
+      "decoded_bytes": 2428928,
+      "filename": "poster_frame_05.png",
+      "height": 593,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          4.0,
+          2.250909090909091
+        ],
+        "art_size_m_exact": [
+          "4",
+          "619/275"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          118,
+          18
+        ],
+        "ideal_outer_aspect_exact": "88/51",
+        "nominal_opening_bounds_px": [
+          19.692307692307693,
+          19.677224736048267,
+          1004.3076923076923,
+          573.3227752639517
+        ],
+        "nominal_opening_uv": [
+          0.019230769230769232,
+          0.033182503770739065,
+          0.9807692307692307,
+          0.9668174962292609
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              18,
+              19
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1006,
+              1,
+              1021,
+              19
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              574,
+              18,
+              592
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1006,
+              574,
+              1022,
+              592
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              475,
+              1,
+              549,
+              19
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              477,
+              574,
+              547,
+              592
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              247,
+              19,
+              346
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1005,
+              247,
+              1023,
+              345
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          4.16,
+          2.410909090909091
+        ],
+        "outer_size_m_exact": [
+          "104/25",
+          "663/275"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.72681281618887,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          19,
+          19,
+          1005,
+          574
+        ],
+        "transparent_opening_uv": [
+          0.0185546875,
+          0.03204047217537943,
+          0.9814453125,
+          0.9679595278246206
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          18,
+          118
+        ]
+      },
+      "rgba8_base_bytes": 2428928,
+      "rgba8_full_mip_chain_bytes": 3237100,
+      "rgba_sha256": "bbb5b2a8a4fc84efeb9c0511bed75366f540e443a65bffbbbcd861069614ea27",
+      "sha256": "cd44d90ff60176c99cea698212373e656a92ec377aceec253d4e6243a821f12b",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 50956,
+      "decoded_bytes": 2420736,
+      "filename": "poster_frame_06.png",
+      "height": 591,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          4.8,
+          2.701090909090909
+        ],
+        "art_size_m_exact": [
+          "24/5",
+          "3714/1375"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          99,
+          15
+        ],
+        "ideal_outer_aspect_exact": "3410/1967",
+        "nominal_opening_bounds_px": [
+          16.516129032258064,
+          16.525165226232843,
+          1007.483870967742,
+          574.4748347737672
+        ],
+        "nominal_opening_uv": [
+          0.016129032258064516,
+          0.027961362480935434,
+          0.9838709677419355,
+          0.9720386375190646
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              15,
+              16
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1009,
+              1,
+              1022,
+              16
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              575,
+              15,
+              590
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1009,
+              575,
+              1022,
+              590
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              481,
+              1,
+              542,
+              16
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              483,
+              575,
+              541,
+              590
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              254,
+              16,
+              337
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1008,
+              254,
+              1023,
+              336
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          4.96,
+          2.861090909090909
+        ],
+        "outer_size_m_exact": [
+          "124/25",
+          "3934/1375"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.7326565143824026,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          16,
+          16,
+          1008,
+          575
+        ],
+        "transparent_opening_uv": [
+          0.015625,
+          0.02707275803722504,
+          0.984375,
+          0.9729272419627749
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          15,
+          99
+        ]
+      },
+      "rgba8_base_bytes": 2420736,
+      "rgba8_full_mip_chain_bytes": 3225068,
+      "rgba_sha256": "016ee3b38abf3d60b5b713f766b876e3fed1c614bb9709ac6b60826963beab7f",
+      "sha256": "55bc315b70bf693a5337dc9272069c2a01b1836d3fdff5a7acff89a5433b2310",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 50956,
+      "decoded_bytes": 2420736,
+      "filename": "poster_frame_07.png",
+      "height": 591,
+      "intended_use": "transparent_trim_around_unchanged_existing_poster_art",
+      "mode": "RGBA",
+      "processing": {
+        "art_size_m": [
+          4.8,
+          2.701090909090909
+        ],
+        "art_size_m_exact": [
+          "24/5",
+          "3714/1375"
+        ],
+        "border_m": 0.08,
+        "horizontal_repeat_size_px": [
+          99,
+          15
+        ],
+        "ideal_outer_aspect_exact": "3410/1967",
+        "nominal_opening_bounds_px": [
+          16.516129032258064,
+          16.525165226232843,
+          1007.483870967742,
+          574.4748347737672
+        ],
+        "nominal_opening_uv": [
+          0.016129032258064516,
+          0.027961362480935434,
+          0.9838709677419355,
+          0.9720386375190646
+        ],
+        "operation": "Industrial amber 9-slice-like trim; mirrored-repeat rails, uniformly fitted full corner/lamp pieces; no artwork",
+        "ornaments": [
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              248
+            ],
+            "destination_px": [
+              2,
+              1,
+              15,
+              16
+            ],
+            "piece": 1
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              248
+            ],
+            "destination_px": [
+              1009,
+              1,
+              1022,
+              16
+            ],
+            "piece": 3
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              214,
+              238
+            ],
+            "destination_px": [
+              2,
+              575,
+              15,
+              590
+            ],
+            "piece": 9
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              213,
+              238
+            ],
+            "destination_px": [
+              1009,
+              575,
+              1022,
+              590
+            ],
+            "piece": 10
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              659,
+              161
+            ],
+            "destination_px": [
+              481,
+              1,
+              542,
+              16
+            ],
+            "piece": 2
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              663,
+              171
+            ],
+            "destination_px": [
+              483,
+              575,
+              541,
+              590
+            ],
+            "piece": 11
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              105,
+              579
+            ],
+            "destination_px": [
+              1,
+              254,
+              16,
+              337
+            ],
+            "piece": 7
+          },
+          {
+            "alpha_bbox_crop_px": [
+              0,
+              0,
+              106,
+              579
+            ],
+            "destination_px": [
+              1008,
+              254,
+              1023,
+              336
+            ],
+            "piece": 8
+          }
+        ],
+        "outer_size_m": [
+          4.96,
+          2.861090909090909
+        ],
+        "outer_size_m_exact": [
+          "124/25",
+          "3934/1375"
+        ],
+        "outer_transparent_guard_px": 1,
+        "rail_piece": 6,
+        "rail_source_crop_px": [
+          2,
+          96,
+          79,
+          602
+        ],
+        "raster_outer_aspect": 1.7326565143824026,
+        "raster_rounding": "Nearest integer per axis at max edge 1024; each axis differs from ideal by at most 0.5px",
+        "solid_trim_rgba": [
+          47,
+          32,
+          20,
+          255
+        ],
+        "transparent_opening_bounds_px": [
+          16,
+          16,
+          1008,
+          575
+        ],
+        "transparent_opening_uv": [
+          0.015625,
+          0.02707275803722504,
+          0.984375,
+          0.9729272419627749
+        ],
+        "variant": "variant_03_industrial_amber",
+        "vertical_repeat_size_px": [
+          15,
+          99
+        ]
+      },
+      "rgba8_base_bytes": 2420736,
+      "rgba8_full_mip_chain_bytes": 3225068,
+      "rgba_sha256": "016ee3b38abf3d60b5b713f766b876e3fed1c614bb9709ac6b60826963beab7f",
+      "sha256": "55bc315b70bf693a5337dc9272069c2a01b1836d3fdff5a7acff89a5433b2310",
+      "sources": [
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+        "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 517099,
+      "decoded_bytes": 3145728,
+      "filename": "seat_material_atlas.png",
+      "height": 1024,
+      "intended_use": "same_five_existing_boxes_per_seat_with_atlas_uvs",
+      "mode": "RGB",
+      "processing": {
+        "bilinear_safe_mip_levels": [
+          0,
+          8
+        ],
+        "operation": "Full sources resized to 256x256 with Lanczos; 128px edge-extruded gutters per 512px quadrant",
+        "quadrants": [
+          {
+            "bounds_px": [
+              0,
+              0,
+              512,
+              512
+            ],
+            "full_source_content_bounds_px": [
+              128,
+              128,
+              384,
+              384
+            ],
+            "quadrant": "TL",
+            "safe_uv": [
+              0.12548828125,
+              0.12548828125,
+              0.37451171875,
+              0.37451171875
+            ],
+            "source": "textures:seat_leather_burgundy_alt.png"
+          },
+          {
+            "bounds_px": [
+              512,
+              0,
+              1024,
+              512
+            ],
+            "full_source_content_bounds_px": [
+              640,
+              128,
+              896,
+              384
+            ],
+            "quadrant": "TR",
+            "safe_uv": [
+              0.62548828125,
+              0.12548828125,
+              0.87451171875,
+              0.37451171875
+            ],
+            "source": "textures:seat_upholstery_burgundy.png"
+          },
+          {
+            "bounds_px": [
+              0,
+              512,
+              512,
+              1024
+            ],
+            "full_source_content_bounds_px": [
+              128,
+              640,
+              384,
+              896
+            ],
+            "quadrant": "BL",
+            "safe_uv": [
+              0.12548828125,
+              0.62548828125,
+              0.37451171875,
+              0.87451171875
+            ],
+            "source": "textures:wall_gunmetal_riveted_panels.png"
+          },
+          {
+            "bounds_px": [
+              512,
+              512,
+              1024,
+              1024
+            ],
+            "full_source_content_bounds_px": [
+              640,
+              640,
+              896,
+              896
+            ],
+            "quadrant": "BR",
+            "safe_uv": [
+              0.62548828125,
+              0.62548828125,
+              0.87451171875,
+              0.87451171875
+            ],
+            "source": "textures:wall_bronze_steel_panels.png"
+          }
+        ],
+        "sampling": "Clamp UVs to safe rectangles (span 255/1024); quadrant-isolated bilinear taps through mip 8 with aligned 2x2 box mip generation; trilinear safe only when both sampled levels are <=8. Coarser mips are subpixel for the 256px content region and may mix quadrants; wider/anisotropic filters are not covered",
+        "uv_convention": "[u_min, v_min, u_max, v_max], texel centers; origin top-left, u right, v down"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "a315f35485ec843203d388acd9c3bb9053c4feb1a55305f19183f93e5e819c64",
+      "sha256": "f946015e4d663ff0a603d634a77b47b3a7c44d607a3e33c8eb3349a70fff257f",
+      "sources": [
+        "textures:seat_leather_burgundy_alt.png",
+        "textures:seat_upholstery_burgundy.png",
+        "textures:wall_gunmetal_riveted_panels.png",
+        "textures:wall_bronze_steel_panels.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 118388,
+      "decoded_bytes": 256000,
+      "filename": "star_marker_light.png",
+      "height": 256,
+      "intended_use": "existing_environment_transparent_sprite",
+      "mode": "RGBA",
+      "processing": {
+        "max_edge": 256,
+        "operation": "Full source, associated-alpha Lanczos resize, straight-alpha RGBA PNG; preserve aspect"
+      },
+      "rgba8_base_bytes": 256000,
+      "rgba8_full_mip_chain_bytes": 341084,
+      "rgba_sha256": "10af4a3689a490f321754348ffb5d219febaa347efc0a07b6528f9ebac4e8719",
+      "sha256": "0388e391720c07e72712cedb7cfbed61c2b481db9d0361878d1cef971d2767d4",
+      "sources": [
+        "modular:widgets/star_marker_light.png"
+      ],
+      "width": 250
+    },
+    {
+      "bytes": 178124,
+      "decoded_bytes": 339968,
+      "filename": "step_light_amber.png",
+      "height": 166,
+      "intended_use": "existing_environment_transparent_sprite",
+      "mode": "RGBA",
+      "processing": {
+        "max_edge": 512,
+        "operation": "Full source, associated-alpha Lanczos resize, straight-alpha RGBA PNG; preserve aspect"
+      },
+      "rgba8_base_bytes": 339968,
+      "rgba8_full_mip_chain_bytes": 452764,
+      "rgba_sha256": "d669fd37fd0fcef81bac42975930d01321d00961402e1f9f901492d7b0947df3",
+      "sha256": "56fa505371a44a5b5cd00d7064b55a55930218f133360bed569a4cb885f8bb98",
+      "sources": [
+        "modular:widgets/step_light_amber.png"
+      ],
+      "width": 512
+    },
+    {
+      "bytes": 2194615,
+      "decoded_bytes": 3145728,
+      "filename": "wall_bronze_steel_panels.png",
+      "height": 1024,
+      "intended_use": "existing_walls",
+      "mode": "RGB",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source RGB Lanczos resize; preserve aspect; max edge 1024"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "41a969c4c488744366c7c0a0097e4000f11f84cea75c29d101088bd1708b8923",
+      "sha256": "c22bb52c03b994eb58576ec081f21e5f6eb1362a66b2fafb45f365f1bc486ccb",
+      "sources": [
+        "textures:wall_bronze_steel_panels.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 2105653,
+      "decoded_bytes": 3145728,
+      "filename": "wall_gunmetal_riveted_panels.png",
+      "height": 1024,
+      "intended_use": "existing_ceilings",
+      "mode": "RGB",
+      "processing": {
+        "max_edge": 1024,
+        "operation": "Full source RGB Lanczos resize; preserve aspect; max edge 1024"
+      },
+      "rgba8_base_bytes": 4194304,
+      "rgba8_full_mip_chain_bytes": 5592404,
+      "rgba_sha256": "a6383e8f24b74bd91ac3706a371ee8e4a8451ba5aa018f8cb6a9f8d6a82b165b",
+      "sha256": "309a7880ac26353d12f1635fba470a56a12f1471208fedfcf27c51a64c4db84d",
+      "sources": [
+        "textures:wall_gunmetal_riveted_panels.png"
+      ],
+      "width": 1024
+    },
+    {
+      "bytes": 194004,
+      "decoded_bytes": 425984,
+      "filename": "wall_sconce_weathered_amber.png",
+      "height": 512,
+      "intended_use": "existing_environment_transparent_sprite",
+      "mode": "RGBA",
+      "processing": {
+        "max_edge": 512,
+        "operation": "Full source, associated-alpha Lanczos resize, straight-alpha RGBA PNG; preserve aspect"
+      },
+      "rgba8_base_bytes": 425984,
+      "rgba8_full_mip_chain_bytes": 567932,
+      "rgba_sha256": "d6decf4b1189c4a21d8f7bfe73ea9cf847eb2b6837b41d08d096b3252e900012",
+      "sha256": "91569cbde68e190b9c9b6e9b95eb6d365551d3882db5438a46cd854ae95b4b9d",
+      "sources": [
+        "modular:widgets/wall_sconce_weathered_amber.png"
+      ],
+      "width": 208
+    },
+    {
+      "bytes": 3014,
+      "decoded_bytes": 131072,
+      "filename": "warm_floor_glow.png",
+      "height": 128,
+      "intended_use": "tinted_non_depth_writing_translucent_sprite_approximation_not_dynamic_light",
+      "mode": "RGBA",
+      "processing": {
+        "formula": "r2=(2*x/(width-1)-1)^2+(2*y/(height-1)-1)^2; alpha=round(48*max(0,1-r2)^3)",
+        "operation": "Generated smooth elliptical radial field; zero RGB when alpha is zero",
+        "peak_alpha": 48,
+        "rgb": [
+          255,
+          244,
+          224
+        ]
+      },
+      "rgba8_base_bytes": 131072,
+      "rgba8_full_mip_chain_bytes": 174764,
+      "rgba_sha256": "63657ca202d2de17a8b2989788aafda04a750b586df98bfb3571bbcf8b2d91b7",
+      "sha256": "6fa508d967f9f469c5c2cb894f556b12bbc8939a7e77e72e5ad77b0fa7dab217",
+      "sources": [],
+      "width": 256
+    },
+    {
+      "bytes": 2242,
+      "decoded_bytes": 65536,
+      "filename": "warm_glow.png",
+      "height": 128,
+      "intended_use": "tinted_non_depth_writing_translucent_sprite_approximation_not_dynamic_light",
+      "mode": "RGBA",
+      "processing": {
+        "formula": "r2=(2*x/(width-1)-1)^2+(2*y/(height-1)-1)^2; alpha=round(48*max(0,1-r2)^3)",
+        "operation": "Generated smooth elliptical radial field; zero RGB when alpha is zero",
+        "peak_alpha": 48,
+        "rgb": [
+          255,
+          244,
+          224
+        ]
+      },
+      "rgba8_base_bytes": 65536,
+      "rgba8_full_mip_chain_bytes": 87380,
+      "rgba_sha256": "d6aa341b2aa4b7b65206fe602faa37bc55bc5e918709878054e1d42a2855e2ac",
+      "sha256": "63a99a0b7b6711ceda45db98a8801298288bac6710a77fbb0ed75c528d6f6d1c",
+      "sources": [],
+      "width": 128
+    }
+  ],
+  "generator": {
+    "path": "tool/import_environment_assets.py",
+    "pillow_version": "10.2.0",
+    "png_encoding": "compression=9; optimize=False; no metadata; RGB or straight-alpha RGBA",
+    "resampling": "Lanczos; RGBA filtered in premultiplied RGBa then converted to RGBA",
+    "sha256": "cf9ba9d962e803d219e262a528a3149c6630bcf1ff2a3a45940f63fedcc86b82",
+    "zlib_version": "1.3"
+  },
+  "readme_sha256": "07d66876ac9a9920c255e06f2a570491758f8e99a6d19a534079e532f9518fc2",
+  "rights_caveat": "User-supplied Starlit Cinema packs; original archives unchanged. The supplied READMEs describe usage but do not provide an explicit redistribution license. Ownership, licensing, and redistribution rights have not been independently verified; confirm permission before publishing. Generated glow math adds no third-party art.",
+  "runtime_totals": {
+    "png_bytes": 5782659,
+    "png_count": 21,
+    "rgba8_base_bytes": 48171008,
+    "rgba8_full_mip_chain_bytes": 64215836
+  },
+  "runtime_variant": {
+    "assets": [
+      {
+        "bytes": 138993,
+        "filename": "curtain_left.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "a63f10964cbe022d2cfdeaa3d985d63706b8db3e47f1a4ad2398d0813db5fa1f",
+        "sha256": "a931424ceda7a8a4f5fd9cfd79e8a645d586f48b82f6b1cc82c18cf17a304751",
+        "source_rgba_sha256": "5b6d243371c943bb31093ff1ab49f19c8a5801b11667f8f682e13c216214c0d6",
+        "source_sha256": "3055e1b38a281d36200d8ab34044874b1c3d0c4d1dc6e66b840f53334468b8c1",
+        "width": 272
+      },
+      {
+        "bytes": 139851,
+        "filename": "curtain_right.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "75216cdfe4f9cf1dcc8b2e0cad3b8ff3ad061c46fdc744c8abb75c54a3f0ecce",
+        "sha256": "b053fde0881de10b7a3f1f9697bb2f3afa8c44da0ce3675a8c8529a710b30ba2",
+        "source_rgba_sha256": "6f6ddb58fa2491e3b6b06d1b48c2976550ff9f8956ac33a52a0f994e54cedd5a",
+        "source_sha256": "6f9fc05b61783d0d24790ec65c30a723896e58d63f9bef34fc623e518f952693",
+        "width": 272
+      },
+      {
+        "bytes": 848644,
+        "filename": "door_sci_fi_trim_panels.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "d5e1272a59bdf9b2832afe52906fc3987647aafc78d7cd351284e785f180b59c",
+        "sha256": "1b6a0ff67fc6baa79c7f5886d9b0e7b2890019a596eaae6be7523888aa4bfb3e",
+        "source_rgba_sha256": "748951b69193fbafd38c99831ce7fb66740186a6d9e213b3b11891be0a3b9015",
+        "source_sha256": "ae04032627e35700adfefeb5924f11fec1f2037abe7ae6df2c3b6f0fc76aa989",
+        "width": 1024
+      },
+      {
+        "bytes": 239043,
+        "filename": "ground_auditorium_carpet_base.png",
+        "height": 512,
+        "mode": "P",
+        "rgba_sha256": "acbb58f81ae7c376ff49a1fcb8ce97565beb542dcd91835ede30d0ff2fb6f35a",
+        "sha256": "c3a216dc3644042c0addca9f16295f186ad1b244faf696176572f6d59f1de367",
+        "source_rgba_sha256": "9b41a0c061be6c9c8877397a3e6a0d8114bbd49c2ab19daae129ae4d2f9f0c03",
+        "source_sha256": "a443796ba5097ea0785e7856e09e8338068f5e455ae8be7b2eaa73c93bb1140e",
+        "width": 512
+      },
+      {
+        "bytes": 985007,
+        "filename": "ground_compass_rug.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "45dfc2f3701686ad982b5d3f72ff67839c45e84b84a00b4856b038c065a48931",
+        "sha256": "86b0aa67ee3979ccd9ca7c8c14166994aa6c60dd2c9801f1ac6e35e8f5403e34",
+        "source_rgba_sha256": "224a73845d1bded70eee91f626e1d314408e4436307dbbae2601e4310c3f9f60",
+        "source_sha256": "eaf361311fdd6edaf6c141de66e97ab2799483e29992363e02ed601dc5527493",
+        "width": 1024
+      },
+      {
+        "bytes": 956870,
+        "filename": "ground_lobby_stone_tiles.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "633c0eccd4c2c6e52cf464d6b6326b1377acd007006c4b2bea7529665248419a",
+        "sha256": "a8863164528b4c1c25246b8c9cfd4457c5610f2610d95b29d331b591594ed979",
+        "source_rgba_sha256": "69638c9ccd2aed6f76322ca70b3f6244298a51b5c671b7807dfc67ee4e220224",
+        "source_sha256": "8a4cd56ea527035c42abdcecc88661a45e05a56dd95e73b3f69541c9bbf45fd7",
+        "width": 1024
+      },
+      {
+        "bytes": 46755,
+        "filename": "poster_frame_01.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "d4462f693c820ea6d7a82d1696d8522b6a26e28d5af402e840785d0fe8fa4742",
+        "sha256": "dce3a6f2432f61d97d9345211939b10e33d9d45069850779012c82c473b65451",
+        "source_rgba_sha256": "26f6c73d563023f4ff19fc8be977e001b22b490d22eabb2e543ae1e9575e785f",
+        "source_sha256": "a1139ce27aba51648fccd87c67d1d1b7b85f464b1c4e86075efc810dbc182cb2",
+        "width": 700
+      },
+      {
+        "bytes": 24107,
+        "filename": "poster_frame_03.png",
+        "height": 592,
+        "mode": "P",
+        "rgba_sha256": "386cab94a51b7baefb21ef6af902c1071ca5e13913b8ce83745ee4f28dd3fce2",
+        "sha256": "e1a4de183596510a9b4771f2a55f558a6ac7e3e92e8952d31b8969c38ea95a40",
+        "source_rgba_sha256": "11c007f8736b4be295bf8c1dda57e089a9ce4a1b45f6a3b56fbbfb179b6ecf14",
+        "source_sha256": "b386b034d3808025b73578fe858a6fd16cfe3c8b2fbd738588e8b20260976f6c",
+        "width": 1024
+      },
+      {
+        "bytes": 25642,
+        "filename": "poster_frame_04.png",
+        "height": 593,
+        "mode": "P",
+        "rgba_sha256": "06217a3e5edcca139e8adbe620b583e647175b2ef0ceb0c6c24fc52258fb22a7",
+        "sha256": "de4d4eee47f7f7407d380fcd21f361a069d998afc240890fcb1c2c7a006ec2d3",
+        "source_rgba_sha256": "bbb5b2a8a4fc84efeb9c0511bed75366f540e443a65bffbbbcd861069614ea27",
+        "source_sha256": "cd44d90ff60176c99cea698212373e656a92ec377aceec253d4e6243a821f12b",
+        "width": 1024
+      },
+      {
+        "bytes": 25642,
+        "filename": "poster_frame_05.png",
+        "height": 593,
+        "mode": "P",
+        "rgba_sha256": "06217a3e5edcca139e8adbe620b583e647175b2ef0ceb0c6c24fc52258fb22a7",
+        "sha256": "de4d4eee47f7f7407d380fcd21f361a069d998afc240890fcb1c2c7a006ec2d3",
+        "source_rgba_sha256": "bbb5b2a8a4fc84efeb9c0511bed75366f540e443a65bffbbbcd861069614ea27",
+        "source_sha256": "cd44d90ff60176c99cea698212373e656a92ec377aceec253d4e6243a821f12b",
+        "width": 1024
+      },
+      {
+        "bytes": 20958,
+        "filename": "poster_frame_06.png",
+        "height": 591,
+        "mode": "P",
+        "rgba_sha256": "f54f33a7eea423946067084e052cefcff3be8f1c6f055eaee9cd43f01e9d9b2b",
+        "sha256": "6805963b06d7f9e94f19f68abc24cf6e3af17f118459592efa5e121e68c860e5",
+        "source_rgba_sha256": "016ee3b38abf3d60b5b713f766b876e3fed1c614bb9709ac6b60826963beab7f",
+        "source_sha256": "55bc315b70bf693a5337dc9272069c2a01b1836d3fdff5a7acff89a5433b2310",
+        "width": 1024
+      },
+      {
+        "bytes": 20958,
+        "filename": "poster_frame_07.png",
+        "height": 591,
+        "mode": "P",
+        "rgba_sha256": "f54f33a7eea423946067084e052cefcff3be8f1c6f055eaee9cd43f01e9d9b2b",
+        "sha256": "6805963b06d7f9e94f19f68abc24cf6e3af17f118459592efa5e121e68c860e5",
+        "source_rgba_sha256": "016ee3b38abf3d60b5b713f766b876e3fed1c614bb9709ac6b60826963beab7f",
+        "source_sha256": "55bc315b70bf693a5337dc9272069c2a01b1836d3fdff5a7acff89a5433b2310",
+        "width": 1024
+      },
+      {
+        "bytes": 222853,
+        "filename": "seat_material_atlas.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "45702528ae2b181ecbc64865acec9137d0be692cda0204c9ab9ea03f051dae49",
+        "sha256": "599bed84f91397479d16da8d7ab5f51c6d3f15c3981a4c773f2ea72cfa1ed115",
+        "source_rgba_sha256": "a315f35485ec843203d388acd9c3bb9053c4feb1a55305f19183f93e5e819c64",
+        "source_sha256": "f946015e4d663ff0a603d634a77b47b3a7c44d607a3e33c8eb3349a70fff257f",
+        "width": 1024
+      },
+      {
+        "bytes": 36888,
+        "filename": "star_marker_light.png",
+        "height": 256,
+        "mode": "P",
+        "rgba_sha256": "6aa2e1a97d6590724baf75b5dc69480bded0253100d6d67931bccb9070c55462",
+        "sha256": "284877f2cbda5fea863d35a37289260992685e5905c94018840495b48b208445",
+        "source_rgba_sha256": "10af4a3689a490f321754348ffb5d219febaa347efc0a07b6528f9ebac4e8719",
+        "source_sha256": "0388e391720c07e72712cedb7cfbed61c2b481db9d0361878d1cef971d2767d4",
+        "width": 250
+      },
+      {
+        "bytes": 52382,
+        "filename": "step_light_amber.png",
+        "height": 166,
+        "mode": "P",
+        "rgba_sha256": "3713e09827e5d2b7fa15a77596337b349b1316f35570a7a149690a1aaf011419",
+        "sha256": "018d80a4dacff2a293ee2209c3fa13fc0765b6b2798f52c3df6f2795a7b36915",
+        "source_rgba_sha256": "d669fd37fd0fcef81bac42975930d01321d00961402e1f9f901492d7b0947df3",
+        "source_sha256": "56fa505371a44a5b5cd00d7064b55a55930218f133360bed569a4cb885f8bb98",
+        "width": 512
+      },
+      {
+        "bytes": 939991,
+        "filename": "wall_bronze_steel_panels.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "960631e531c2ceddf2ff5577c0f8035bb65b66bd043ba26baa96714cc95117cc",
+        "sha256": "9a1a19e7a1d87db1254f661ac7c2092a9d4d800208c902cc89ecb1b829730abe",
+        "source_rgba_sha256": "41a969c4c488744366c7c0a0097e4000f11f84cea75c29d101088bd1708b8923",
+        "source_sha256": "c22bb52c03b994eb58576ec081f21e5f6eb1362a66b2fafb45f365f1bc486ccb",
+        "width": 1024
+      },
+      {
+        "bytes": 897176,
+        "filename": "wall_gunmetal_riveted_panels.png",
+        "height": 1024,
+        "mode": "P",
+        "rgba_sha256": "9c37e0dd5d27a3fb09901ec3d0ec78cd9bf11c0016f2b8841df74270d5f088a7",
+        "sha256": "42cf917a87451a807b0656151d8ecb9836f3d466c24675f3e2d9f3d6dd1e3849",
+        "source_rgba_sha256": "a6383e8f24b74bd91ac3706a371ee8e4a8451ba5aa018f8cb6a9f8d6a82b165b",
+        "source_sha256": "309a7880ac26353d12f1635fba470a56a12f1471208fedfcf27c51a64c4db84d",
+        "width": 1024
+      },
+      {
+        "bytes": 66037,
+        "filename": "wall_sconce_weathered_amber.png",
+        "height": 512,
+        "mode": "P",
+        "rgba_sha256": "89ecbc1b6e8b34b207d51fcfa399a6a06ac3e6d714f1c31e3789418b0b433fee",
+        "sha256": "d5059de08878f5cc527b84c78fad65d52b1f05166fbc34fc35e382a8c12a578f",
+        "source_rgba_sha256": "d6decf4b1189c4a21d8f7bfe73ea9cf847eb2b6837b41d08d096b3252e900012",
+        "source_sha256": "91569cbde68e190b9c9b6e9b95eb6d365551d3882db5438a46cd854ae95b4b9d",
+        "width": 208
+      }
+    ],
+    "description": "User-optimized palette-quantized engine PNGs; exact optimizer/settings and transformation recipe are not verified.",
+    "lossless": false
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "archive": "modular",
+      "bytes": 2125,
+      "id": "modular:README.md",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/README.md",
+      "sha256": "5c3e6c2528c4dfb9fd8400193bdfeb5d8d22b73af6432e1d42281483d41e3eff"
+    },
+    {
+      "archive": "modular",
+      "bytes": 891,
+      "id": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/manifest.csv",
+      "sha256": "6e5fb046f930464179cb170d557513ba1d81fbf00260b317790ffed7a2d45a88"
+    },
+    {
+      "archive": "modular",
+      "bytes": 101501,
+      "height": 248,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_01.png",
+      "mode": "RGBA",
+      "sha256": "e11e72c4a6846b9b424b6a5a2b1adffc4cdd83855b6ea882c2e61e7dbad4179b",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_01.png",
+        "height": 248,
+        "piece_index": 1,
+        "pixel_area": 40614,
+        "src_x0": 50,
+        "src_x1": 260,
+        "src_y0": 56,
+        "src_y1": 300,
+        "width": 214
+      },
+      "width": 214
+    },
+    {
+      "archive": "modular",
+      "bytes": 211925,
+      "height": 161,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_02.png",
+      "mode": "RGBA",
+      "sha256": "c01b96b00dab219e148f0e02ace68281c12776ec77bc7eb93865ad7681b72573",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_02.png",
+        "height": 161,
+        "piece_index": 2,
+        "pixel_area": 89429,
+        "src_x0": 300,
+        "src_x1": 955,
+        "src_y0": 20,
+        "src_y1": 177,
+        "width": 659
+      },
+      "width": 659
+    },
+    {
+      "archive": "modular",
+      "bytes": 100608,
+      "height": 248,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_03.png",
+      "mode": "RGBA",
+      "sha256": "0f71d59853d4567d41461fc189acfdb396e670835564c69e5664062182305c69",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_03.png",
+        "height": 248,
+        "piece_index": 3,
+        "pixel_area": 40421,
+        "src_x0": 996,
+        "src_x1": 1205,
+        "src_y0": 56,
+        "src_y1": 300,
+        "width": 213
+      },
+      "width": 213
+    },
+    {
+      "archive": "modular",
+      "bytes": 124554,
+      "height": 698,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_06.png",
+      "mode": "RGBA",
+      "sha256": "4cce0b9a7a507b07188d6d34efa8e15fe5d58ba073d8ffebd39e7faf9ab17ad7",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_06.png",
+        "height": 698,
+        "piece_index": 6,
+        "pixel_area": 53334,
+        "src_x0": 886,
+        "src_x1": 963,
+        "src_y0": 260,
+        "src_y1": 954,
+        "width": 81
+      },
+      "width": 81
+    },
+    {
+      "archive": "modular",
+      "bytes": 130793,
+      "height": 579,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_07.png",
+      "mode": "RGBA",
+      "sha256": "9e92f4f8df362c9f42c422f47d6de20a3aa5884ea0eb4f196729a964e440a252",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_07.png",
+        "height": 579,
+        "piece_index": 7,
+        "pixel_area": 57283,
+        "src_x0": 78,
+        "src_x1": 179,
+        "src_y0": 333,
+        "src_y1": 908,
+        "width": 105
+      },
+      "width": 105
+    },
+    {
+      "archive": "modular",
+      "bytes": 133736,
+      "height": 579,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_08.png",
+      "mode": "RGBA",
+      "sha256": "852098caa59e9dca6344ffc0c9e5be9b272b39d972089129cc7a4b18c26086b1",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_08.png",
+        "height": 579,
+        "piece_index": 8,
+        "pixel_area": 58314,
+        "src_x0": 1076,
+        "src_x1": 1178,
+        "src_y0": 333,
+        "src_y1": 908,
+        "width": 106
+      },
+      "width": 106
+    },
+    {
+      "archive": "modular",
+      "bytes": 96237,
+      "height": 238,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_09.png",
+      "mode": "RGBA",
+      "sha256": "88ea2d15a8b4808f4ecf31e0d388b32806f36ad2097565548e45006100ba91bb",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_09.png",
+        "height": 238,
+        "piece_index": 9,
+        "pixel_area": 39266,
+        "src_x0": 50,
+        "src_x1": 260,
+        "src_y0": 944,
+        "src_y1": 1178,
+        "width": 214
+      },
+      "width": 214
+    },
+    {
+      "archive": "modular",
+      "bytes": 95603,
+      "height": 238,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_10.png",
+      "mode": "RGBA",
+      "sha256": "65f4b181bafea777179256f0fcf755db2ff092de6626fd077609484d8687948b",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_10.png",
+        "height": 238,
+        "piece_index": 10,
+        "pixel_area": 38946,
+        "src_x0": 996,
+        "src_x1": 1205,
+        "src_y0": 944,
+        "src_y1": 1178,
+        "width": 213
+      },
+      "width": 213
+    },
+    {
+      "archive": "modular",
+      "bytes": 232331,
+      "height": 171,
+      "id": "modular:modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/modular_frames/variant_03_industrial_amber/variant_03_industrial_amber_piece_11.png",
+      "mode": "RGBA",
+      "sha256": "b4ebbda69d4de60161ca4cad5e688a75c9c41ad9a4092e7953dc67a34c14d73a",
+      "upstream_manifest": "modular:modular_frames/variant_03_industrial_amber/manifest.csv",
+      "upstream_slice": {
+        "filename": "variant_03_industrial_amber_piece_11.png",
+        "height": 171,
+        "piece_index": 11,
+        "pixel_area": 99688,
+        "src_x0": 299,
+        "src_x1": 958,
+        "src_y0": 1026,
+        "src_y1": 1193,
+        "width": 663
+      },
+      "width": 663
+    },
+    {
+      "archive": "modular",
+      "bytes": 1059392,
+      "height": 1527,
+      "id": "modular:widgets/curtain_left.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/curtain_left.png",
+      "mode": "RGBA",
+      "sha256": "4ccacda5238abd7a311193163554257d82e87821f4195fb7c36ad6978d499f00",
+      "upstream_manifest": "modular:widgets/manifest.csv",
+      "upstream_slice": {
+        "height": 1527,
+        "name": "curtain_left",
+        "source_file": "opulent_burgundy_theater_curtains.png",
+        "src_x0": 23,
+        "src_x1": 425,
+        "src_y0": 0,
+        "src_y1": 1525,
+        "width": 406
+      },
+      "width": 406
+    },
+    {
+      "archive": "modular",
+      "bytes": 1059048,
+      "height": 1527,
+      "id": "modular:widgets/curtain_right.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/curtain_right.png",
+      "mode": "RGBA",
+      "sha256": "46c8e6b3b12e15e68fb20f3fccc7bd52ffcfc40db0acec6474fd6990ffa8c558",
+      "upstream_manifest": "modular:widgets/manifest.csv",
+      "upstream_slice": {
+        "height": 1527,
+        "name": "curtain_right",
+        "source_file": "opulent_burgundy_theater_curtains.png",
+        "src_x0": 599,
+        "src_x1": 1001,
+        "src_y0": 0,
+        "src_y1": 1525,
+        "width": 406
+      },
+      "width": 406
+    },
+    {
+      "archive": "modular",
+      "bytes": 653,
+      "id": "modular:widgets/manifest.csv",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/manifest.csv",
+      "sha256": "63d487eb8bd483bae4f60da91611986a7971746bd9d6e4af647d527d78274df6"
+    },
+    {
+      "archive": "modular",
+      "bytes": 1889769,
+      "height": 1076,
+      "id": "modular:widgets/star_marker_light.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/star_marker_light.png",
+      "mode": "RGBA",
+      "sha256": "8ff56acb6b0cd0e2ec089b7e1e20adcd5fd1f20f49b7da495313c2592d86a08e",
+      "upstream_manifest": "modular:widgets/manifest.csv",
+      "upstream_slice": {
+        "height": 1076,
+        "name": "star_marker_light",
+        "source_file": "steampunk_cinema_star_marker_light.png",
+        "src_x0": 104,
+        "src_x1": 1151,
+        "src_y0": 107,
+        "src_y1": 1179,
+        "width": 1051
+      },
+      "width": 1051
+    },
+    {
+      "archive": "modular",
+      "bytes": 869270,
+      "height": 382,
+      "id": "modular:widgets/step_light_amber.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/step_light_amber.png",
+      "mode": "RGBA",
+      "sha256": "6770b1838246e8dfd8157ad8066460536ebfbd48d5fa10015b6d3bfe6d753644",
+      "upstream_manifest": "modular:widgets/manifest.csv",
+      "upstream_slice": {
+        "height": 382,
+        "name": "step_light_amber",
+        "source_file": "worn_amber_industrial_step_light.png",
+        "src_x0": 41,
+        "src_x1": 1212,
+        "src_y0": 438,
+        "src_y1": 816,
+        "width": 1175
+      },
+      "width": 1175
+    },
+    {
+      "archive": "modular",
+      "bytes": 1301924,
+      "height": 1380,
+      "id": "modular:widgets/wall_sconce_weathered_amber.png",
+      "member": "starlit_cinema_modular_poster_and_widget_pack/widgets/wall_sconce_weathered_amber.png",
+      "mode": "RGBA",
+      "sha256": "279f04745ae655a6c2172413c9e3747c98c48995f0f2042cb92a481890bddf5a",
+      "upstream_manifest": "modular:widgets/manifest.csv",
+      "upstream_slice": {
+        "height": 1380,
+        "name": "wall_sconce_weathered_amber",
+        "source_file": "weathered_amber_steampunk_wall_sconce.png",
+        "src_x0": 272,
+        "src_x1": 828,
+        "src_y0": 32,
+        "src_y1": 1408,
+        "width": 560
+      },
+      "width": 560
+    },
+    {
+      "archive": "textures",
+      "bytes": 2884,
+      "id": "textures:README.md",
+      "member": "starlit_cinema_texture_pack_v3/README.md",
+      "sha256": "6c64ecfe127bb1c525987b749c5ed5b80b8ad62ba9e07ee59b96014ff15a484d"
+    },
+    {
+      "archive": "textures",
+      "bytes": 3731590,
+      "height": 1254,
+      "id": "textures:ground_auditorium_compass_carpet.png",
+      "member": "starlit_cinema_texture_pack_v3/ground_auditorium_compass_carpet.png",
+      "mode": "RGB",
+      "sha256": "09a51752acc4152581f3a134f52d69860337ddc9100f423a3be8560a3bc710b3",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3761351,
+      "height": 1254,
+      "id": "textures:ground_lobby_alt_stone_tiles.png",
+      "member": "starlit_cinema_texture_pack_v3/ground_lobby_alt_stone_tiles.png",
+      "mode": "RGB",
+      "sha256": "485c53898d6d63100c97d4d69be515ec5ac9169a48c4ffeddbca388d580dd6fe",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3829001,
+      "height": 1254,
+      "id": "textures:seat_leather_burgundy_alt.png",
+      "member": "starlit_cinema_texture_pack_v3/seat_leather_burgundy_alt.png",
+      "mode": "RGB",
+      "sha256": "0892a093fa5c1645b597ee651af678db87114b86b24ab7867389050e95ca989d",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3307155,
+      "height": 1254,
+      "id": "textures:seat_upholstery_burgundy.png",
+      "member": "starlit_cinema_texture_pack_v3/seat_upholstery_burgundy.png",
+      "mode": "RGB",
+      "sha256": "2de282daa13a2540049be9b1cc0b299476d817535cf02fdb5b4930e0be81b3a5",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3487966,
+      "height": 1254,
+      "id": "textures:wall_bronze_steel_panels.png",
+      "member": "starlit_cinema_texture_pack_v3/wall_bronze_steel_panels.png",
+      "mode": "RGB",
+      "sha256": "6008e911eeaa04e8e8fabad2da447df194a17bf4cee7ba4d797d2f8b52ab81bb",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3336651,
+      "height": 1254,
+      "id": "textures:wall_gunmetal_riveted_panels.png",
+      "member": "starlit_cinema_texture_pack_v3/wall_gunmetal_riveted_panels.png",
+      "mode": "RGB",
+      "sha256": "60a05a5f5e4192c28cdad1e677efa248202fcce59b4a68ab873d8ad3fe38ac54",
+      "width": 1254
+    },
+    {
+      "archive": "textures",
+      "bytes": 3183138,
+      "height": 1254,
+      "id": "textures:wall_sci_fi_trim_panels.png",
+      "member": "starlit_cinema_texture_pack_v3/wall_sci_fi_trim_panels.png",
+      "mode": "RGB",
+      "sha256": "73fcc3f930fa197d2e702ab3e96408e3375710faa38ae8c524cb3e6247c26289",
+      "width": 1254
+    }
+  ],
+  "totals": {
+    "decoded_bytes": 41617408,
+    "png_bytes": 13748690,
+    "png_count": 21,
+    "rgba8_base_bytes": 48171008,
+    "rgba8_full_mip_chain_bytes": 64215836
+  }
+}

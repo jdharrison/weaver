@@ -12,14 +12,14 @@
   bottom: max(2rem, env(safe-area-inset-bottom));
   transform: translateX(-50%);
   width: max-content;
-  max-width: min(48rem, calc(100vw - 2rem));
+  max-width: min(48rem, calc(100vw - max(1rem, env(safe-area-inset-left)) - max(1rem, env(safe-area-inset-right))));
   max-height: 30vh;
   overflow: hidden;
   padding: 0.35em 0.65em;
   border-radius: 0.25rem;
   background: rgb(0 0 0 / 85%);
   color: #fff;
-  font: 600 clamp(1rem, 2.3vw, 1.65rem)/1.4 "Theater Captions", Verdana, sans-serif;
+  font: 600 clamp(0.8125rem, 1.82vw, 1.3rem)/1.4 "Theater Captions", Verdana, sans-serif;
   text-shadow: 0 1px 2px #000;
   text-align: center;
   white-space: pre-line;
@@ -36,9 +36,10 @@
   border-radius: 0.3rem;
   background: rgb(8 10 15 / 88%);
   color: #fff;
-  font-size: 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
 }
-#theater-subtitles { padding: 0.4rem 0.6rem; }
+#theater-subtitles { padding: 0.4rem 0.6rem; font: inherit; font-size: 1.125rem; }
 #theater-subtitles:focus-visible { outline: 2px solid #9fc3ff; outline-offset: 2px; }
 #theater-subtitle-explanation { margin: 0.3rem 0; }
 
@@ -113,22 +114,24 @@ canvas {
   border-radius: 0.75rem;
   background: rgb(24 26 29 / 84%);
   color: rgb(244 247 251 / 90%);
-  font-size: 0.8rem;
+  max-width: calc(100vw - max(0.75rem, env(safe-area-inset-left)) - max(0.75rem, env(safe-area-inset-right)));
+  overflow-wrap: anywhere;
+  font-size: 1rem;
   line-height: 1.4;
   pointer-events: none;
   user-select: none;
 }
 .connection-badge * { pointer-events: none; }
 .connection-badge-row { display: flex; align-items: center; gap: 0.45rem; }
-.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #92969d; }
+.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #92969d; flex: 0 0 auto; }
 .connection-badge[data-state="connected"] .connection-dot { background: #72c99a; }
 .connection-badge[data-state="connecting"] .connection-dot { background: #d8b46b; }
 .connection-badge[data-state="disconnected"] .connection-dot,
 .connection-badge[data-state="unavailable"] .connection-dot { background: #bd8585; }
 .connection-brand {
   margin-top: 0.25rem;
-  color: rgb(244 247 251 / 48%);
-  font-size: 0.55rem;
+  color: rgb(244 247 251 / 78%);
+  font-size: 0.75rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -141,7 +144,7 @@ canvas {
   border: 1px solid rgb(255 255 255 / 16%);
   border-radius: 0.4rem;
   background: rgb(8 10 15 / 76%);
-  color: rgb(244 247 251 / 78%);
+  color: rgb(244 247 251 / 92%);
   backdrop-filter: blur(8px);
 }
 
@@ -150,9 +153,13 @@ canvas {
   grid-row: 1;
   justify-self: end;
   max-width: min(31rem, 100%);
+  margin-top: 5rem;
+  max-height: calc(100% - 5rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
   padding: 0.65rem 0.8rem;
-  font-size: 0.75rem;
-  pointer-events: none;
+  font-size: 1rem;
+  line-height: 1.5;
 }
 
 .instructions p,
@@ -175,7 +182,10 @@ canvas {
   width: min(27rem, 100%);
   max-height: 100%;
   min-height: 0;
-  font-size: 0.75rem;
+  overflow: auto;
+  font-size: 1rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .connection-status {
@@ -208,8 +218,8 @@ canvas {
   padding: 0.5rem 0.7rem;
   border-radius: 0.35rem;
   cursor: pointer;
-  font: 600 0.7rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
+  font: 600 1.125rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
   list-style: none;
   user-select: none;
 }
@@ -254,6 +264,7 @@ canvas {
 
 .network-panel label {
   display: grid;
+  min-width: 0;
   gap: 0.25rem;
 }
 
@@ -269,6 +280,7 @@ canvas {
   background: #111722;
   color: #eef4ff;
   font: inherit;
+  font-size: 1.125rem;
 }
 
 .scope-grid {
@@ -329,7 +341,11 @@ canvas {
   border: 1px solid rgb(255 255 255 / 20%);
   border-radius: 0.4rem;
   background: rgb(8 10 15 / 88%);
-  font-size: 0.75rem;
+  max-width: calc(100vw - max(0.75rem, env(safe-area-inset-left)) - max(0.75rem, env(safe-area-inset-right)));
+  max-height: calc(100dvh - max(0.75rem, env(safe-area-inset-top)) - max(0.75rem, env(safe-area-inset-bottom)));
+  overflow: auto;
+  font-size: 1rem;
+  line-height: 1.5;
   touch-action: auto;
 }
 
@@ -337,6 +353,7 @@ canvas {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .theater-actions output { margin-left: auto; font-variant-numeric: tabular-nums; }
@@ -346,6 +363,8 @@ canvas {
   border-radius: 0.3rem;
   background: #111722;
   color: inherit;
+  font: inherit;
+  font-size: 1.125rem;
   cursor: pointer;
 }
 .theater-controls button:disabled { opacity: 0.5; cursor: default; }
@@ -386,7 +405,7 @@ html[data-weaver-presentation="minimal"] :is(.instructions, .connection-panel) {
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 35%);
 }
 
-.theater-startup h1 { margin: 0 0 0.75rem; font-size: 1.4rem; font-weight: 600; }
+.theater-startup h1 { margin: 0 0 0.75rem; font-size: 1.75rem; font-weight: 600; }
 .theater-startup p { line-height: 1.5; color: rgb(244 247 251 / 78%); }
 #theater-startup-status { min-height: 3em; color: #9fc3ff; }
 .theater-startup[data-state="failed"] #theater-startup-status { color: #ff9b9b; }
@@ -399,6 +418,7 @@ html[data-weaver-presentation="minimal"] :is(.instructions, .connection-panel) {
   background: #1b293e;
   color: #f4f7fb;
   font: inherit;
+  font-size: 1.125rem;
   cursor: pointer;
 }
 #theater-startup-continue { background: transparent; }
@@ -411,15 +431,94 @@ html[data-weaver-presentation="minimal"] :is(.instructions, .connection-panel) {
   color: #ff9b9b;
 }
 
+.controller-launcher {
+  position: fixed;
+  z-index: 6;
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  width: min(110px, calc(100vw - 2rem));
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.controller-launcher img { display: block; width: 100%; height: auto; pointer-events: none; }
+.controller-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: end end;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: rgb(0 0 0 / 70%);
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+.controller-dialog {
+  position: relative;
+  width: min(498px, 100%, calc((100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom))) * 498 / 424));
+  aspect-ratio: 498 / 424;
+  /* Narrow the backing artwork without changing the calibrated button geometry. */
+  background: url('/weaver/assets/controller/expanded_base_background_x3.png') center / 92% 100% no-repeat;
+}
+.controller-row {
+  position: absolute;
+  left: 18%;
+  width: 74%;
+  height: 15%;
+  padding: 0;
+  border: 0;
+  background: transparent center / contain no-repeat;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.controller-audio { top: 30%; background-image: url('/weaver/assets/controller/audio_off.png'); }
+.controller-audio[data-state="on"] { background-image: url('/weaver/assets/controller/audio_on.png'); }
+.controller-subtitles { top: 45%; background-image: url('/weaver/assets/controller/subtitles_off.png'); }
+.controller-subtitles[data-state="on"] { background-image: url('/weaver/assets/controller/subtitles_on.png'); }
+.controller-fullscreen { top: 60%; background-image: url('/weaver/assets/controller/fullscreen_off.png'); }
+.controller-fullscreen[data-state="on"] { background-image: url('/weaver/assets/controller/fullscreen_on.png'); }
+.controller-row:disabled { cursor: default; }
+.controller-row:focus-visible, .controller-launcher:focus-visible { outline: 2px solid #9fc3ff; outline-offset: 3px; }
+.controller-status {
+  position: absolute;
+  top: 83%;
+  max-height: 14%;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  left: 12%;
+  width: 76%;
+  margin: 0;
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1.4;
+  touch-action: pan-y;
+  text-align: center;
+}
+html:not([data-weaver-presentation="minimal"]) :is(.controller-launcher, .controller-overlay) { display: none; }
+
+@media (max-width: 40rem), (pointer: coarse) {
+  .controller-launcher { width: min(96px, calc(100vw - 2rem)); }
+}
+
 @media (max-width: 64rem), (pointer: coarse) {
   body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
   }
 
+  .connection-panel {
+    margin-top: 5rem;
+    max-height: calc(100% - 5rem);
+  }
+
   .instructions {
     grid-column: 1;
     grid-row: 2;
+    margin-top: 0;
+    max-height: 30dvh;
   }
 
   .scope-grid {

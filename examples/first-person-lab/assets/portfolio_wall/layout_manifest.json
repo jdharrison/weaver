@@ -1,0 +1,334 @@
+{
+  "reference_canvas_px": [
+    1536,
+    1024
+  ],
+  "billboard_crop_source_xyxy": [
+    270,
+    102,
+    1267,
+    824
+  ],
+  "board_canvas_px": [
+    997,
+    722
+  ],
+  "background_interior_board_xywh": [
+    78,
+    69,
+    842,
+    582
+  ],
+  "elements": {
+    "compass_top": {
+      "file": "ornaments/compass_star_main.png",
+      "position_board_xy": [
+        467,
+        97
+      ],
+      "size_px": [
+        106,
+        98
+      ]
+    },
+    "title_portfolio": {
+      "file": "typography/portfolio_title.png",
+      "position_board_xy": [
+        96,
+        193
+      ],
+      "size_px": [
+        803,
+        82
+      ]
+    },
+    "email": {
+      "file": "typography/email_me_at_jdharrison.png",
+      "position_board_xy": [
+        213,
+        280
+      ],
+      "size_px": [
+        590,
+        69
+      ],
+      "click_target": {
+        "action": "mailto:me@jdharrison.com"
+      }
+    },
+    "top_rule_left": {
+      "file": "lines/long_header_rule.png",
+      "position_board_xy": [
+        112,
+        154
+      ],
+      "size_px": [
+        337,
+        4
+      ]
+    },
+    "top_rule_right": {
+      "file": "lines/long_header_rule.png",
+      "position_board_xy": [
+        549,
+        154
+      ],
+      "size_px": [
+        337,
+        4
+      ]
+    },
+    "email_rule_left": {
+      "file": "lines/email_rule_short.png",
+      "position_board_xy": [
+        108,
+        313
+      ],
+      "size_px": [
+        129,
+        3
+      ]
+    },
+    "email_rule_right": {
+      "file": "lines/email_rule_short.png",
+      "position_board_xy": [
+        759,
+        313
+      ],
+      "size_px": [
+        129,
+        3
+      ]
+    },
+    "github_icon": {
+      "file": "icons/github_plate.png",
+      "position_board_xy": [
+        117,
+        367
+      ],
+      "size_px": [
+        146,
+        144
+      ],
+      "click_target": {
+        "action": "open_url",
+        "url": "REPLACE_WITH_GITHUB_URL"
+      }
+    },
+    "linkedin_icon": {
+      "file": "icons/linkedin_plate.png",
+      "position_board_xy": [
+        576,
+        367
+      ],
+      "size_px": [
+        145,
+        144
+      ],
+      "click_target": {
+        "action": "open_url",
+        "url": "REPLACE_WITH_LINKEDIN_URL"
+      }
+    },
+    "github_qr_mount": {
+      "file": "qr_mounts/github_qr_blank_mount.png",
+      "position_board_xy": [
+        275,
+        367
+      ],
+      "size_px": [
+        148,
+        146
+      ],
+      "click_target": {
+        "action": "open_url",
+        "url": "REPLACE_WITH_GITHUB_URL"
+      }
+    },
+    "linkedin_qr_mount": {
+      "file": "qr_mounts/linkedin_qr_blank_mount.png",
+      "position_board_xy": [
+        736,
+        367
+      ],
+      "size_px": [
+        146,
+        146
+      ],
+      "click_target": {
+        "action": "open_url",
+        "url": "REPLACE_WITH_LINKEDIN_URL"
+      }
+    },
+    "center_divider_star": {
+      "file": "ornaments/compass_star_divider.png",
+      "position_board_xy": [
+        466,
+        420
+      ],
+      "size_px": [
+        68,
+        85
+      ]
+    },
+    "center_vertical": {
+      "file": "lines/center_vertical_divider.png",
+      "position_board_xy": [
+        496,
+        385
+      ],
+      "size_px": [
+        4,
+        146
+      ]
+    },
+    "github_caption": {
+      "file": "typography/click_to_open.png",
+      "position_board_xy": [
+        155,
+        519
+      ],
+      "size_px": [
+        231,
+        39
+      ]
+    },
+    "linkedin_caption": {
+      "file": "typography/click_to_open.png",
+      "position_board_xy": [
+        613,
+        519
+      ],
+      "size_px": [
+        231,
+        39
+      ]
+    },
+    "qr_caption_line_left1": {
+      "file": "lines/qr_caption_rule.png",
+      "position_board_xy": [
+        107,
+        536
+      ],
+      "size_px": [
+        58,
+        3
+      ]
+    },
+    "qr_caption_line_left2": {
+      "file": "lines/qr_caption_rule.png",
+      "position_board_xy": [
+        373,
+        536
+      ],
+      "size_px": [
+        58,
+        3
+      ]
+    },
+    "qr_caption_line_right1": {
+      "file": "lines/qr_caption_rule.png",
+      "position_board_xy": [
+        569,
+        536
+      ],
+      "size_px": [
+        58,
+        3
+      ]
+    },
+    "qr_caption_line_right2": {
+      "file": "lines/qr_caption_rule.png",
+      "position_board_xy": [
+        832,
+        536
+      ],
+      "size_px": [
+        58,
+        3
+      ]
+    },
+    "discipline_footer": {
+      "file": "typography/discipline_footer.png",
+      "position_board_xy": [
+        88,
+        577
+      ],
+      "size_px": [
+        815,
+        56
+      ]
+    },
+    "footer_rule_left": {
+      "file": "lines/footer_rule.png",
+      "position_board_xy": [
+        91,
+        600
+      ],
+      "size_px": [
+        65,
+        3
+      ]
+    },
+    "footer_rule_right": {
+      "file": "lines/footer_rule.png",
+      "position_board_xy": [
+        840,
+        600
+      ],
+      "size_px": [
+        65,
+        3
+      ]
+    }
+  },
+  "qr_mounts": {
+    "github": {
+      "mount_global_xy": [
+        545,
+        469
+      ],
+      "mount_size": [
+        148,
+        146
+      ],
+      "qr_inset_xywh": [
+        18,
+        16,
+        113,
+        113
+      ],
+      "real_qr_png": "not_included"
+    },
+    "linkedin": {
+      "mount_global_xy": [
+        1006,
+        469
+      ],
+      "mount_size": [
+        146,
+        146
+      ],
+      "qr_inset_xywh": [
+        18,
+        16,
+        111,
+        113
+      ],
+      "real_qr_png": "not_included"
+    }
+  },
+  "disclaimer": "From a single flattened generated raster; frame/lights/icons retain source appearance, background and text are reconstructed; font names are visual matches, not guaranteed original fonts.",
+  "recommended_scene_mapping": {
+    "billboard_mesh": "one rectangular plane, no depth required",
+    "aspect_ratio": "997/722",
+    "buttons": [
+      "github_icon",
+      "github_qr_mount",
+      "linkedin_icon",
+      "linkedin_qr_mount",
+      "email"
+    ],
+    "qr_codes": "generate from actual final URLs and insert into QR mount inset area; DO NOT use concept QR artwork"
+  }
+}

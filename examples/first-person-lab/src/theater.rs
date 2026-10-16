@@ -1,5 +1,6 @@
-//! Labeled theater blockout: north is -Z; all dimensions are in meters.
+//! Fixed theater layout and curated materials: north is -Z; dimensions are meters.
 
+pub(crate) mod decor;
 mod projector;
 
 #[cfg(test)]
@@ -19,7 +20,9 @@ pub(crate) const MIN_Z: f32 = -28.0;
 pub(crate) const MAX_Z: f32 = 10.0;
 pub(crate) const HEIGHT: f32 = 12.0;
 pub(crate) const LOBBY_LIGHT_LEVEL: f32 = 1.0;
-pub(crate) const AUDITORIUM_LIGHT_LEVEL: f32 = 0.20;
+pub(crate) const AUDITORIUM_LIGHT_LEVEL: f32 = 0.48;
+const LOBBY_AMBIENT_SHARE: f32 = 0.42;
+const AUDITORIUM_AMBIENT_SHARE: f32 = 0.62;
 pub(crate) const PLAYER_RADIUS: f32 = 0.3;
 pub(crate) const SPAWN: Vec3 = Vec3::new(0.0, super::EYE_HEIGHT, MAX_Z - 2.0);
 const LOBBY_MIN: Vec2 = Vec2::new(-HALF_WIDTH, 0.0);
@@ -77,13 +80,14 @@ const fn ceiling_height(position: Vec3) -> f32 {
     profile_height(position.z, ceiling_profile(position))
 }
 
-const SCREEN_CENTER_X: f32 = (AUDITORIUM_MIN.x + AUDITORIUM_MAX.x) * 0.5;
+const SCREEN_CENTER_X: f32 = f32::midpoint(AUDITORIUM_MIN.x, AUDITORIUM_MAX.x);
 pub(crate) const DEFAULT_VIDEO_ASPECT: f32 = 16.0 / 9.0;
 const SCREEN_ASPECT: f32 = 2.39;
 const SCREEN_HEIGHT: f32 = 19.0 / DEFAULT_VIDEO_ASPECT;
 const SCREEN_WIDTH: f32 = SCREEN_HEIGHT * SCREEN_ASPECT;
 const SCREEN_BOTTOM: f32 = 0.65;
 const SCREEN_TOP: f32 = SCREEN_BOTTOM + SCREEN_HEIGHT;
+const SCREEN_FRAME_BORDER: f32 = 0.15;
 pub(crate) const SCREEN_TARGET: Vec3 = Vec3::new(
     SCREEN_CENTER_X,
     SCREEN_BOTTOM.midpoint(SCREEN_TOP),
@@ -277,13 +281,14 @@ pub(crate) fn npc_waypoint(id: &str) -> Option<Vec3> {
 }
 
 const PNGS: [&[u8]; 4] = [
-    include_bytes!("../assets/textures/wall_worn_metal.png"),
-    include_bytes!("../assets/textures/door_industrial_double.png"),
-    include_bytes!("../assets/textures/ground_lobby_concrete_metal.png"),
-    include_bytes!("../assets/textures/ground_auditorium_burgundy_carpet.png"),
+    include_bytes!("../assets/environment/wall_bronze_steel_panels.png"),
+    include_bytes!("../assets/textures/door_starlit_cinema.png"),
+    include_bytes!("../assets/environment/ground_lobby_stone_tiles.png"),
+    include_bytes!("../assets/environment/ground_auditorium_carpet_base.png"),
 ];
 
 pub(crate) const POSTER_COUNT: usize = 7;
+const POSTER_CENTER_Y: f32 = LOW_CEILING_CLEARANCE * 0.5;
 const POSTER_PNGS: [&[u8]; POSTER_COUNT] = [
     include_bytes!("../assets/posters/Banner_Game_DragonsOfAtlantis.png"),
     include_bytes!("../assets/posters/Banner_Game_GodfatherFiveFamilies.png"),
@@ -293,10 +298,22 @@ const POSTER_PNGS: [&[u8]; POSTER_COUNT] = [
     include_bytes!("../assets/posters/Banner_XR_StarWars_GM.png"),
     include_bytes!("../assets/posters/Banner_XR_VerizonAthleteAR.png"),
 ];
+// Append materials after video/posters: the browser's video texture stays at slot 4.
+const MATERIAL_PNGS: [&[u8]; 2] = [
+    include_bytes!("../assets/environment/wall_gunmetal_riveted_panels.png"),
+    include_bytes!("../assets/environment/seat_material_atlas.png"),
+];
+#[cfg(test)]
+pub(crate) const MATERIAL_TEXTURE_COUNT: usize = MATERIAL_PNGS.len();
+const CEILING_TEXTURE_INDEX: usize = 5 + POSTER_COUNT;
+const SEAT_TEXTURE_INDEX: usize = CEILING_TEXTURE_INDEX + 1;
+const SEAT_ATLAS_INSET: f32 = 128.5;
+const SEAT_ATLAS_SPAN: f32 = 255.0;
+
 // Original image ratios, independent of integer rounding in downsampled textures.
 const POSTER_RATIOS: [f32; POSTER_COUNT] = [
     2.0 / 3.0,
-    1.5,
+    749.0 / 623.0,
     16.0 / 9.0,
     16.0 / 9.0,
     2200.0 / 1238.0,
@@ -326,9 +343,9 @@ fn texture_assets() -> Vec<TextureAsset> {
                     height: 1,
                     rgba: vec![0, 0, 0, 255],
                 }))
-                .chain(POSTER_PNGS.iter().map(|png| {
+                .chain(POSTER_PNGS.iter().chain(MATERIAL_PNGS.iter()).map(|png| {
                     let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-                        .expect("bundled lobby poster must decode")
+                        .expect("bundled poster or material must decode")
                         .into_rgba8();
                     TextureAsset {
                         handle: SpriteHandle::new(),
@@ -424,27 +441,25 @@ impl Theater {
                 Vec3::new(PASSAGE_MIN, HEIGHT, SIDE_ENTRY_MIN_Z),
             ],
             [
-                [0.0, (HEIGHT - lintel_bottom) / 3.0],
-                [
-                    (SIDE_ENTRY_MAX_Z - SIDE_ENTRY_MIN_Z) / 3.0,
-                    (HEIGHT - lintel_bottom) / 3.0,
-                ],
-                [(SIDE_ENTRY_MAX_Z - SIDE_ENTRY_MIN_Z) / 3.0, 0.0],
-                [0.0, 0.0],
+                [SIDE_ENTRY_MIN_Z / 3.0, (HEIGHT - lintel_bottom) / 3.0],
+                [SIDE_ENTRY_MAX_Z / 3.0, (HEIGHT - lintel_bottom) / 3.0],
+                [SIDE_ENTRY_MAX_Z / 3.0, 0.0],
+                [SIDE_ENTRY_MIN_Z / 3.0, 0.0],
             ],
             [1.0; 4],
             wall,
         );
 
         // Sealed entrance artwork sits just inside the solid south wall. The
-        // square PNG is mapped once, top at v=0, without a mirrored double door.
-        let door_z = LOBBY_MAX.y - 0.015;
+        // Portrait artwork is 35% taller than the old 2.4m door, with its 2:3
+        // aspect preserved. Map once, top at v=0, without mirroring either leaf.
+        let door_z = LOBBY_MAX.y - 0.05;
         scene.quad(
             [
-                Vec3::new(1.2, 0.0, door_z),
-                Vec3::new(-1.2, 0.0, door_z),
-                Vec3::new(-1.2, 2.4, door_z),
-                Vec3::new(1.2, 2.4, door_z),
+                Vec3::new(1.08, 0.0, door_z),
+                Vec3::new(-1.08, 0.0, door_z),
+                Vec3::new(-1.08, 3.24, door_z),
+                Vec3::new(1.08, 3.24, door_z),
             ],
             [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
             [1.0; 4],
@@ -454,10 +469,10 @@ impl Theater {
         // Black 2.39:1 cinema area, centered on the widened auditorium. Separate
         // frame, backing and contained video to avoid depth fighting.
         scene.panel(
-            SCREEN_CENTER_X - SCREEN_WIDTH * 0.5 - 0.15,
-            SCREEN_CENTER_X + SCREEN_WIDTH * 0.5 + 0.15,
-            SCREEN_BOTTOM - 0.15,
-            SCREEN_TOP + 0.15,
+            SCREEN_CENTER_X - SCREEN_WIDTH * 0.5 - SCREEN_FRAME_BORDER,
+            SCREEN_CENTER_X + SCREEN_WIDTH * 0.5 + SCREEN_FRAME_BORDER,
+            SCREEN_BOTTOM - SCREEN_FRAME_BORDER,
+            SCREEN_TOP + SCREEN_FRAME_BORDER,
             AUDITORIUM_MIN.y + 0.06,
             [0.0, 0.0, 0.0, 1.0],
         );
@@ -596,40 +611,52 @@ impl Theater {
     }
 
     fn chair(&mut self, seat: Seat) {
-        let upholstery = [0.42, 0.11, 0.15, 1.0];
-        let frame = [0.16, 0.17, 0.19, 1.0];
-        // Pedestal, cushion, low back (+Z), then the two armrests. One mesh per
-        // chair keeps the solid parts together without adding textures or draws per face.
+        let upholstery = [1.0, 0.96, 0.92, 1.0];
+        let frame = [0.70, 0.66, 0.60, 1.0];
+        // The same five boxes retain their exact positions and picking envelope.
+        // A guttered atlas dresses leather, padded backs, and metal in one draw.
         let parts = [
             (
                 Vec3::new(-0.28, 0.0, -0.28),
                 Vec3::new(0.28, 0.36, 0.28),
                 frame,
+                2,
             ),
             (
                 Vec3::new(-0.33, 0.36, -CHAIR_HALF_DEPTH),
                 Vec3::new(0.33, SEAT_HEIGHT, 0.30),
                 upholstery,
+                0,
             ),
             (
                 Vec3::new(-CHAIR_HALF_WIDTH, 0.36, 0.30),
                 Vec3::new(CHAIR_HALF_WIDTH, CHAIR_BACK_HEIGHT, CHAIR_HALF_DEPTH),
                 upholstery,
+                1,
             ),
             (
                 Vec3::new(-CHAIR_HALF_WIDTH, 0.36, -CHAIR_HALF_DEPTH),
                 Vec3::new(-0.33, 0.65, 0.30),
                 frame,
+                3,
             ),
             (
                 Vec3::new(0.33, 0.36, -CHAIR_HALF_DEPTH),
                 Vec3::new(CHAIR_HALF_WIDTH, 0.65, 0.30),
                 frame,
+                3,
             ),
         ];
         let mut vertices = Vec::with_capacity(parts.len() * 24);
         let mut indices = Vec::with_capacity(parts.len() * 36);
-        for (min, max, color) in parts {
+        for (min, max, color, quadrant) in parts {
+            // Wide extruded gutters isolate materials through mip 8, where the
+            // sampled 256px region is already only one screen pixel across.
+            let u0 = (SEAT_ATLAS_INSET + (quadrant % 2) as f32 * 512.0) / 1024.0;
+            let v0 = (SEAT_ATLAS_INSET + (quadrant / 2) as f32 * 512.0) / 1024.0;
+            let u1 = u0 + SEAT_ATLAS_SPAN / 1024.0;
+            let v1 = v0 + SEAT_ATLAS_SPAN / 1024.0;
+            let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
             let min = seat.position + min;
             let max = seat.position + max;
             let corners = [
@@ -655,11 +682,11 @@ impl Theater {
                     .cross(points[2] - points[0])
                     .normalize();
                 let base = u16::try_from(vertices.len()).expect("bounded chair mesh");
-                vertices.extend(points.map(|position| Vertex {
+                vertices.extend(points.into_iter().zip(uvs).map(|(position, uv)| Vertex {
                     position: position.to_array(),
                     normal: normal.to_array(),
                     color,
-                    uv: [0.0; 2],
+                    uv,
                 }));
                 indices.extend([0, 1, 2, 0, 2, 3].map(|index| base + index));
             }
@@ -678,6 +705,7 @@ impl Theater {
             ambient: 0.35,
             intensity: 0.65,
         });
+        instance.texture = Some(self.assets.textures[SEAT_TEXTURE_INDEX].handle);
         self.instances.push(instance);
         let (min, max) = seat.bounds();
         self.colliders.push(Collider {
@@ -691,13 +719,38 @@ impl Theater {
         // North bays flank the controls and stop before the passage. East bays
         // leave the passage approach clear; south bays flank the entrance artwork.
         let placements = [
-            (Vec3::new(-HALF_WIDTH, 2.8, 5.0), Vec3::NEG_Z, Vec3::X, 2.0),
-            (Vec3::new(-9.9, 2.8, 0.0), Vec3::X, Vec3::Z, 3.6),
-            (Vec3::new(5.3, 2.8, 0.0), Vec3::X, Vec3::Z, 4.2),
-            (Vec3::new(HALF_WIDTH, 2.8, 2.6), Vec3::Z, Vec3::NEG_X, 4.0),
-            (Vec3::new(HALF_WIDTH, 2.8, 7.3), Vec3::Z, Vec3::NEG_X, 4.0),
-            (Vec3::new(-7.0, 2.8, MAX_Z), Vec3::NEG_X, Vec3::NEG_Z, 4.8),
-            (Vec3::new(7.0, 2.8, MAX_Z), Vec3::NEG_X, Vec3::NEG_Z, 4.8),
+            (
+                Vec3::new(-HALF_WIDTH, POSTER_CENTER_Y, 5.0),
+                Vec3::NEG_Z,
+                Vec3::X,
+                2.0,
+            ),
+            (Vec3::new(-9.9, POSTER_CENTER_Y, 0.0), Vec3::X, Vec3::Z, 3.6),
+            (Vec3::new(5.3, POSTER_CENTER_Y, 0.0), Vec3::X, Vec3::Z, 4.2),
+            (
+                Vec3::new(HALF_WIDTH, POSTER_CENTER_Y, 2.6),
+                Vec3::Z,
+                Vec3::NEG_X,
+                4.0,
+            ),
+            (
+                Vec3::new(HALF_WIDTH, POSTER_CENTER_Y, 7.3),
+                Vec3::Z,
+                Vec3::NEG_X,
+                4.0,
+            ),
+            (
+                Vec3::new(-7.0, POSTER_CENTER_Y, MAX_Z),
+                Vec3::NEG_X,
+                Vec3::NEG_Z,
+                4.8,
+            ),
+            (
+                Vec3::new(7.0, POSTER_CENTER_Y, MAX_Z),
+                Vec3::NEG_X,
+                Vec3::NEG_Z,
+                4.8,
+            ),
         ];
         for (index, (ratio, (center, right, normal, max_width))) in
             POSTER_RATIOS.into_iter().zip(placements).enumerate()
@@ -738,8 +791,9 @@ impl Theater {
         texture: Option<SpriteHandle>,
         profile: &[(f32, f32)],
     ) {
-        // PNG top points north; U increases east and V south. Keep the same 4m
-        // tile origin across every flat/ramp, including the sealed room boundary.
+        // Lobby and hallway share one stone grid through their existing opening;
+        // the different auditorium carpet keeps its own continuous 4m projection.
+        let origin = if min == CORRIDOR_MIN { LOBBY_MIN } else { min };
         for pair in profile.windows(2) {
             let points = [
                 Vec2::new(min.x, pair[0].0),
@@ -749,31 +803,35 @@ impl Theater {
             ];
             self.quad(
                 points.map(|p| Vec3::new(p.x, profile_height(p.y, profile), p.y)),
-                points.map(|p| [(p.x - min.x) / 4.0, (p.y - min.y) / 4.0]),
-                [1.0; 4],
+                points.map(|p| [(p.x - origin.x) / 4.0, (p.y - origin.y) / 4.0]),
+                [1.0, 0.98, 0.94, 1.0],
                 texture,
             );
         }
     }
 
     fn ceiling(&mut self, min: Vec2, max: Vec2, profile: &[(f32, f32)]) {
+        let origin = if min == CORRIDOR_MIN { LOBBY_MIN } else { min };
         for pair in profile.windows(2) {
+            let positions = [
+                Vec3::new(min.x, pair[1].1, pair[1].0),
+                Vec3::new(min.x, pair[0].1, pair[0].0),
+                Vec3::new(max.x, pair[0].1, pair[0].0),
+                Vec3::new(max.x, pair[1].1, pair[1].0),
+            ];
             self.quad(
-                [
-                    Vec3::new(min.x, pair[1].1, pair[1].0),
-                    Vec3::new(min.x, pair[0].1, pair[0].0),
-                    Vec3::new(max.x, pair[0].1, pair[0].0),
-                    Vec3::new(max.x, pair[1].1, pair[1].0),
-                ],
-                [[0.0; 2]; 4],
-                [0.055, 0.055, 0.065, 1.0],
-                None,
+                positions,
+                positions.map(|p| [(p.x - origin.x) / 3.0, (p.z - origin.y) / 3.0]),
+                [0.56, 0.55, 0.54, 1.0],
+                Some(self.assets.textures[CEILING_TEXTURE_INDEX].handle),
             );
         }
     }
 
     fn wall(&mut self, a: Vec2, b: Vec2, texture: Option<SpriteHandle>) {
-        let u = a.distance(b) / 3.0;
+        let direction = (b - a).normalize();
+        let start_u = a.dot(direction) / 3.0;
+        let end_u = b.dot(direction) / 3.0;
         let v = HEIGHT / 3.0;
         self.quad(
             [
@@ -782,8 +840,8 @@ impl Theater {
                 Vec3::new(b.x, HEIGHT, b.y),
                 Vec3::new(a.x, HEIGHT, a.y),
             ],
-            [[0.0, v], [u, v], [u, 0.0], [0.0, 0.0]],
-            [1.0; 4],
+            [[start_u, v], [end_u, v], [end_u, 0.0], [start_u, 0.0]],
+            [1.0, 0.95, 0.86, 1.0],
             texture,
         );
     }
@@ -824,8 +882,15 @@ pub(crate) fn apply_room_lighting(
             } else {
                 lobby
             };
-            light.ambient = 0.35 * level;
-            light.intensity = 0.65 * level;
+            // A larger ambient share keeps dark wall/seat details and ramps
+            // readable without brightening the unlit screen or adding real lights.
+            let ambient_share = if in_auditorium(light.position) {
+                AUDITORIUM_AMBIENT_SHARE
+            } else {
+                LOBBY_AMBIENT_SHARE
+            };
+            light.ambient = ambient_share * level;
+            light.intensity = (1.0 - ambient_share) * level;
         }
     }
 }
@@ -970,7 +1035,7 @@ pub(crate) fn has_line_of_sight(start: Vec3, end: Vec3, colliders: &[Collider]) 
 }
 
 /// Validate grounded endpoints and the analytic XZ walking route against player
-/// clearance. Evaluate walking Y with floor_height, not an endpoint-to-endpoint lerp.
+/// clearance. Evaluate walking Y with `floor_height`, not an endpoint-to-endpoint lerp.
 pub(crate) fn npc_path_clear(start: Vec3, end: Vec3, colliders: &[Collider]) -> bool {
     let bounds = Theater::camera_bounds();
     let grounded = |point: Vec3| {
@@ -1066,6 +1131,68 @@ pub(crate) fn resolve_movement(start: Vec3, desired: Vec3, colliders: &[Collider
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout_fingerprint(scene: &Theater) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut feed = |bytes: &[u8]| {
+            for byte in bytes {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
+            }
+        };
+        for mesh in &scene.assets.meshes {
+            for vertex in &mesh.vertices {
+                for value in vertex.position.into_iter().chain(vertex.normal) {
+                    feed(&value.to_bits().to_le_bytes());
+                }
+            }
+            for index in &mesh.indices {
+                feed(&index.to_le_bytes());
+            }
+        }
+        for instance in &scene.instances {
+            for value in instance
+                .transform
+                .translation
+                .to_array()
+                .into_iter()
+                .chain(instance.transform.rotation.to_array())
+                .chain([instance.transform.scale])
+            {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+        for collider in &scene.colliders {
+            for value in collider
+                .min
+                .to_array()
+                .into_iter()
+                .chain(collider.max.to_array())
+                .chain([collider.height])
+            {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+        for seat in SEATS {
+            feed(seat.id.as_bytes());
+            for value in seat.position.to_array() {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+        hash
+    }
+
+    #[test]
+    fn visual_pass_preserves_exact_layout() {
+        let scene = Theater::new();
+        assert_eq!(
+            scene.assets.meshes.len(),
+            44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
+        );
+        assert_eq!(scene.colliders.len(), 10 + SEAT_COUNT);
+        // Layout baseline includes the approved 749:623 Godfather poster ratio
+        // and its fitted frame; all other geometry and collision stay fixed.
+        assert_eq!(layout_fingerprint(&scene), 15_869_346_825_415_653_359);
+    }
 
     fn eye(x: f32, z: f32) -> Vec3 {
         grounded_eye(Vec3::new(x, 0.0, z))
@@ -1200,7 +1327,10 @@ mod tests {
             assert_eq!(collider.height, max.y);
             assert_eq!(instance.mesh, mesh.handle);
             assert_eq!(instance.transform, RenderTransform::IDENTITY);
-            assert_eq!(instance.texture, None);
+            assert_eq!(
+                instance.texture,
+                Some(scene.assets.textures[SEAT_TEXTURE_INDEX].handle)
+            );
             assert_eq!(instance.emissive, 0.0);
             let light = instance.lighting.unwrap();
             assert!(in_auditorium(light.position));
@@ -1215,8 +1345,8 @@ mod tests {
             );
             for instance in &scene.instances[44..44 + CHAIR_MESH_COUNT] {
                 let light = instance.lighting.unwrap();
-                assert_eq!(light.ambient, 0.35 * level);
-                assert_eq!(light.intensity, 0.65 * level);
+                assert_eq!(light.ambient, AUDITORIUM_AMBIENT_SHARE * level);
+                assert_eq!(light.intensity, (1.0 - AUDITORIUM_AMBIENT_SHARE) * level);
             }
         }
     }
@@ -1687,8 +1817,8 @@ mod tests {
             scene.assets.textures[4].handle,
         );
         let auditorium = scene.instances[1].lighting.unwrap();
-        assert_eq!(auditorium.ambient, 0.35);
-        assert_eq!(auditorium.intensity, 0.65);
+        assert_eq!(auditorium.ambient, AUDITORIUM_AMBIENT_SHARE);
+        assert_eq!(auditorium.intensity, 1.0 - AUDITORIUM_AMBIENT_SHARE);
     }
 
     #[test]
@@ -1700,7 +1830,7 @@ mod tests {
         let top_right = Vec3::from(screen.vertices[2].position);
         let extent = top_right - bottom_left;
         assert!((extent.x / extent.y - SCREEN_ASPECT).abs() < 1e-6);
-        assert!(((bottom_left.x + top_right.x) * 0.5 - SCREEN_CENTER_X).abs() < 0.00001);
+        assert!((f32::midpoint(bottom_left.x, top_right.x) - SCREEN_CENTER_X).abs() < 0.00001);
         assert!((extent.x - SCREEN_WIDTH).abs() < 0.00001);
         assert_eq!(extent.y, 10.6875);
         assert_eq!(bottom_left.y, 0.65);
@@ -1806,9 +1936,9 @@ mod tests {
             assert!(video.position[2] > backing.position[2]);
         }
         let fit = scene.instances[video_index].texture_fit.as_ref().unwrap();
-        let size = contained_screen_size(fit);
+        let size = contained_screen_size(*fit);
         assert!((size.x - 19.0).abs() < 0.00001);
-        let center_x = (video.vertices[0].position[0] + video.vertices[2].position[0]) * 0.5;
+        let center_x = f32::midpoint(video.vertices[0].position[0], video.vertices[2].position[0]);
         let left_margin = center_x - size.x * 0.5 - left;
         let right_margin = right - (center_x + size.x * 0.5);
         assert!(left_margin > 3.0);
@@ -1816,7 +1946,7 @@ mod tests {
         assert!(frame.vertices[2].position[1] < HEIGHT);
     }
 
-    fn contained_screen_size(fit: &MeshTextureFit) -> Vec2 {
+    fn contained_screen_size(fit: MeshTextureFit) -> Vec2 {
         let fraction = if fit.content_aspect <= fit.surface_aspect {
             Vec2::new(fit.content_aspect / fit.surface_aspect, 1.0)
         } else {
@@ -1848,7 +1978,7 @@ mod tests {
             let fit = scene.instances[index].texture_fit.as_ref().unwrap();
             assert_eq!(fit.surface_aspect, SCREEN_ASPECT);
             assert_eq!(fit.content_aspect, aspect);
-            let size = contained_screen_size(fit);
+            let size = contained_screen_size(*fit);
             assert!((size.x / size.y - aspect).abs() < 0.00001);
             assert!(size.x <= SCREEN_WIDTH && size.y <= SCREEN_HEIGHT);
             let margins = (Vec2::new(SCREEN_WIDTH, SCREEN_HEIGHT) - size) * 0.5;
@@ -1991,7 +2121,17 @@ mod tests {
         let mut frame_bounds: Vec<(usize, Vec3, Vec3)> = Vec::new();
         for (index, ratio) in POSTER_RATIOS.into_iter().enumerate() {
             let texture = &scene.assets.textures[5 + index];
-            assert!(texture.width.max(texture.height) <= 1024);
+            assert!(texture.width.max(texture.height) <= 2048);
+            let expected_sizes = [
+                (1024, 1536),
+                (749, 623),
+                (1280, 720),
+                (1280, 720),
+                (2048, 1152),
+                (2048, 1152),
+                (2048, 1152),
+            ];
+            assert_eq!((texture.width, texture.height), expected_sizes[index]);
             assert_eq!(
                 texture.rgba.len(),
                 (texture.width * texture.height * 4) as usize
@@ -2011,6 +2151,10 @@ mod tests {
             assert!((width / height - ratio).abs() < 0.00001);
             assert!((width - widths[index]).abs() < 0.00001);
             assert!(height <= 3.0 + 0.00001);
+            let center_y = points[0].y.midpoint(points[2].y);
+            let floor = floor_height(points[0]);
+            let ceiling = ceiling_height(points[0]);
+            assert!((center_y - floor.midpoint(ceiling)).abs() < 0.00001);
             assert!(
                 (Vec3::from_array(frame.vertices[0].position)
                     .distance(Vec3::from_array(frame.vertices[1].position))
@@ -2045,7 +2189,8 @@ mod tests {
                 .fold(Vec3::splat(f32::NEG_INFINITY), |a, v| {
                     a.max(Vec3::from_array(v.position))
                 });
-            assert!(min.y > 1.0 && max.y < HEIGHT);
+            assert!(min.y > floor && max.y < ceiling);
+            assert!(((min.y - floor) - (ceiling - max.y)).abs() < 0.00001);
             assert!(min.x > -HALF_WIDTH && max.x < HALF_WIDTH);
             assert!(min.z > 0.0 && max.z < MAX_Z);
             let wall = if normals[index] == Vec3::Z {
@@ -2096,7 +2241,7 @@ mod tests {
                     };
                     assert!((plane - expected).abs() < 0.00001);
                 }
-                assert_eq!(instance.lighting.unwrap().ambient, 0.35);
+                assert_eq!(instance.lighting.unwrap().ambient, LOBBY_AMBIENT_SHARE);
             }
         }
         assert_eq!(wall_counts, [2, 2, 2, 1]);
@@ -2106,7 +2251,10 @@ mod tests {
     #[test]
     fn floor_materials_are_distinct_and_every_mesh_texture_is_loaded() {
         let scene = Theater::new();
-        assert_eq!(scene.assets.textures.len(), 5 + POSTER_COUNT);
+        assert_eq!(
+            scene.assets.textures.len(),
+            5 + POSTER_COUNT + MATERIAL_TEXTURE_COUNT
+        );
         assert_eq!(
             scene.instances[0].texture,
             Some(scene.assets.textures[2].handle)
@@ -2180,7 +2328,7 @@ mod tests {
         ] {
             assert!(
                 Vec3::from(scene.assets.meshes[index].vertices[0].normal)
-                    .abs_diff_eq(normal, 0.000001)
+                    .abs_diff_eq(normal, 0.000_001)
             );
         }
         // Architectural meshes retain their order; chairs and the projector are appended.
@@ -2196,23 +2344,36 @@ mod tests {
             })
         }) {
             let height = mesh.vertices[3].position[1] - mesh.vertices[0].position[1];
-            assert_eq!(mesh.vertices[0].uv, [0.0, height / 3.0]);
-            assert_eq!(mesh.vertices[3].uv, [0.0, 0.0]);
-            let width = Vec3::from(mesh.vertices[0].position)
-                .distance(Vec3::from(mesh.vertices[1].position));
-            assert_eq!(mesh.vertices[1].uv[0], width / 3.0);
+            let start = Vec3::from(mesh.vertices[0].position);
+            let end = Vec3::from(mesh.vertices[1].position);
+            let direction = (end - start).normalize();
+            let start_u = start.dot(direction) / 3.0;
+            let end_u = end.dot(direction) / 3.0;
+            assert_eq!(mesh.vertices[0].uv, [start_u, height / 3.0]);
+            assert_eq!(mesh.vertices[3].uv, [start_u, 0.0]);
+            assert_eq!(mesh.vertices[1].uv[0], end_u);
         }
         let door_index = textured_mesh(&scene, scene.assets.textures[1].handle);
         let door = &scene.assets.meshes[door_index];
         assert_eq!(door.vertices[0].uv, [0.0, 1.0]);
         assert_eq!(door.vertices[2].uv, [1.0, 0.0]);
-        assert_eq!(door.vertices[0].position, [1.2, 0.0, 9.985]);
-        assert_eq!(door.vertices[2].position, [-1.2, 2.4, 9.985]);
+        assert_eq!(door.vertices[0].position, [1.08, 0.0, 9.95]);
+        assert_eq!(door.vertices[2].position, [-1.08, 3.24, 9.95]);
+        let width = door.vertices[0].position[0] - door.vertices[2].position[0];
+        let height = door.vertices[2].position[1];
+        assert!((height / 2.4 - 1.35).abs() < 0.000_001);
+        assert!((width / height - 2.0 / 3.0).abs() < 0.000_001);
+        assert_eq!(
+            (
+                scene.assets.textures[1].width,
+                scene.assets.textures[1].height
+            ),
+            (1024, 1536)
+        );
         for (index, mesh) in scene.assets.meshes[..8].iter().enumerate() {
             let origin = match index {
-                0 => LOBBY_MIN,
                 1..=5 => AUDITORIUM_MIN,
-                _ => CORRIDOR_MIN,
+                _ => LOBBY_MIN,
             };
             for vertex in &mesh.vertices {
                 assert_eq!(
@@ -2224,6 +2385,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn final_materials_add_ceiling_and_chair_uvs_without_extra_meshes() {
+        let scene = Theater::new();
+        for mesh in &scene.assets.meshes[8..12] {
+            let instance = scene
+                .instances
+                .iter()
+                .find(|instance| instance.mesh == mesh.handle)
+                .unwrap();
+            assert_eq!(
+                instance.texture,
+                Some(scene.assets.textures[CEILING_TEXTURE_INDEX].handle)
+            );
+            assert!(
+                mesh.vertices
+                    .iter()
+                    .any(|vertex| vertex.uv != mesh.vertices[0].uv)
+            );
+            assert!(
+                mesh.vertices
+                    .iter()
+                    .all(|vertex| vertex.uv.iter().all(|v| v.is_finite()))
+            );
+        }
+        for mesh in &scene.assets.meshes[44..44 + CHAIR_MESH_COUNT] {
+            for (part, vertices) in mesh.vertices.as_chunks::<24>().0.iter().enumerate() {
+                let quadrant = [2, 0, 1, 3, 3][part];
+                let min = Vec2::new(
+                    (SEAT_ATLAS_INSET + (quadrant % 2) as f32 * 512.0) / 1024.0,
+                    (SEAT_ATLAS_INSET + (quadrant / 2) as f32 * 512.0) / 1024.0,
+                );
+                let max = min + Vec2::splat(SEAT_ATLAS_SPAN / 1024.0);
+                for vertex in vertices {
+                    let uv = Vec2::from(vertex.uv);
+                    assert!(uv.cmpge(min).all() && uv.cmple(max).all());
+                }
+                for face in vertices.as_chunks::<4>().0 {
+                    assert_ne!(face[0].uv, face[2].uv);
+                }
+            }
+        }
+        let doorway = Vec3::new(HALF_WIDTH, 0.0, 0.0).to_array();
+        let lobby = scene.assets.meshes[0]
+            .vertices
+            .iter()
+            .find(|v| v.position == doorway)
+            .unwrap();
+        let hallway = scene.assets.meshes[7]
+            .vertices
+            .iter()
+            .find(|v| v.position == doorway)
+            .unwrap();
+        assert_eq!(lobby.uv, hallway.uv);
+        assert_eq!(layout_fingerprint(&scene), 15_869_346_825_415_653_359);
     }
 
     #[test]
@@ -2493,7 +2710,7 @@ mod tests {
             camera.target += resolved - camera.eye;
             camera.eye = resolved;
             assert!(camera.eye.abs_diff_eq(eye(-6.75, end_z), 0.0001));
-            assert!((camera.target - camera.eye).abs_diff_eq(Vec3::NEG_Z, 0.000001));
+            assert!((camera.target - camera.eye).abs_diff_eq(Vec3::NEG_Z, 0.000_001));
         }
     }
 

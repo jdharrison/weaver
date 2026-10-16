@@ -1,0 +1,1925 @@
+{
+  "schema_version": 1,
+  "texture_order": "per avatar: standing front, back, left; seated front, back, left",
+  "assets": [
+    {
+      "path": "01_rust_drifter/avatar_01_rust_drifter.png",
+      "sha256": "3e08c8cbf9373d75c14bd105b7b9849ed59a660ce7a2cafec17a07608598eeb6",
+      "bytes": 315569,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        253,
+        58,
+        852,
+        1374
+      ],
+      "rgba_sha256": "f76c65159e15ccb9b72dac154ba0d14061cd7765fd96f5f28be584c81068ffbc",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_01_rust_drifter.png",
+      "source_sha256": "defe08afba42a08235e1eb934a77f5020fe73c4ec26b13927e908609a01d28f5",
+      "source_bytes": 2214025,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        253,
+        58,
+        852,
+        1374
+      ],
+      "source_rgba_sha256": "94ef2d94ece031d1ece5b5577ddc0a4751149bb828568b0edc5fb6e88c87fd63"
+    },
+    {
+      "path": "01_rust_drifter/back.png",
+      "sha256": "58993214378874f0227bdb38e33b90a7a43401bfc71ac583fb7df6dffdd7e0dd",
+      "bytes": 383258,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        216,
+        29,
+        785,
+        1481
+      ],
+      "rgba_sha256": "737922ce46eb74cdb7e298125cc5eae4cc754231ff889dcf825389318ac3b26c",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/01_rust_drifter/back.png",
+      "source_sha256": "8051ed26d1e1d565c93da907088ba6efeaf362aba4bdd8037e6557b8564da87f",
+      "source_bytes": 1980111,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        216,
+        29,
+        785,
+        1481
+      ],
+      "source_rgba_sha256": "e1c78350b7a7c83561e955312372a751f2ab2b34260429f6a68a9c510ba5da08"
+    },
+    {
+      "path": "01_rust_drifter/left_side.png",
+      "sha256": "c85cd884d40388006de5138f12ec495ae6dee636f2685ece227d10b8c9310e9f",
+      "bytes": 268240,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        316,
+        15,
+        721,
+        1471
+      ],
+      "rgba_sha256": "7b0376d79de79c16264abffa877aaf9f9e15f05c107a4d795b91bbb987793f8c",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/01_rust_drifter/left_side.png",
+      "source_sha256": "9f5ade9b05e296fe509fa176c622911fc562ac7093dec9820dc9285b822153db",
+      "source_bytes": 1582068,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        317,
+        15,
+        721,
+        1471
+      ],
+      "source_rgba_sha256": "424c98e44d104d32d15db806034826cc07fbf35b6e1ae90e04bdbd1fdf52543d"
+    },
+    {
+      "path": "01_rust_drifter/seated_front.png",
+      "sha256": "d837bba4020dd038f51e101496a6cf931c63b3f4287cea66238c869b1420c50b",
+      "bytes": 470830,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        114,
+        36,
+        910,
+        1465
+      ],
+      "rgba_sha256": "b4b9c4cd66f1e1abf485a9cc4a3f302554f43766bffbaf02b64076c6a1610ac6",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/01_rust_drifter/seated_front.png",
+      "source_sha256": "091c049e4bfea80f9e46611947408c97044ad92c3562fe2cad0dc2d0b96a60c5",
+      "source_bytes": 2278982,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        114,
+        36,
+        910,
+        1465
+      ],
+      "source_rgba_sha256": "7c4e6979ec46e1087a87c16cc0d14545263150a80e0e159a6a2906efa1bc65ac"
+    },
+    {
+      "path": "01_rust_drifter/seated_back.png",
+      "sha256": "525d11c5eb5a1115d1466fab4c0b2e53ac622f840782d94c9e94603f523edb52",
+      "bytes": 441797,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        116,
+        34,
+        909,
+        1464
+      ],
+      "rgba_sha256": "bdb5b907339eff9cb784b53733a6a628b6e00b850aae00469a77eb2475892714",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/01_rust_drifter/seated_back.png",
+      "source_sha256": "86b9667e6f7365f44220fab5527428382f354d4a2eae3cb6c978f7556ed35075",
+      "source_bytes": 2237569,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        116,
+        34,
+        908,
+        1463
+      ],
+      "source_rgba_sha256": "f2e17a962530e001cace549c2e62861ca53fb9eeeb3e3665818d4008be4e9943"
+    },
+    {
+      "path": "01_rust_drifter/seated_left_side.png",
+      "sha256": "46da57d09c0356d099bf5db1866b42cc45e82ae7f0336b327400b648a97fc17d",
+      "bytes": 461723,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        66,
+        23,
+        963,
+        1478
+      ],
+      "rgba_sha256": "f76809b26e629dd3d26c679bce26b9c94cbc44ba2fae7f21f327c5036c7d10c6",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/01_rust_drifter/seated_left_side.png",
+      "source_sha256": "00747eab2103317260cb7196181e5037381fc3404e5ca24a80700747ebe35318",
+      "source_bytes": 2193528,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        66,
+        23,
+        963,
+        1478
+      ],
+      "source_rgba_sha256": "1f0117f6b4a81b6b1200814874ef1472aa921ee70a3471c888441b68787018a8"
+    },
+    {
+      "path": "02_chrome_usher/avatar_02_chrome_usher.png",
+      "sha256": "a37c587ebf951a6c31bf5f196ac60e7482bf4035ed730ec5937ce6ebbb8f0a36",
+      "bytes": 223619,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        217,
+        43,
+        821,
+        1361
+      ],
+      "rgba_sha256": "00b72f8ccd0a0d93b6c1e7f46f0cc79d33f063ec8cb98381c8b0bbb5ece4c686",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_02_chrome_usher.png",
+      "source_sha256": "ce97a53e7562448076c3900d8415b8d1879f71b9f3f58c7fb849ea08c727726c",
+      "source_bytes": 2170092,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        217,
+        43,
+        821,
+        1361
+      ],
+      "source_rgba_sha256": "2b44249ff9919a189cc15e24dc4746fff5097ec0d92a1fa9a2e04c7dd4a34497"
+    },
+    {
+      "path": "02_chrome_usher/back.png",
+      "sha256": "f74534f9d725f3629b23e240d5009541d1ab998103e381c80c12cd8899d353c8",
+      "bytes": 265333,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        300,
+        28,
+        720,
+        1458
+      ],
+      "rgba_sha256": "1a7a1d91ff760eadfaed140cc102e939b8139cedc6a98af848d282f820384924",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/02_chrome_usher/back.png",
+      "source_sha256": "4237a89e15a058c3886351307f50be0a0c32946cbb3565641c2c79856fb3d222",
+      "source_bytes": 1662952,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        300,
+        28,
+        720,
+        1458
+      ],
+      "source_rgba_sha256": "1e4df5bf101348aceed6d69b5ea2e0cd6bd7e5104d5f503c6b36f589c2de91a4"
+    },
+    {
+      "path": "02_chrome_usher/left_side.png",
+      "sha256": "4cbc020c4231f95baa406cab211a5318e74851eb273d5758d7e161ebc88ece69",
+      "bytes": 179930,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        382,
+        30,
+        630,
+        1465
+      ],
+      "rgba_sha256": "e07acaee4b7a37c5af9cc7d669dca8071e1ca7e0d7a1b1109fe387fd3cda4e9f",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/02_chrome_usher/left_side.png",
+      "source_sha256": "83a377e7170a6da6b2cba73519698a49d5b886e1812bf047213da095995c622f",
+      "source_bytes": 1439739,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        382,
+        30,
+        630,
+        1465
+      ],
+      "source_rgba_sha256": "aa2deea4d28c615662877092b980fc89b790b8660391f3ebd1e9d62f40a2539e"
+    },
+    {
+      "path": "02_chrome_usher/seated_front.png",
+      "sha256": "b25f1c9b761a9fa4322a49ee8683cfd56a94b3c29fafe421425f2c3077f38fef",
+      "bytes": 339714,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        221,
+        45,
+        804,
+        1477
+      ],
+      "rgba_sha256": "0fc7113c266090f1cf72304af06975b416ee0fb50ff2e31208d3dff16a9c6428",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/02_chrome_usher/seated_front.png",
+      "source_sha256": "5040cb67ebc048ce125596b83a65ad297b59e3d7c9fffc51121f19013c5c5472",
+      "source_bytes": 1925661,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        221,
+        45,
+        803,
+        1477
+      ],
+      "source_rgba_sha256": "824f920efb8512207447b5613ec261427f7e8adfbef9e809321ae602c2fe92fd"
+    },
+    {
+      "path": "02_chrome_usher/seated_back.png",
+      "sha256": "d19955c7a3bd9fd35df2809278d1eb7d0eaaac77bef5aa188dac6c8f027cfa0a",
+      "bytes": 363766,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        181,
+        20,
+        844,
+        1481
+      ],
+      "rgba_sha256": "ea8f949fddb181b4615ec564bc0d478dfcf79b666f8332ede1848572a092ba7d",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/02_chrome_usher/seated_back.png",
+      "source_sha256": "8efe9dc253215c6e7ba0d5ebf69643975439c6d46258e589bafb0dffc563d3e7",
+      "source_bytes": 2062048,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        181,
+        20,
+        844,
+        1480
+      ],
+      "source_rgba_sha256": "1951781841916f57dce310eb3cf4673c628a958b7730414239ef374cc008fa7a"
+    },
+    {
+      "path": "02_chrome_usher/seated_left_side.png",
+      "sha256": "d8aa51c75135a878233e167da80cf8e512110d48e036f7d74cfefb6f1424d3c4",
+      "bytes": 327695,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        73,
+        32,
+        879,
+        1476
+      ],
+      "rgba_sha256": "afdb0ed046ed8690c47fe44fa5382431074107b1a8da8b3012edc039b3643fc3",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/02_chrome_usher/seated_left_side.png",
+      "source_sha256": "5e65f2abd5af1639f175cde39c4d92d9bb6a57b22731e547ed64adc6eb74061f",
+      "source_bytes": 1904941,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        73,
+        32,
+        879,
+        1476
+      ],
+      "source_rgba_sha256": "fb432c11aa45ca18415cb2696c65e7850f2b82d0db4b872a46f785c9acae7ba6"
+    },
+    {
+      "path": "03_moth_mechanic/avatar_03_moth_mechanic.png",
+      "sha256": "149596994daeb186a2afc0e2eac8e35d2e662d144848c47901aec51532e82078",
+      "bytes": 407510,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        207,
+        36,
+        934,
+        1386
+      ],
+      "rgba_sha256": "396ec8bce72ba749c7fc6f165ab8d4672dc0e7fd0338adf3118b208f89fa23c3",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_03_moth_mechanic.png",
+      "source_sha256": "9ecbc8f642b19f35efa83d2883b33483309df4a629e945771f0049c1c9b664ba",
+      "source_bytes": 2451219,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        207,
+        36,
+        934,
+        1386
+      ],
+      "source_rgba_sha256": "137c1f8f0db8890f1f4db0591a405708ab04840e7ed603d93749177cfe222175"
+    },
+    {
+      "path": "03_moth_mechanic/back.png",
+      "sha256": "1f4c49e7d0f265c0a2615ad17a845c42577f841bf32d855e747ac03da38c8168",
+      "bytes": 513544,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        134,
+        33,
+        878,
+        1471
+      ],
+      "rgba_sha256": "dda5099708d53c11063d6e1046ae27a61cc178f7170c62dba5824085b0f2f455",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/03_moth_mechanic/back.png",
+      "source_sha256": "477b83ef6b2a2d716639c6d39ec28d4342926073a9c3c1a2b28f92d560760d97",
+      "source_bytes": 2399644,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        134,
+        33,
+        878,
+        1471
+      ],
+      "source_rgba_sha256": "b1c30540b1ff5f0727b0f75bab53b119aa0ad7e995c272293095cd395ff345d9"
+    },
+    {
+      "path": "03_moth_mechanic/left_side.png",
+      "sha256": "5b221ac332f4af4af2147030673071a5df2485b4d2aba5b4a3ea10cd8e8d3afb",
+      "bytes": 355512,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        303,
+        6,
+        812,
+        1457
+      ],
+      "rgba_sha256": "56b4914eeca96dd04e0fc100e2495f4d0f75fa3214a286cc57e9c161a55bed47",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/03_moth_mechanic/left_side.png",
+      "source_sha256": "78bdbe7245d085e69730131dd592fb52bb1234561363063a9c997e7204ca12ec",
+      "source_bytes": 1872999,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        304,
+        6,
+        812,
+        1457
+      ],
+      "source_rgba_sha256": "634cbb81c40303cd9cb07dd04dc6ae30f9fcd2135bca9dfd6ef4fbb547458a25"
+    },
+    {
+      "path": "03_moth_mechanic/seated_front.png",
+      "sha256": "b13d3de0d898fc3d9bc3232b2e783f570bbb2017797a42c29614b09dd4f3b6a1",
+      "bytes": 580640,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        16,
+        37,
+        1009,
+        1472
+      ],
+      "rgba_sha256": "5f99403cd5c8ed4ccfce2737b512e41d65263d60cf62d0f5f7e18fc5bfd188b7",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/03_moth_mechanic/seated_front.png",
+      "source_sha256": "2438e9e114233a5d0e443e38156e9be573a45dc6d97019261c935076847eb892",
+      "source_bytes": 2562919,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        16,
+        37,
+        1008,
+        1472
+      ],
+      "source_rgba_sha256": "3cb823c6c4ced43091caf0f66fd026186a17984a7cd96c72021c45bb08c6bbee"
+    },
+    {
+      "path": "03_moth_mechanic/seated_back.png",
+      "sha256": "953818a53133e7fd26d5245b941cc4ee9c83c7b797b48219b148b1738f0c20dd",
+      "bytes": 594822,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        53,
+        49,
+        977,
+        1491
+      ],
+      "rgba_sha256": "5711a374175ad01e4fb74a22ae5918ddee8bfe4ff04a53f92d9f12d8d4812076",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/03_moth_mechanic/seated_back.png",
+      "source_sha256": "3d6cfb86faa1facca259718caad1916912d89dc2994b59bb4040f83b572ccd81",
+      "source_bytes": 2697327,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        53,
+        49,
+        977,
+        1492
+      ],
+      "source_rgba_sha256": "36388057099d31f2fb8f10d04cfed4e8fa2107e732f5fe51fbc5cb41b5d27893"
+    },
+    {
+      "path": "03_moth_mechanic/seated_left_side.png",
+      "sha256": "625b26141da0055ab20fec59fdc2ef79281f6637f30c7094bd7e31cfd17e41fd",
+      "bytes": 509824,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        16,
+        14,
+        1012,
+        1449
+      ],
+      "rgba_sha256": "224fc9cc33299440b0fb2021093ae1b7658610795fdd2a9eaf98b1d6306f8076",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/03_moth_mechanic/seated_left_side.png",
+      "source_sha256": "a1f9c0a4743ca434bfd9b0f7124aeef697cc76e0078cf2fb7df4b63454701f62",
+      "source_bytes": 2370842,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        16,
+        14,
+        1012,
+        1449
+      ],
+      "source_rgba_sha256": "b1d2eaf1a4fd1a9ce8363ad28f69b865731f2d033f9030ea214b4ee33024e002"
+    },
+    {
+      "path": "04_velvet_bones/avatar_04_velvet_bones.png",
+      "sha256": "66c3b97613343ef40339463d8b693fa0166d9418e096c7576c94e1c649d0c4b4",
+      "bytes": 327757,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        222,
+        36,
+        854,
+        1393
+      ],
+      "rgba_sha256": "ae99c8891669dc6f6e7d1f20beaa337e1518f184ddfb7f03414b5d5bd699e93e",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_04_velvet_bones.png",
+      "source_sha256": "8533fb6bb86fc265869ccdde66033f2bf49e8180f10bfab373aacbe2cd589458",
+      "source_bytes": 2349183,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        222,
+        36,
+        855,
+        1393
+      ],
+      "source_rgba_sha256": "c507a4608592513b9bb41eb2ac4b842d531e2523d3c8fc4b88ef2b81f6e3ad47"
+    },
+    {
+      "path": "04_velvet_bones/back.png",
+      "sha256": "1e7a2d7d6f2f7c0b361632b0003cd2b94a5384b92b870f09e21b3f28ce3950e6",
+      "bytes": 396337,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        234,
+        10,
+        791,
+        1497
+      ],
+      "rgba_sha256": "7164eb6f8c5237203d05041ef7cf24e6a22586c6f993a679366c8f527f05ab88",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/04_velvet_bones/back.png",
+      "source_sha256": "35777dd710e5a887ac8f6b40aad828427de28ce951214116395de777caf4265c",
+      "source_bytes": 2008492,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        234,
+        10,
+        791,
+        1497
+      ],
+      "source_rgba_sha256": "ad3e923feaab151bf0dcd1405ac79e2b9d9f6fb8efeef24f20d537d4a4db5eb5"
+    },
+    {
+      "path": "04_velvet_bones/left_side.png",
+      "sha256": "47dd69f3e4acddc62d88b4d0e8e9578dca06124c2ca391d9b9fd678f98043278",
+      "bytes": 253459,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        301,
+        14,
+        728,
+        1486
+      ],
+      "rgba_sha256": "1e3ffe0eaa3063bdab0f459b2abe2ca47e9f83e775da45d4334216409bd42cc3",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/04_velvet_bones/left_side.png",
+      "source_sha256": "3fcaf4d05b754a69a1656c0d7c94634a1ef3be91bd5d1ed468a1ac036ab5d4f4",
+      "source_bytes": 1531222,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        301,
+        14,
+        728,
+        1486
+      ],
+      "source_rgba_sha256": "d3375a2b8ad1375366f8c7ef9cacb20d2ae1829546bd67a4d0e75056a4a84bba"
+    },
+    {
+      "path": "04_velvet_bones/seated_front.png",
+      "sha256": "1d6bf7105bf08bd0830179495544a443be459ee063f8b52063639a365bc37d8b",
+      "bytes": 470224,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        108,
+        19,
+        919,
+        1484
+      ],
+      "rgba_sha256": "f63548a8948f2ed24b5af1abf8906022c605394f9540212d84082f14eb552dab",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/04_velvet_bones/seated_front.png",
+      "source_sha256": "335d4cf45615708b9f57d7d06ae071078484dfb817fab239c4dca214b764c6f5",
+      "source_bytes": 2290316,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        108,
+        19,
+        919,
+        1483
+      ],
+      "source_rgba_sha256": "e7f446dd281a363597e36018d7b694dcd2396c72983e3b6c2e8c8e8371a6e8c5"
+    },
+    {
+      "path": "04_velvet_bones/seated_back.png",
+      "sha256": "345d60b8eaffabc43b5765a4724b18e5bf147fc9d3a8faaa6ce5b158307e3865",
+      "bytes": 527965,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        53,
+        20,
+        971,
+        1486
+      ],
+      "rgba_sha256": "1caf8146eec64a6828d6c22db6e5a23f9bac3444238cfe48002ac901b298b311",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/04_velvet_bones/seated_back.png",
+      "source_sha256": "d4b8b00a7b79ed2605049813bd2c3f79e9bbd2e6a8903ec20422faf9bd414c00",
+      "source_bytes": 2399038,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        53,
+        20,
+        972,
+        1486
+      ],
+      "source_rgba_sha256": "424eebbb6ef6b9c7e68e837ce600d667ad2ac645dbba546687f2ba85e2c1c878"
+    },
+    {
+      "path": "04_velvet_bones/seated_left_side.png",
+      "sha256": "1e6211358967f0900266fcb113be1da31525cdb7907c45cec42727be97f24e38",
+      "bytes": 447084,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        28,
+        23,
+        996,
+        1469
+      ],
+      "rgba_sha256": "6e216f4c02ce527f82bbc7233dfb90dd476e1da3a306dd0bb40255d625c8bd37",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/04_velvet_bones/seated_left_side.png",
+      "source_sha256": "b9c033cc6c7f8828b61febbc089c940ffb65797fbee0fb95294eb1224e62da8b",
+      "source_bytes": 2235992,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        28,
+        23,
+        996,
+        1469
+      ],
+      "source_rgba_sha256": "21d8a325c260e0c26dfce896b650d3354a4dd9e6958c5d54b7ec9904ae1ad121"
+    },
+    {
+      "path": "05_spore_scout/avatar_05_spore_scout.png",
+      "sha256": "53f6fe2b3c47deaae9874966c0842766b3984713533963f0debf0a57eabc14aa",
+      "bytes": 323172,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        258,
+        69,
+        819,
+        1367
+      ],
+      "rgba_sha256": "e9603f1531eb41e201f9738c8bd6889bf0d84441f8edad92c6edaf4f144cf93d",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_05_spore_scout.png",
+      "source_sha256": "cf8e280c0d25fee9b5e25ab47ddffe2749d869d42096360d197decea7b1deea4",
+      "source_bytes": 2448359,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        258,
+        70,
+        818,
+        1366
+      ],
+      "source_rgba_sha256": "0873ce6620629dd9a1667a092b0630f961e4c627acf6a90d6d16e9c1a2d3710c"
+    },
+    {
+      "path": "05_spore_scout/back.png",
+      "sha256": "1d2e928fc8f111a49e348a0b255cf4eaa857ec352b37e1c5e02732ace890c2ce",
+      "bytes": 391086,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        234,
+        17,
+        789,
+        1454
+      ],
+      "rgba_sha256": "dcc4dc37177f79561342627d3a61b18f6c60963ab837a1ed28f2daf0bc8aeec4",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/05_spore_scout/back.png",
+      "source_sha256": "5981f7ad07ad130a69f7bcbcc9a084c58c1fc2320fc0e7e1f361b723ffc6d4d8",
+      "source_bytes": 1998257,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        234,
+        17,
+        789,
+        1454
+      ],
+      "source_rgba_sha256": "a96ac31c63997f60939203e664e783e559988f8748cf79471f014b6d322fde92"
+    },
+    {
+      "path": "05_spore_scout/left_side.png",
+      "sha256": "dbd0d1c2832437b60b2121aa4f467c75c670896f47dc6263662e9745b7b350d7",
+      "bytes": 282538,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        287,
+        40,
+        799,
+        1456
+      ],
+      "rgba_sha256": "f6d07904871891bc70421aab92adaae60c0138b321e82b8f1ab8a241eef09b2d",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/05_spore_scout/left_side.png",
+      "source_sha256": "a4f55f53296f4f958324aadc75e15559ed22f9cff0b2bb8eefc3859806cbc07d",
+      "source_bytes": 1678840,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        288,
+        40,
+        799,
+        1456
+      ],
+      "source_rgba_sha256": "2e328214d4e45119efa25edf9125b65e92d51cdf4cecd4c004c62e3e2fc5dc54"
+    },
+    {
+      "path": "05_spore_scout/seated_front.png",
+      "sha256": "099ebb17740e25bfdfb0d5f3890b9c08b82d5a87f0df11440e8bdde4e1f2a3c1",
+      "bytes": 426439,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        209,
+        33,
+        832,
+        1431
+      ],
+      "rgba_sha256": "e8bb0658b1b953b5f6de8029f78adc5cec28cb5588cd59a27f7940c32d495382",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/05_spore_scout/seated_front.png",
+      "source_sha256": "77278c7732b2635f862e00441fcf88a176204e0840cf80b25e3a4a29ad21cd8e",
+      "source_bytes": 2175760,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        209,
+        33,
+        832,
+        1431
+      ],
+      "source_rgba_sha256": "7eef876c74e2cd21f00f2d27dd9697e15ecb7753033e3a21824ab984bb577c94"
+    },
+    {
+      "path": "05_spore_scout/seated_back.png",
+      "sha256": "3a7584368412570866aa89673425d0041c67448e93a31c06afc4d75cea04fb08",
+      "bytes": 472930,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        117,
+        12,
+        905,
+        1455
+      ],
+      "rgba_sha256": "832afd1daa1e4b6a7c0f628edc4e665d2c4c69b3ec732d64d2c521d54f99ba36",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/05_spore_scout/seated_back.png",
+      "source_sha256": "0e4f07f54a441377baa5966986c0730cb5301b81f7ba44dbdbfe5de7f3de222d",
+      "source_bytes": 2340624,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        117,
+        12,
+        905,
+        1455
+      ],
+      "source_rgba_sha256": "b41b41153d02596e3253efe26e6c4e0f7191e98a59aaf49f8b208c7fe116648b"
+    },
+    {
+      "path": "05_spore_scout/seated_left_side.png",
+      "sha256": "1dde95585b56f854cf48e12015c85c36a84e55e64d5944a541f1390e61975acc",
+      "bytes": 450311,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        51,
+        34,
+        1006,
+        1467
+      ],
+      "rgba_sha256": "723fa085fd4542ba5b9af067ae8902057f729c69edf8ddd697da77b86f92bfb9",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/05_spore_scout/seated_left_side.png",
+      "source_sha256": "9d290b46d44cd01532fe646db4ae4e51c8f2532c28ad510314674fd07cca1461",
+      "source_bytes": 2180435,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        51,
+        34,
+        1006,
+        1467
+      ],
+      "source_rgba_sha256": "a7af56ce97d2b28e7344c8af6c78a9997e801eed631d5eb07e710dc2ae949e13"
+    },
+    {
+      "path": "06_canid_courier/avatar_06_canid_courier.png",
+      "sha256": "8dfc9a22ad7b99d1e8154078e6691cf230895281cb7e1bcc8ca6992deab1d944",
+      "bytes": 323645,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        268,
+        12,
+        842,
+        1397
+      ],
+      "rgba_sha256": "09e376e7a4b1bafe7ec925b4108198abb28bafeb739007f4e6a3f98f4377a832",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_06_canid_courier.png",
+      "source_sha256": "684a67068c14a791a7b59faec49f8bfbf9437e2432814dc56308d09542cdb4ed",
+      "source_bytes": 2408790,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        268,
+        12,
+        843,
+        1398
+      ],
+      "source_rgba_sha256": "91b803beccbd2eecbbe720b8dde7a6b677042592ed4285751d2d14a85c13f3fb"
+    },
+    {
+      "path": "06_canid_courier/back.png",
+      "sha256": "fa4951441577bd4cef4efac6c22628254f14b0482d2fb4fcf871a07f57a4e508",
+      "bytes": 357579,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        250,
+        8,
+        789,
+        1464
+      ],
+      "rgba_sha256": "4c730186d10a0c6d63fec5f283f314936cd91dda12395e17dfffc85a29f07155",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/06_canid_courier/back.png",
+      "source_sha256": "e2484358a982dcc27b9914993f1786c795c9fa8ab980ddc62cbed8b9ce48bb3a",
+      "source_bytes": 1891097,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        250,
+        8,
+        789,
+        1464
+      ],
+      "source_rgba_sha256": "d2d0d310cd18975d24ae60bd14c572063f6374b3367b16378baa41727cc0e359"
+    },
+    {
+      "path": "06_canid_courier/left_side.png",
+      "sha256": "0aa0a0e96336eb38c7c4a48362899779a99c9b0fd29e09ee6c8d607375a03ac8",
+      "bytes": 268940,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        314,
+        5,
+        763,
+        1445
+      ],
+      "rgba_sha256": "05f50fe1453c8e46c13268fb3c849a917561b26f1a79c2be39e7074da5730b37",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/06_canid_courier/left_side.png",
+      "source_sha256": "8066750c141ca1030c69f0977724d44e2ea97f8369573f6cb74c55718babf9af",
+      "source_bytes": 1623539,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        314,
+        5,
+        763,
+        1444
+      ],
+      "source_rgba_sha256": "b363e999d0341158a15d690b0e26a1c2f579d1a024029f06c9a4ced72118f5e5"
+    },
+    {
+      "path": "06_canid_courier/seated_front.png",
+      "sha256": "4cc0d1dfe2d9a8c7fbcf1b1565cacea5e2c0abf5db01abde7eafc6999c93a64e",
+      "bytes": 428672,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        196,
+        16,
+        832,
+        1478
+      ],
+      "rgba_sha256": "e6168d72efbe31bf02aa339b1315e879bdc60c7babd809e80ada4f05d1fda76d",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/06_canid_courier/seated_front.png",
+      "source_sha256": "3aaf41e438247f0c69dcd666f0588702dca214e665bfc556506b6694268c4011",
+      "source_bytes": 2127909,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        196,
+        16,
+        832,
+        1478
+      ],
+      "source_rgba_sha256": "0e5068c857b2bbe5cc18eb245a16cfb09225a633378a0dc22fb7fac6133e410c"
+    },
+    {
+      "path": "06_canid_courier/seated_back.png",
+      "sha256": "d4d1822d3b3e7efd5ee476c38fb9edb4b433c68c7a44f2d538b521cf38d54642",
+      "bytes": 459070,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        139,
+        17,
+        935,
+        1463
+      ],
+      "rgba_sha256": "a800c49ebe6e70e2a85cc01be62d835d45a1ed5a2ba96fa6a1e592c558cfaf52",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/06_canid_courier/seated_back.png",
+      "source_sha256": "8e83bac093e46b9bfec858caa747ed4048d924e1d8824448efdc3cca35a600b8",
+      "source_bytes": 2262314,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        139,
+        17,
+        935,
+        1463
+      ],
+      "source_rgba_sha256": "8f4021ae1be384e54d9abd2729e68a56c318b9ae87e301c21d8b1806bf8a19cf"
+    },
+    {
+      "path": "06_canid_courier/seated_left_side.png",
+      "sha256": "b2ebc3842b22d58c315e5b570eed5cb180d1e6b517a5f7e5da4d28db52f8e099",
+      "bytes": 427758,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        20,
+        9,
+        960,
+        1481
+      ],
+      "rgba_sha256": "0e0af402e74d44b2b0ecd91cf7ea6300d0edba47e8d2cc414ad65421accafa7b",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/06_canid_courier/seated_left_side.png",
+      "source_sha256": "4784640cb5fda14f3c55af73aa028d2c29500187a69361546907472545af8fe8",
+      "source_bytes": 2156788,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        20,
+        9,
+        960,
+        1480
+      ],
+      "source_rgba_sha256": "d6b01a5fd0240e61079e7950134967bc1d91fe8cfa1fafba7979b9d590b38419"
+    },
+    {
+      "path": "07_puddle_kid/avatar_07_puddle_kid.png",
+      "sha256": "35a3e50233f0e9d6a5ba2b1e8de0f7c7422974cffc9cb479710ad3d123c53cd0",
+      "bytes": 323945,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        217,
+        60,
+        850,
+        1381
+      ],
+      "rgba_sha256": "255c60797694bb0d1eadf1d8460524df8bfdd3c121d189446fb816bb195461c0",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_07_puddle_kid.png",
+      "source_sha256": "66be12c6644a362ad5f6a42e882ba06779179bd678670d8e2ad8a67078b05852",
+      "source_bytes": 2370458,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        217,
+        60,
+        850,
+        1381
+      ],
+      "source_rgba_sha256": "d6ff2669b3fe47c8d71b88eaacdd5efd6022b8309c7351623eb328e888f94fe7"
+    },
+    {
+      "path": "07_puddle_kid/back.png",
+      "sha256": "55a7bb7bd4f6afccbdc5e370d0d3f08c61f983d05c85482eec6493844c85890d",
+      "bytes": 404425,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        190,
+        31,
+        844,
+        1477
+      ],
+      "rgba_sha256": "fbf7171aba17081b5366acfb756d309b798eefa93b6bb6a052453dc311d88f78",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/07_puddle_kid/back.png",
+      "source_sha256": "7cd59a08c2600f7bfc3c86b491792637b0ec073e72a240929064ec7a23cd4fd5",
+      "source_bytes": 2058259,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        190,
+        31,
+        844,
+        1477
+      ],
+      "source_rgba_sha256": "c0239769a326435c0bbbc50c689387145c88dd3ca4bc6f00ae99fe3a40ad03ec"
+    },
+    {
+      "path": "07_puddle_kid/left_side.png",
+      "sha256": "77f77e39756afa9be1f7674295576551c90d070ee077857a01389147979bd3e0",
+      "bytes": 296191,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        272,
+        42,
+        785,
+        1460
+      ],
+      "rgba_sha256": "3e9949d6b98ef5fe84d91b081580fadc3ff19a5074825b4da36d2cff9cf4c573",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/07_puddle_kid/left_side.png",
+      "source_sha256": "3e48aa41afe6e9b4f3efb07c2e6c51016d841de73bf1b61c9bd6724fb16d591a",
+      "source_bytes": 1710384,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        272,
+        42,
+        784,
+        1460
+      ],
+      "source_rgba_sha256": "c963856cb5f5ca3c36d3f0a6a5340eaa6918577980ec9f8a79f3ffa49fbc4d10"
+    },
+    {
+      "path": "07_puddle_kid/seated_front.png",
+      "sha256": "68622f34339988969ea01b4958c8c3f87313bea9551b100ea224f0bffd4c1d06",
+      "bytes": 421387,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        171,
+        40,
+        862,
+        1453
+      ],
+      "rgba_sha256": "c35cbbb47c5eaf435191327b3ee55ac2d46750287ed13fe05a3c890714fc1fc0",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/07_puddle_kid/seated_front.png",
+      "source_sha256": "dffab4d0730de80342b20fc1b9a74b4820fc56df6220f966607443359671d858",
+      "source_bytes": 2217619,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        171,
+        40,
+        862,
+        1453
+      ],
+      "source_rgba_sha256": "1c0bbf134e45031201808bed29af0ae887d43726ce1a539cd115748992ea89b4"
+    },
+    {
+      "path": "07_puddle_kid/seated_back.png",
+      "sha256": "d148213edbf98257ba834cf6e84979002583e22fefcef382dffd76aeb42fcbaf",
+      "bytes": 478359,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        96,
+        71,
+        928,
+        1468
+      ],
+      "rgba_sha256": "3454f40147993e3085662a2b07a7a5ada21ef6a0a2cff2849a7a68446d215189",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/07_puddle_kid/seated_back.png",
+      "source_sha256": "e82b2c65d780cde58fde4475c54650e9033420bc8eae42c905b3dd8ba206f629",
+      "source_bytes": 2296594,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        96,
+        71,
+        928,
+        1468
+      ],
+      "source_rgba_sha256": "9f3c30fb288af2138a9f4957b74e23bc28e3a6841c4ea4200c826f1a274e5c2c"
+    },
+    {
+      "path": "07_puddle_kid/seated_left_side.png",
+      "sha256": "c907cda436ece7f44491255510bf787b054a662c1dd107280e09a4441016729b",
+      "bytes": 397568,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        70,
+        108,
+        983,
+        1439
+      ],
+      "rgba_sha256": "484ab1dd24fd11d736ef8ad88b693420bf61bbc208f91522058650e3fdf3f265",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/07_puddle_kid/seated_left_side.png",
+      "source_sha256": "1b6db52a5c1dc58e9b8381108e5c38123ade88639baa7ef3f70dd9835f5ac406",
+      "source_bytes": 2009269,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        70,
+        108,
+        983,
+        1439
+      ],
+      "source_rgba_sha256": "3c5105c23312e930f8a4380e530e1195c752a386863295aa004b53ebb42507bc"
+    },
+    {
+      "path": "08_aviary_pilot/avatar_08_aviary_pilot.png",
+      "sha256": "f5222def9354e67b6f15737ef9e19ad1ce82e0a40246f177e7c8f1996f24a9da",
+      "bytes": 346109,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        215,
+        22,
+        789,
+        1393
+      ],
+      "rgba_sha256": "c3ddb9c7ba978bf0ec8d1c0a936ce8a11ecbf5bbbdd80c7dff1c4cdd3f9c327c",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_08_aviary_pilot.png",
+      "source_sha256": "a13f89161b6429242690fb3190c57fa5a5deb6a4eae0d505ef88a0e666afc3b9",
+      "source_bytes": 2364533,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        214,
+        21,
+        789,
+        1393
+      ],
+      "source_rgba_sha256": "e722968e183e94f23429f7d4457b5b39f36b78f3f6fcfd5d9efd98b5020c137f"
+    },
+    {
+      "path": "08_aviary_pilot/back.png",
+      "sha256": "c801c6a73ff3e02bcf66e651eedf8538d48f46f67f51190b69a83fdf4b7337aa",
+      "bytes": 424595,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        217,
+        0,
+        797,
+        1480
+      ],
+      "rgba_sha256": "b2db54a4d4eb8b4d181d67bd55afd085671d552f38d39ebf4758c34507da7275",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/08_aviary_pilot/back.png",
+      "source_sha256": "c73c285db979bf675d737578aa4ccdac0773eb9ef4e50bc81238a82423b4328c",
+      "source_bytes": 2039874,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        217,
+        0,
+        796,
+        1480
+      ],
+      "source_rgba_sha256": "1bb169a2cdd1592c84b5f94c807d57d782010812dda2caccdbdd2a0405d660a6"
+    },
+    {
+      "path": "08_aviary_pilot/left_side.png",
+      "sha256": "137dc56e0187f2786ac7b899af8c2ad42a510b263a44abadecb92608e7f1cdd7",
+      "bytes": 329001,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        292,
+        11,
+        805,
+        1483
+      ],
+      "rgba_sha256": "c1dad1747f832112e6c642c3e60f781804883ae60701774e0f8327cd5cc9f374",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/08_aviary_pilot/left_side.png",
+      "source_sha256": "d58d04abc968eb26ba1c32cb85550216d4cd42b53e82bbe8e0b0f573397013e2",
+      "source_bytes": 1770997,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        292,
+        11,
+        805,
+        1483
+      ],
+      "source_rgba_sha256": "6c7d0842f69f360b7592897468caf44464d8557fdddafa0b5218af8190a87263"
+    },
+    {
+      "path": "08_aviary_pilot/seated_front.png",
+      "sha256": "f84b3770542d922cf1ca20371741c4f29d8ff908dfb25570e18e92889d2f368e",
+      "bytes": 471149,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        95,
+        26,
+        920,
+        1467
+      ],
+      "rgba_sha256": "107d961f2dfa4f1412021c3f7d3591d5bf5ad2756797d19459c3d72df5736085",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/08_aviary_pilot/seated_front.png",
+      "source_sha256": "b7eb93281667fc092f45756ac9ca41ce7dc8a2997b887e85730928e9cc3670a0",
+      "source_bytes": 2265381,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        95,
+        26,
+        920,
+        1467
+      ],
+      "source_rgba_sha256": "fdf8be63275c7f4723f6af30a123f08636c82ce4cad43fe410ad23ad3ea1eedf"
+    },
+    {
+      "path": "08_aviary_pilot/seated_back.png",
+      "sha256": "e81b01ded70eb3098a1edbd6536d17f2907cef989293674639b56ef06ff3a791",
+      "bytes": 525173,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        95,
+        22,
+        936,
+        1472
+      ],
+      "rgba_sha256": "05d039d8c536d0bd6332be8e9873c23e25e101570aa0889a3a0e5b8fc5d92c6e",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/08_aviary_pilot/seated_back.png",
+      "source_sha256": "4ec650ce7cc4bd2db79082769145d493dea11c7a9b12b6a0ad1b1e5033c161fb",
+      "source_bytes": 2398454,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        95,
+        22,
+        937,
+        1472
+      ],
+      "source_rgba_sha256": "994419fd590bee8e3b3da8090689df7e7933a1ab6e234c4b2641bcc57bc3025b"
+    },
+    {
+      "path": "08_aviary_pilot/seated_left_side.png",
+      "sha256": "1e9e7039ef68b741f507cbaa39f6bb2bdc8cbf69ea78701c601bf122f8818dc2",
+      "bytes": 472754,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        20,
+        48,
+        1008,
+        1453
+      ],
+      "rgba_sha256": "547e3f84b0b9670fb7f66c4fef516be90683362c67dde1e1a6c92f592f64ec25",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/08_aviary_pilot/seated_left_side.png",
+      "source_sha256": "854a329af0485853907708ed84ff6397a1da747096df3085e9105eb254b5203a",
+      "source_bytes": 2233437,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        20,
+        48,
+        1008,
+        1453
+      ],
+      "source_rgba_sha256": "fbe410fa9fc05b7782a2d872c821d081f4db3eff0358eb4be1ffddf6eb17e9f6"
+    },
+    {
+      "path": "09_tortoise_miner/avatar_09_tortoise_miner.png",
+      "sha256": "7b1c1015020f61c84eb2a5844dd29db28c86fd35631ace1d28f44e4c97a2d90a",
+      "bytes": 453309,
+      "dimensions": [
+        1086,
+        1448
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        181,
+        36,
+        896,
+        1402
+      ],
+      "rgba_sha256": "3a0dcf39bc11ae1f6af498fec484805f3e4e497c22051d631b9755135cafc477",
+      "source": "git:eea2d1a59936acf5c60744001aa0688d1c86e9d8:examples/first-person-lab/assets/avatars/avatar_09_tortoise_miner.png",
+      "source_sha256": "9e032226c4e9f624c4a80c736bc6a0de15254d771e01dd63322543e3c8446608",
+      "source_bytes": 2515901,
+      "source_alpha_range": [
+        0,
+        255
+      ],
+      "source_alpha_bounds": [
+        181,
+        36,
+        896,
+        1402
+      ],
+      "source_rgba_sha256": "cff40929257d3435e35af98ad23a75db64263f0eb0c1d33e650a8e9a272881af"
+    },
+    {
+      "path": "09_tortoise_miner/back.png",
+      "sha256": "53640d859d2e00a57323fd21a54ff5aa0868431b46680912de556f2c78be4380",
+      "bytes": 482664,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        172,
+        13,
+        860,
+        1479
+      ],
+      "rgba_sha256": "2c4e5ca9629de74d5f707bc3565f22388576fb36ed20eabbf3734bb5422f2a42",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/09_tortoise_miner/back.png",
+      "source_sha256": "45ceb7c60b0294a1ad5ff23ee8b333db986f92e17169c4d408dc19f4c2f83155",
+      "source_bytes": 2204159,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        172,
+        13,
+        861,
+        1479
+      ],
+      "source_rgba_sha256": "c9af4ad6b1ca44c9ba4539995f287b45a0936a325a1bafc99ad17ba9a178386e"
+    },
+    {
+      "path": "09_tortoise_miner/left_side.png",
+      "sha256": "80b3bf261d2495aea0503fc525612833d7975cbbf59e56bfa54f9ed62b10d250",
+      "bytes": 410656,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        250,
+        34,
+        855,
+        1483
+      ],
+      "rgba_sha256": "a2921b629318b4570d358247c34856f82584d14a4b375793ce3ddf833cd672c9",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/standing_left_back_all/09_tortoise_miner/left_side.png",
+      "source_sha256": "69189d12305606184b4484dad31b287a2fbbb7a8682894aad88721636357bc75",
+      "source_bytes": 1988219,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        250,
+        34,
+        855,
+        1482
+      ],
+      "source_rgba_sha256": "5a07acd4d977b4f27de0af370c685233b80c8acc536680dd043f59f7e2ce2cca"
+    },
+    {
+      "path": "09_tortoise_miner/seated_front.png",
+      "sha256": "38ed617932ad76eb966fd747ff340512fd573e7d3f91fb2197f20caef8885612",
+      "bytes": 520298,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        134,
+        67,
+        914,
+        1452
+      ],
+      "rgba_sha256": "b9ac346cd299aa4f8da228cbeed530c12f6aeb2684ef4880514bd68d80bb76c2",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/09_tortoise_miner/seated_front.png",
+      "source_sha256": "e50f028ab46d9fb6024938ffad2c12a15f4859d9e6c26d56cb1f07b22eca6241",
+      "source_bytes": 2379185,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        134,
+        67,
+        914,
+        1453
+      ],
+      "source_rgba_sha256": "60540d6fe87be4fcfa382d8a928827e3e9207b682ae5cdc0155254632e3cf0da"
+    },
+    {
+      "path": "09_tortoise_miner/seated_back.png",
+      "sha256": "4f09c1491cc7ba4c936f88ca0dea46fe3f660bfd3b157a2f893f5b5c23735bff",
+      "bytes": 587063,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        70,
+        26,
+        965,
+        1449
+      ],
+      "rgba_sha256": "c954b9085b9a4eb2d7ba3b4d5ff46dcc7ece5fcf14be693b6096200230ca717d",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/09_tortoise_miner/seated_back.png",
+      "source_sha256": "d81427b2f8112e716f61b4ff6b22d8669fde0c6b51c9bbfd1b5f212dbd76a855",
+      "source_bytes": 2528404,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        70,
+        26,
+        965,
+        1449
+      ],
+      "source_rgba_sha256": "2880987c2281aaf3660b9e025601ffe428e829a53f88cc5948812b304d08f2b0"
+    },
+    {
+      "path": "09_tortoise_miner/seated_left_side.png",
+      "sha256": "31cd8050a9e3f49f695bc98b4a74d123232f07ba329d2bbc735bd50e912888b4",
+      "bytes": 530314,
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "alpha_range": [
+        0,
+        253
+      ],
+      "alpha_bounds": [
+        11,
+        84,
+        1022,
+        1473
+      ],
+      "rgba_sha256": "fbeefb795ae31b0e14f0959a416442b5a9e67cf35b6b96d1c27c9aa0840550a3",
+      "source": "/home/jdharrison/Desktop/portfolio_integration/character_integration/seated_all/09_tortoise_miner/seated_left_side.png",
+      "source_sha256": "298505f22784c985d887ebe5b5d9867aea8e3668d6fee4ad1836fdaa344dec4d",
+      "source_bytes": 2385208,
+      "source_alpha_range": [
+        0,
+        254
+      ],
+      "source_alpha_bounds": [
+        11,
+        84,
+        1022,
+        1472
+      ],
+      "source_rgba_sha256": "35ce4dcf6054b40b88099db53afe9509ee48afac697e14ff3d1adbaa977f7a41"
+    }
+  ],
+  "front_reference_comparison": [
+    {
+      "avatar_id": "avatar_01",
+      "repository_path": "avatar_01_rust_drifter.png",
+      "repository_sha256": "defe08afba42a08235e1eb934a77f5020fe73c4ec26b13927e908609a01d28f5",
+      "upstream_standing_reference": "avatar_01_rust_drifter.png",
+      "upstream_standing_reference_sha256": "999b2498fd8b4ac33f099155586cc985afb2a91ab7a2891363bde2d9c32c91d8",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_02",
+      "repository_path": "avatar_02_chrome_usher.png",
+      "repository_sha256": "ce97a53e7562448076c3900d8415b8d1879f71b9f3f58c7fb849ea08c727726c",
+      "upstream_standing_reference": "avatar_02_chrome_usher.png",
+      "upstream_standing_reference_sha256": "ad0932486ea3d5901db699d3eb95ce81120c38f8d631a16af1a03ce86c90a859",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_03",
+      "repository_path": "avatar_03_moth_mechanic.png",
+      "repository_sha256": "9ecbc8f642b19f35efa83d2883b33483309df4a629e945771f0049c1c9b664ba",
+      "upstream_standing_reference": "avatar_03_moth_mechanic.png",
+      "upstream_standing_reference_sha256": "ed22286c3ee39c41086d314986af3c8fa885a9af40f7b530204c75e7dc232626",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_04",
+      "repository_path": "avatar_04_velvet_bones.png",
+      "repository_sha256": "8533fb6bb86fc265869ccdde66033f2bf49e8180f10bfab373aacbe2cd589458",
+      "upstream_standing_reference": "avatar_04_velvet_bones.png",
+      "upstream_standing_reference_sha256": "63b25bbe1bd2a16f19f082f34183291e3d03b23230120122d7f9719a43454582",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_05",
+      "repository_path": "avatar_05_spore_scout.png",
+      "repository_sha256": "cf8e280c0d25fee9b5e25ab47ddffe2749d869d42096360d197decea7b1deea4",
+      "upstream_standing_reference": "avatar_05_spore_scout.png",
+      "upstream_standing_reference_sha256": "47759049276ba78faebb8f10d7818875bd9162b7c26a590c5f1370094bec1d83",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_06",
+      "repository_path": "avatar_06_canid_courier.png",
+      "repository_sha256": "684a67068c14a791a7b59faec49f8bfbf9437e2432814dc56308d09542cdb4ed",
+      "upstream_standing_reference": "avatar_06_canid_courier.png",
+      "upstream_standing_reference_sha256": "c5afba687840f53738f8b8f8bd319c6c3d673339cc7e349f9db0e568ae7278c0",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_07",
+      "repository_path": "avatar_07_puddle_kid.png",
+      "repository_sha256": "66be12c6644a362ad5f6a42e882ba06779179bd678670d8e2ad8a67078b05852",
+      "upstream_standing_reference": "avatar_07_puddle_kid.png",
+      "upstream_standing_reference_sha256": "f6a0d07adb00706557ca2c8e1ae00ae7c6180b0b718e10f54fb725b39945d5bd",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_08",
+      "repository_path": "avatar_08_aviary_pilot.png",
+      "repository_sha256": "a13f89161b6429242690fb3190c57fa5a5deb6a4eae0d505ef88a0e666afc3b9",
+      "upstream_standing_reference": "avatar_08_aviary_pilot.png",
+      "upstream_standing_reference_sha256": "1f3816079abb2707e0c681d1880008ed0e036a31c0209c73ec1f90a181dc2594",
+      "matches": false
+    },
+    {
+      "avatar_id": "avatar_09",
+      "repository_path": "avatar_09_tortoise_miner.png",
+      "repository_sha256": "9e032226c4e9f624c4a80c736bc6a0de15254d771e01dd63322543e3c8446608",
+      "upstream_standing_reference": "avatar_09_tortoise_miner.png",
+      "upstream_standing_reference_sha256": "aea51a94235234a1b5891883f87c0e25b44964abe7c136482dd7af9731b542ae",
+      "matches": false
+    }
+  ],
+  "source_repository_revision": "eea2d1a59936acf5c60744001aa0688d1c86e9d8",
+  "optimization": {
+    "encoding": "indexed-color PNG",
+    "lossless": false,
+    "pixel_comparison": "decoded RGBA8, including RGB at alpha zero",
+    "source_png_bytes": 115849956,
+    "runtime_png_bytes": 21913252
+  },
+  "front_reference_comparison_scope": "Historical pre-optimization repository fronts versus upstream standing-front references; not runtime PNG hashes"
+}

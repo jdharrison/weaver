@@ -610,7 +610,7 @@ mod tests {
                 assert!(scale > 0.0 && scale <= 1.0);
                 let image_uv = |uv: f32| (uv - 0.5) / scale + 0.5;
                 let start = (1.0 - scale) * 0.5;
-                let end = (1.0 + scale) * 0.5;
+                let end = f32::midpoint(1.0, scale);
                 assert!(image_uv(start).abs() < 1e-6);
                 assert!((image_uv(end) - 1.0).abs() < 1e-6);
                 assert_eq!(image_uv(0.5), 0.5);

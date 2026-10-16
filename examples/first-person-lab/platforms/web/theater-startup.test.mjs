@@ -88,6 +88,35 @@ test("trusted Play is synchronous and dismissal requires audible playback AND a 
   f.ui.setSceneReady(true); assert.equal(f.root.hidden, true);
 });
 
+test("initial muted autoplay pending disables Play and shows starting until it settles", (t) => {
+  const f = fixture(t); f.ui.setSceneReady(true); f.ready();
+  f.state.soundPending = true; f.state.playing = true; f.ui.update();
+  assert.equal(f.play.disabled, true);
+  assert.equal(f.root.dataset.state, "starting");
+  assert.match(f.status.textContent, /Starting playback/);
+  click(f.play); assert.equal(f.calls.some(([kind]) => kind === "play"), false);
+  f.state.soundPending = false; f.ui.update();
+  assert.equal(f.play.disabled, false);
+  assert.equal(f.root.dataset.state, "ready");
+  click(f.play); assert.deepEqual(f.calls.at(-1), ["play", true]);
+});
+
+test("denied sound dismisses into the room only after muted fallback settles with a decoded frame", (t) => {
+  const f = fixture(t); f.ui.setSceneReady(true); f.ready(); click(f.play);
+  Object.assign(f.state, { soundError: true, muted: true, audible: false, playing: true, soundPending: true, frameReady: true });
+  f.ui.update();
+  assert.equal(f.root.hidden, false);
+  assert.equal(f.root.dataset.state, "starting");
+  assert.doesNotMatch(f.status.textContent, /couldn’t start/);
+  f.state.frameReady = false; f.state.soundPending = false; f.ui.update();
+  assert.equal(f.root.hidden, false);
+  f.state.frameReady = true; f.ui.update();
+  assert.equal(f.root.hidden, true);
+  assert.equal(f.canvas.inert, false);
+  assert.equal(f.calls.filter(([kind]) => kind === "play").length, 1);
+  assert.equal(f.calls.filter(([kind]) => kind === "dismiss").length, 1);
+});
+
 test("a UTC source transition during Play prepares the replacement and requires a fresh gesture", (t) => {
   const f = fixture(t);
   f.ui.setSceneReady(true); f.ready();

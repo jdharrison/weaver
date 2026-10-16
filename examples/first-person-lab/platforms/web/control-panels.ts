@@ -1,5 +1,6 @@
 import type { TheaterVideoState } from "./theater-video-player.js";
 
+
 export interface FullscreenState { available: boolean; active: boolean; pending: boolean; error: boolean }
 declare global {
   interface Window {
@@ -125,7 +126,7 @@ export function installCanvasInteractions(options: CanvasInteractionOptions): { 
     }
     // An unlocked mouse click must still be able to resume look without standing up.
     if (target === 200 && !locked && event.pointerType !== "touch") return 0;
-    return target === 1 || target === 2 || target === 3 || isSeatInteraction(target) ? target : 0;
+    return target === 1 || target === 2 || target === 3 || target === 4 || target === 5 || isSeatInteraction(target) ? target : 0;
   };
   const down = (event: PointerEvent): void => {
     if (disposed || !event.isTrusted || event.button !== 0) return;

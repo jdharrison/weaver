@@ -9,7 +9,7 @@
     <meta name="weaver-theater-schedule" content="/weaver/theater-schedule.json">
     <meta name="weaver-theater-video" content="/weaver/assets/theater/Music_SpaceNoirJazz.mp4">
     <link rel="icon" href="data:,">
-    <title>jdharrison.com</title>
+    <title>jdharrison.com - portfolio</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -66,10 +66,10 @@
 
     <div id="theater-subtitle-hud" class="theater-subtitle-hud" aria-live="off" hidden></div>
 
-    <!-- Retain subtitle state bindings; the in-world control replaces this overlay. -->
+    <!-- Retain independent subtitle state bindings for the browser HUD. -->
     <section id="subtitle-controls" class="subtitle-controls" aria-label="Movie subtitles" hidden>
-      <button id="theater-subtitles" type="button" aria-pressed="true" aria-describedby="theater-subtitle-explanation" disabled>Subtitles: on (required)</button>
-      <p id="theater-subtitle-explanation">Subtitles stay on while movie audio is not audible.</p>
+      <button id="theater-subtitles" type="button" aria-pressed="true" aria-describedby="theater-subtitle-explanation">Subtitles: on</button>
+      <p id="theater-subtitle-explanation">Toggle available movie captions independently of audio.</p>
     </section>
 
     <section id="theater-controls" class="theater-controls" aria-label="Theater movie controls">
@@ -89,7 +89,7 @@
       <label class="theater-seek">Seek <input id="theater-seek" type="range" min="0" max="0" step="0.01" value="0" disabled></label>
       <div class="theater-lights">
         <label>Lobby light <input id="theater-lobby-light" type="range" min="0" max="1" step="0.05" value="1" disabled></label>
-        <label>Auditorium light <input id="theater-auditorium-light" type="range" min="0" max="1" step="0.01" value="0.20" disabled></label>
+        <label>Auditorium light <input id="theater-auditorium-light" type="range" min="0" max="1" step="0.01" value="0.48" disabled></label>
       </div>
       <p id="theater-status" role="status">Loading movie metadata…</p>
     </section>
@@ -97,7 +97,7 @@
       aria-labelledby="theater-startup-title" aria-describedby="theater-startup-description theater-startup-status" hidden>
       <div class="theater-startup-card">
         <h1 id="theater-startup-title">Enter the theater</h1>
-        <p id="theater-startup-description">Movie sound is optional. You can change it using Sound in the room.</p>
+        <p id="theater-startup-description">Choose Play with sound to enter with audio, or continue silently. You can change Audio later in the controls HUD (Q or the bottom-right button).</p>
         <p id="theater-startup-status" role="status" aria-live="polite" aria-atomic="true">Preparing the current movie…</p>
         <div class="theater-startup-actions">
           <button id="theater-startup-play" type="button" disabled>Play with sound</button>
@@ -106,6 +106,19 @@
         </div>
       </div>
     </section>
+    <button id="controller-launcher" class="controller-launcher" type="button" aria-label="Open controls (Q)"
+      aria-haspopup="dialog" aria-controls="controller-dialog" aria-expanded="false" hidden>
+      <img src="/weaver/assets/controller/collapsed_state.png" alt="" draggable="false">
+    </button>
+    <div id="controller-overlay" class="controller-overlay" hidden>
+      <section id="controller-dialog" class="controller-dialog" role="dialog" aria-modal="true"
+        aria-label="Room controls" aria-describedby="controller-status" tabindex="-1">
+        <button id="controller-audio" class="controller-row controller-audio" type="button" aria-label="Audio" aria-pressed="true" data-state="on"></button>
+        <button id="controller-subtitles" class="controller-row controller-subtitles" type="button" aria-label="Subtitles" aria-pressed="true" data-state="on"></button>
+        <button id="controller-fullscreen" class="controller-row controller-fullscreen" type="button" aria-label="Fullscreen" aria-pressed="false" data-state="off"></button>
+        <p id="controller-status" class="controller-status" role="status" aria-live="polite"></p>
+      </section>
+    </div>
     <script type="module" src="main.js"></script>
   </body>
 </html>

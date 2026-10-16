@@ -31,7 +31,8 @@ pub struct RenderFrame {
 /// WGPU renderer for Weaver.
 ///
 /// Background and scene share optional 4x color and matching depth attachments,
-/// resolved once before single-sample UI/text. No fullscreen filtering is applied.
+/// resolved once before single-sample UI/text. Browsers render into a reduced
+/// surface, with overlays retaining full-window layout coordinates.
 /// For 4-byte color and `Depth32Float`, 4x adds about 28 bytes per surface pixel
 /// over single-sample depth (excluding the unchanged swapchain and GPU padding).
 pub struct WgpuRenderer {
@@ -123,18 +124,20 @@ impl WgpuRenderer {
         let sprite_pipeline = SpritePipeline::new(&context.device, format, context.sample_count)?;
         let particle_pipeline =
             ParticlePipeline::new(&context.device, format, context.sample_count)?;
+        // UI layout stays in the physical viewport; text is rasterized directly
+        // at surface resolution with positions mapped from that same viewport.
         let text_pipeline = TextPipeline::new(
             &context.device,
             &context.queue,
             format,
-            context.surface_size.0,
-            context.surface_size.1,
+            context.surface_size.0.max(1),
+            context.surface_size.1.max(1),
         )?;
         let ui_pipeline = UiPipeline::new(
             &context.device,
             format,
-            context.surface_size.0,
-            context.surface_size.1,
+            context.size.0.max(1),
+            context.size.1.max(1),
         )?;
 
         let default_texture =
@@ -319,13 +322,13 @@ impl WgpuRenderer {
         self.msaa_color = create_msaa_color(&self.context);
         self.text_pipeline.resize(
             &self.context.queue,
-            self.context.surface_size.0,
-            self.context.surface_size.1,
+            self.context.surface_size.0.max(1),
+            self.context.surface_size.1.max(1),
         );
         self.ui_pipeline.resize(
             &self.context.queue,
-            self.context.surface_size.0,
-            self.context.surface_size.1,
+            self.context.size.0.max(1),
+            self.context.size.1.max(1),
         );
     }
 
@@ -502,8 +505,12 @@ impl WgpuRenderer {
         }
 
         // UI and text stay single-sample on the resolved surface, without depth.
-        self.text_pipeline
-            .prepare(&self.context.device, &self.context.queue, &snapshot.text)?;
+        self.text_pipeline.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &snapshot.text,
+            self.context.size,
+        )?;
         let ui_rects: Vec<weaver_render::UiRect> = snapshot
             .ui
             .iter()

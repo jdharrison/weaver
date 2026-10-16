@@ -13,8 +13,19 @@ test("top-right subtitle controls stay hidden without removing caption bindings"
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
 });
 
-test("audibility forces captions without replacing the preference", () => {
-  assert.deepEqual(subtitlePolicy(false, false), { enabled: true, forced: true, panel: 6 });
+test("subtitle font is reduced by 35 percent across the responsive range", () => {
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  const rule = css.match(/\.theater-subtitle-hud\s*\{([^}]+)\}/)?.[1];
+  const sizes = rule?.match(/font:\s*600 clamp\(([\d.]+)rem, ([\d.]+)vw, ([\d.]+)rem\)/);
+  assert.ok(sizes);
+  for (const [index, original] of [1.25, 2.8, 2].entries()) {
+    assert.ok(Math.abs(Number(sizes[index + 1]) - original * 0.65) < 1e-10);
+  }
+});
+
+test("subtitle policy is independent of audibility", () => {
+  assert.deepEqual(subtitlePolicy(false, false), { enabled: false, forced: false, panel: 1 });
+  assert.deepEqual(subtitlePolicy(true, false), { enabled: true, forced: false, panel: 3 });
   assert.deepEqual(subtitlePolicy(false, true), { enabled: false, forced: false, panel: 1 });
   assert.deepEqual(subtitlePolicy(true, true), { enabled: true, forced: false, panel: 3 });
 });
@@ -45,7 +56,7 @@ test("caption association follows the actual movie after manual pause/seek or a 
   f.control.setSource(captionsForMedia(entries, scheduled, f.media.source, origin));
   const track = f.tracks[0];
   f.load(track, "Movie cue");
-  f.control.update(false); // Paused audio forces on; it does not change association.
+  f.control.update(false); // Paused audio does not change preference or association.
   f.control.setSource(captionsForMedia(entries, scheduled, f.media.source, origin));
   assert.equal(f.tracks.length, 1);
   assert.equal(f.hud.textContent, "Movie cue");
@@ -75,19 +86,41 @@ function fixture(saved) {
   };
   return { media, button, hud, explanation, control, tracks, writes, panels, load };
 }
-test("saved off restores after forced mode, forced clicks never persist, missing/blocked storage defaults on", () => {
+test("saved off is honored while inaudible; toggles persist independently and storage defaults on", () => {
   const f = fixture("off");
-  assert.equal(f.button.disabled, true);
-  f.control.toggle(); assert.deepEqual(f.writes, []);
-  f.control.update(true); assert.equal(f.panels.at(-1), 1);
+  assert.equal(f.button.disabled, false);
+  assert.equal(f.control.enabled, false);
+  assert.equal(f.panels.at(-1), 1);
   f.control.toggle(); assert.deepEqual(f.writes, [[SUBTITLE_PREFERENCE_KEY, "on"]]);
-  f.control.update(false); assert.equal(f.panels.at(-1), 6);
+  assert.equal(f.control.enabled, true);
+  f.control.update(false); assert.equal(f.panels.at(-1), 3);
   f.control.update(true); assert.equal(f.panels.at(-1), 3);
+  f.button.dispatchEvent(new Event("click"));
+  f.control.update(false);
+  assert.equal(f.control.enabled, false);
+  assert.equal(f.panels.at(-1), 1);
+  assert.deepEqual(f.writes.at(-1), [SUBTITLE_PREFERENCE_KEY, "off"]);
   for (const saved of [null, new Error("blocked")]) {
-    const other = fixture(saved); other.control.update(true); assert.equal(other.panels.at(-1), 3); other.control.dispose();
+    const other = fixture(saved); assert.equal(other.control.enabled, true); assert.equal(other.panels.at(-1), 3); other.control.dispose();
   }
   f.control.dispose();
 });
+test("inaudible captions can be hidden and restored without changing the movie or track", () => {
+  const f = fixture("off");
+  f.control.setSource("/movie.vtt"); const track = f.tracks[0];
+  f.load(track, "Current cue");
+  assert.equal(f.hud.hidden, true);
+  f.control.toggle();
+  assert.equal(f.hud.textContent, "Current cue");
+  f.control.toggle(); f.control.update(false);
+  assert.equal(f.hud.hidden, true);
+  assert.equal(f.hud.textContent, "");
+  assert.equal(f.tracks.length, 1);
+  assert.equal(f.media.source, "/movie.mp4");
+  assert.equal(f.media.currentTime, 1);
+  f.control.dispose();
+});
+
 test("native hidden tracks render plain text, suppress stale loads/cues and clean up without touching video", () => {
   const f = fixture(null);
   f.control.setSource("/one.vtt"); const old = f.tracks[0];

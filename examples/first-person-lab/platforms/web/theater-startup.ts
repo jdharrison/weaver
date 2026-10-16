@@ -86,12 +86,18 @@ export class TheaterStartup {
     const state = player.state;
     root.hidden = !this.visible;
     if (!this.visible) return;
-    // A fulfilled play promise is not proof of either audible playback or a frame.
-    if (this.starting && state.audible && state.frameReady) { this.dismiss(); return; }
-    const failed = this.actionFailed || state.failed || schedule.state.failed || state.soundError;
+    // Audio denial is not movie failure: a settled muted fallback may enter the room.
+    const silentFallback = state.soundError && state.playing && state.muted;
+    if (!state.failed && !schedule.state.failed && state.frameReady &&
+        ((this.starting && state.audible) || (silentFallback && !state.soundPending))) {
+      this.dismiss(); return;
+    }
+    const failed = this.actionFailed || state.failed || schedule.state.failed ||
+      (state.soundError && !state.soundPending && !silentFallback);
+    const starting = this.starting || state.soundPending || silentFallback;
     if (failed) this.starting = false;
     const ready = this.metadataReady();
-    const waiting = !failed && (this.starting || !ready);
+    const waiting = !failed && (starting || !ready);
     if (!waiting) { this.cancelTimer(); this.slow = false; }
     else if (!this.slow && this.timer === undefined) {
       this.timer = setTimeout(() => {
@@ -103,11 +109,11 @@ export class TheaterStartup {
     }
     const message = failed ? "The movie couldn’t start. Retry, or continue without sound." :
       this.slow ? "This is taking longer than expected. Retry, or continue without sound." :
-      this.starting ? (state.buffering ? "Buffering the current movie…" : "Starting playback…") :
+      starting ? (state.buffering ? "Buffering the current movie…" : "Starting playback…") :
       ready ? "Ready" : "Preparing the current movie…";
     if (status.textContent !== message) status.textContent = message;
-    root.dataset.state = failed ? "failed" : this.slow ? "slow" : this.starting ? "starting" : ready ? "ready" : "preparing";
-    play.disabled = failed || !ready || this.starting;
+    root.dataset.state = failed ? "failed" : this.slow ? "slow" : starting ? "starting" : ready ? "ready" : "preparing";
+    play.disabled = failed || !ready || starting;
     retry.hidden = !failed && !this.slow;
     retry.disabled = schedule.state.loading;
     const active = this.options.document.activeElement;

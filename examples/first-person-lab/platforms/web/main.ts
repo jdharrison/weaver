@@ -15,11 +15,13 @@ import { scheduleConnectionLog } from "./connection-log.js";
 import { OutboundScheduler, parsePublishRateHz, PUBLISH_RATE_CONFIGURATION_ERROR } from "./outbound-scheduler.js";
 import { DEFAULT_THEATER_VIDEO, TheaterVideoPlayer, type TheaterVideoState } from "./theater-video-player.js";
 import { DEFAULT_THEATER_SCHEDULE, TheaterScheduleController } from "./theater-schedule-controller.js";
-import { FullscreenControl, fullscreenPanelState, installCanvasInteractions, isSeatInteraction, SEAT_COUNT, soundPanelState } from "./control-panels.js";
+import { FullscreenControl, fullscreenPanelState, installCanvasInteractions, isSeatInteraction, SEAT_COUNT, soundPanelState, type FullscreenState } from "./control-panels.js";
 import { resolveTheaterSchedule, type TheaterSchedule } from "./theater-schedule.js";
 import { captionsForMedia, TheaterSubtitles } from "./theater-subtitles.js";
 import { fetchWasmWithProgress } from "./wasm-loading.js";
 import { TheaterStartup } from "./theater-startup.js";
+import { ControllerHud } from "./controller-hud.js";
+import { isPortfolioInteraction, openPortfolioLink } from "./portfolio-links.js";
 
 type NpcInteractionSnapshot = {
   version: 1; npcId: string; profile: string; displayName: string;
@@ -212,6 +214,9 @@ let npcCycleKey = "";
 let hostChatFocused = false;
 let theaterControlsFocused = false;
 let theaterStartupFocused = false;
+let controllerHudFocused = false;
+let controllerHud: ControllerHud | undefined;
+let subtitlePanelState = 3;
 let enterHeld = false;
 const heldGameKeys = new Map<string, string>();
 const movementCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight", "ShiftLeft", "ShiftRight"]);
@@ -259,9 +264,12 @@ const subtitles = new TheaterSubtitles({
     getItem: (key) => window.localStorage.getItem(key),
     setItem: (key, value) => window.localStorage.setItem(key, value),
   },
-  panel: (state) => setPanelState(3, state),
+  panel: (state) => { subtitlePanelState = state; setPanelState(3, state); syncControllerHud(); },
 });
-const fullscreenControl = new FullscreenControl(window, document, (state) => setPanelState(2, fullscreenPanelState(state)));
+const fullscreenControl = new FullscreenControl(window, document, (state) => {
+  setPanelState(2, fullscreenPanelState(state));
+  syncControllerHud(state);
+});
 const theaterVolume = requiredElement<HTMLInputElement>("theater-volume");
 const theaterSeek = requiredElement<HTMLInputElement>("theater-seek");
 const theaterTime = requiredElement<HTMLElement>("theater-time");
@@ -279,6 +287,7 @@ const theaterPlayer = new TheaterVideoPlayer({
   media: theaterMedia,
 
   scheduled: true,
+  onRecover: () => theaterSchedule?.recoverPlayback(),
   attach: () => wasm.attach_theater_video(theaterMedia),
   markFrame: () => wasm.mark_theater_video_frame(),
   detach: () => wasm.detach_theater_video(),
@@ -307,7 +316,7 @@ const theaterPlayer = new TheaterVideoPlayer({
 theaterSchedule = new TheaterScheduleController({
   player: theaterPlayer,
   media: theaterMedia,
-  waitForGesture: true,
+  waitForGesture: false,
   path: document.querySelector<HTMLMetaElement>('meta[name="weaver-theater-schedule"]')?.content || DEFAULT_THEATER_SCHEDULE,
   origin: window.location.origin,
   localSource: document.querySelector<HTMLMetaElement>('meta[name="weaver-theater-video"]')?.content.trim() || DEFAULT_THEATER_VIDEO,
@@ -341,24 +350,39 @@ theaterStartup = new TheaterStartup({
   play: requiredElement<HTMLButtonElement>("theater-startup-play"),
   retry: requiredElement<HTMLButtonElement>("theater-startup-retry"),
   continueMuted: requiredElement<HTMLButtonElement>("theater-startup-continue"),
-  background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls],
+  background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls, requiredElement("controller-launcher")],
   player: theaterPlayer,
   schedule: theaterSchedule,
   onOpenChange: (open) => {
     if (open) {
+      clearHeldGameInputs();
+      theaterStartupFocused = true;
+      controllerHud?.close(false);
       if (document.pointerLockElement) document.exitPointerLock?.();
       enterHeld = false;
-      clearHeldGameInputs();
     }
     theaterStartupFocused = open;
     syncGameInputFocus();
   },
   onDismiss: () => {
-    if (lifecycle.canJoin && !hostChatFocused && !theaterControlsFocused) {
+    if (lifecycle.canJoin && !hostChatFocused && !theaterControlsFocused && !controllerHudFocused) {
       requiredElement("scene").focus({ preventScroll: true });
     }
   },
 });
+
+function syncControllerHud(fullscreenState?: FullscreenState): void {
+  if (!controllerHud) return;
+  const state = theaterPlayer.state;
+  const fullscreen = fullscreenState ?? fullscreenControl.state;
+  controllerHud.update({
+    audioEnabled: state.audioEnabled, audioAudible: state.audible, audioPending: state.soundPending || !!theaterSchedule?.state.loading,
+    audioFailed: state.failed || state.soundError || !!theaterSchedule?.state.failed,
+    audioReady: state.ready, subtitles: subtitlePanelState === 3,
+    fullscreen: fullscreen.active, fullscreenAvailable: fullscreen.available,
+    fullscreenPending: fullscreen.pending, fullscreenError: fullscreen.error,
+  });
+}
 
 function syncTheaterSound(state: TheaterVideoState): void {
   subtitles.update(state.audible);
@@ -366,6 +390,7 @@ function syncTheaterSound(state: TheaterVideoState): void {
   const scheduleState = theaterSchedule?.state;
   setPanelState(1, state.disposed ? playerState : scheduleState?.failed ? 4 :
     scheduleState?.loading ? 5 : playerState);
+  syncControllerHud();
 }
 
 theaterFollow.addEventListener("change", () => theaterSchedule?.setFollowing(theaterFollow.checked));
@@ -394,6 +419,7 @@ function movieTime(seconds: number): string {
 // Host shutdown is independent of the page/network lifecycle and safe to repeat.
 globalThis.weaverDisposeTheaterVideo = (): void => {
   cancelTheaterStart();
+  controllerHud?.dispose();
   theaterStartup?.dispose();
   if (!npcDisposed) {
     npcDisposed = true;
@@ -457,7 +483,7 @@ for (const controlRoot of [theaterPanel, subtitleControls]) {
 canvasInteractions = installCanvasInteractions({
   window, document, canvas: requiredElement<HTMLCanvasElement>("scene"),
   enabled: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused &&
-    !theaterStartupFocused && !editableElement(document.activeElement),
+    !theaterStartupFocused && !controllerHudFocused && !editableElement(document.activeElement),
   pick: (x, y) => {
     try { return wasm.pick_scene_interaction(x, y); }
     catch { return 0; } // Stale bindings fail closed; never guess a seat or retry a panel-only pick.
@@ -466,6 +492,8 @@ canvasInteractions = installCanvasInteractions({
     if (isSeatInteraction(target)) {
       try { wasm.activate_seat_interaction(target); }
       catch { /* A rejected/retired target must not fall through to another action. */ }
+    } else if (isPortfolioInteraction(target)) {
+      if (!openPortfolioLink(window, target)) theaterStatus.textContent = "LinkedIn profile link is not configured yet.";
     } else if (target === 3) subtitles.toggle();
     else if (target === 2) fullscreenControl.toggle();
     else if (target === 1) {
@@ -481,9 +509,43 @@ canvasInteractions = installCanvasInteractions({
   },
 });
 
+if (document.documentElement.dataset.weaverPresentation === "minimal") {
+  controllerHud = new ControllerHud({
+    window, document,
+    launcher: requiredElement<HTMLButtonElement>("controller-launcher"),
+    overlay: requiredElement("controller-overlay"), dialog: requiredElement("controller-dialog"),
+    audio: requiredElement<HTMLButtonElement>("controller-audio"),
+    subtitles: requiredElement<HTMLButtonElement>("controller-subtitles"),
+    fullscreen: requiredElement<HTMLButtonElement>("controller-fullscreen"), status: requiredElement("controller-status"),
+    background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls],
+    canOpen: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    canResume: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    clearInputs: clearHeldGameInputs,
+    ownership: (open) => { controllerHudFocused = open; enterHeld = false; syncGameInputFocus(); },
+    resume: (restoreLock) => {
+      requiredElement("scene").focus({ preventScroll: true });
+      if (restoreLock) globalThis.weaverResumeGameInput();
+    },
+    audioAction: () => {
+      if (theaterPlayer.state.audioEnabled) theaterPlayer.setMuted(true);
+      else if (theaterPlayer.state.soundPending) {
+        syncControllerHud();
+        return;
+      } else if (theaterPlayer.state.failed || theaterSchedule?.state.failed) {
+        theaterPlayer.setMuted(true);
+        theaterSchedule?.retry();
+      } else if (theaterPlayer.state.ready && !theaterSchedule?.state.loading) theaterSchedule?.play(true);
+      syncControllerHud();
+    },
+    subtitlesAction: () => subtitles.toggle(),
+    fullscreenAction: () => fullscreenControl.toggle(),
+  });
+  syncControllerHud();
+}
+
 function syncGameInputFocus(): void {
   canvasInteractions?.reset();
-  if (wasmReady) wasm.set_host_chat_focus(hostChatFocused || theaterControlsFocused || theaterStartupFocused);
+  if (wasmReady) wasm.set_host_chat_focus(hostChatFocused || theaterControlsFocused || theaterStartupFocused || controllerHudFocused);
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -574,7 +636,7 @@ function webTransportAvailable(): boolean {
 function updateControls(state: ConnectionState): void {
   networkState = state;
   const label = lifecycle.failed || !webTransportAvailable() ? "Unavailable" :
-    state === "online" ? "Connected" : state === "connecting" ? "Connecting" :
+    state === "online" ? "CONNECTED" : state === "connecting" ? "Connecting" :
     hasConnected ? "Disconnected" : "Offline";
   // Only mutate the live region on transitions, not on repeated readiness updates.
   if (connectionLabel.textContent !== label) {
@@ -738,17 +800,18 @@ function clearHeldGameInputs(): void {
 
 globalThis.weaverSetChatFocus = (active: boolean): boolean => {
   if (typeof active !== "boolean" || !wasmReady || lifecycle.failed || lifecycle.suspended) return false;
+  clearHeldGameInputs();
+  hostChatFocused = active;
+  if (active) controllerHud?.close(false);
   if (active && document.pointerLockElement && typeof document.exitPointerLock === "function") {
     document.exitPointerLock();
   }
-  clearHeldGameInputs();
-  hostChatFocused = active;
   syncGameInputFocus();
   return true;
 };
 
 globalThis.weaverResumeGameInput = (): boolean => {
-  if (!wasmReady || !lifecycle.canJoin || hostChatFocused || theaterControlsFocused || theaterStartupFocused) return false;
+  if (!wasmReady || !lifecycle.canJoin || hostChatFocused || theaterControlsFocused || theaterStartupFocused || controllerHudFocused) return false;
   const canvas = document.getElementById("scene");
   if (canvas === null) return false;
   // Called synchronously from the user's accepted send, never from lifecycle cleanup.
@@ -775,6 +838,12 @@ function editableTarget(event: Event): boolean {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (controllerHud?.contains(event.target)) return;
+  if (controllerHudFocused) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
   if (event.composedPath().includes(theaterPanel) || event.composedPath().includes(subtitleControls)) return;
   if (editableTarget(event)) return;
   if (hostChatFocused || theaterControlsFocused) {
@@ -1387,6 +1456,8 @@ globalThis.weaverSceneFatal = (message: string): void => {
 };
 
 function suspendPage(): void {
+  clearHeldGameInputs();
+  controllerHud?.close(false);
   lifecycle.suspend();
   cancelTheaterStart();
   theaterStartup?.setVisible(false);
