@@ -41,6 +41,23 @@ and [the reviewed web dependency-notice inventory](docs/WEB-LICENSES.md). Web
 packaging now includes the reviewed Rust/WASM notices; native archives still
 require their own target-specific inventory.
 
+## Git LFS assets
+
+Install Git LFS before checking out or building this repository. PNG artwork,
+MP4 media, WASM binaries, and ZIP source packs use LFS from the conversion commit
+onward; older Git history is retained without rewriting published commits.
+After cloning an existing checkout with LFS smudging disabled, run:
+
+```sh
+git lfs install --local
+git lfs pull
+git lfs fsck
+```
+
+Builds require hydrated asset bytes, not LFS pointer files. Each CI checkout of
+Weaver enables `lfs: true`. Push with the installed LFS pre-push hook enabled so
+asset objects are uploaded before the branch revision becomes available.
+
 ## Workspace layout
 
 ```text

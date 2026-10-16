@@ -21,6 +21,7 @@ jobs:
       - name: Check out weaver
         uses: actions/checkout@v4
         with:
+          lfs: true
           submodules: recursive
           persist-credentials: false
 
@@ -65,6 +66,7 @@ jobs:
       - name: Check out weaver
         uses: actions/checkout@v4
         with:
+          lfs: true
           submodules: recursive
           persist-credentials: false
 
@@ -116,6 +118,7 @@ jobs:
       - name: Check out weaver
         uses: actions/checkout@v4
         with:
+          lfs: true
           submodules: recursive
           persist-credentials: false
 
