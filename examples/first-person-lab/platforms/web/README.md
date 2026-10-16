@@ -172,9 +172,11 @@ presentation, retaining its functional source controls for full presentation.
 Minimal web uses the browser controller HUD described below; native and non-minimal
 browser presentation retain world-space Sound, Subtitles and Fullscreen panels.
 Minimal web skips world-panel geometry and picking, but preserves seat interactions.
-The first-run confirmation remains after scene readiness with **Play with sound**
-as the preferred choice, while the current UTC movie automatically starts muted
-behind it (`waitForGesture: false`). **Play with sound** synchronously aligns,
+Minimal presentation opens the existing expanded controller once after combined
+WASM/renderer readiness and visibility, without constructing the legacy startup
+confirmation or waiting for media. The current UTC movie still starts muted
+independently (`waitForGesture: false`). Non-minimal diagnostic presentation retains
+the legacy first-run confirmation with **Play with sound** as the preferred choice. **Play with sound** synchronously aligns,
 unmutes and calls `play()` in the trusted click; success closes the confirmation
 after observed audible playback and a decoded frame accepted by the bridge. If
 audio is rejected, one muted fallback attempt is allowed; silent playback success
@@ -216,10 +218,12 @@ muted. `main.ts` uses `scheduled: true`: the element starts **muted** at volume
 in this mode. There is no native `autoplay` attribute. The shell sets the schedule
 controller's `waitForGesture: false`: muted playback proceeds after attachment,
 visibility and UTC alignment (including completion of an asynchronous seek), even
-while the first-run prompt remains visible. It does not wait for the whole clip
-to download. Desired audio is separately ON initially (`state.audioEnabled`), but
-browser autoplay policy keeps actual media muted until a trusted gesture; this is
-not proof of audible output.
+while the controller (or diagnostic first-run prompt) remains visible. It does not
+wait for the whole clip to download. Minimal startup sets desired audio OFF once
+with `player.setMuted(true)`, before playback; the first ready Audio press therefore
+enables sound directly in the gesture. Diagnostic mode retains desired audio ON
+initially (`state.audioEnabled`), separately from actual muted autoplay. Neither
+desired preference nor a successful play promise is proof of audible output.
 If even muted playback is denied, “Autoplay blocked/unavailable · press Play”
 leaves a manual retry available. Play preserves the current mute setting.
 In non-minimal browser mode, the world Sound panel reopens the startup confirmation
@@ -338,8 +342,16 @@ stimuli in the smoke are synthetic. No deployed validation is implied.
 
 ### Minimal browser controller HUD
 
-`controller-hud.ts` owns the minimal-only DOM presentation. Collapsed artwork stays
-bottom-right; **Q**, click or a mobile tap opens the expanded artwork instantly in
+`controller-hud.ts` owns the minimal-only DOM presentation. On the first combined
+WASM/renderer-ready and visible scene, the expanded controller opens exactly once,
+even if the manifest or movie is slow or failed. An initially hidden scene waits
+until first visibility. Dismissal, tab restoration, BFCache restoration and duplicate
+ready callbacks do not reopen it. Host chat ownership defers initial presentation;
+hidden, fatal or disposed scenes never acquire focus. Minimal mode does not construct
+`TheaterStartup`; non-minimal diagnostics retain that optional legacy flow.
+
+After dismissal, collapsed artwork stays bottom-right; **Q**, click or a mobile tap
+opens the expanded artwork instantly in
 the same corner, over a viewport-wide **70% black** backdrop. The only three large
 sprite buttons are **Audio**, **Subtitles** and **Fullscreen**. Images are preloaded
 at initialization; interaction does not wait for image loading/decoding. A completed
@@ -348,13 +360,24 @@ and Q is not intercepted while editing chat or composing text.
 
 Opening clears held keys, releases pointer lock, traps focus and suppresses
 gameplay input only; media, simulation and networking keep their own lifetimes.
-Outside input is consumed rather than forwarded to the canvas. Explicit dismissal
-may restore prior desktop mouse lock best-effort, but blur/cleanup never captures.
+Outside input is consumed rather than forwarded to the canvas. Startup dismissal
+by Q, Escape or a completed backdrop gesture restores canvas keyboard focus only:
+no pointer lock, fullscreen or audio is requested. After manual reopening, explicit
+dismissal may restore prior desktop mouse lock best-effort, but blur/cleanup never
+captures or restores focus.
 The host reports controller-open state to Flutter, hiding its mobile chat entry
 while expanded. Focus-only chat close restores iframe keyboard focus so Q works
 without mouse capture. Fullscreen uses observed browser/parent-bridge state;
 Audio's sprite reflects desired `state.audioEnabled`, with separate pending,
-blocked and actual audibility status.
+blocked and actual audibility status. Audio starts OFF. Selecting Audio while media
+is preparing never queues a later unmute; a failed source/manifest can be retried
+silently, followed by a fresh ready press for sound. Pending enabling attempts can
+still be switched OFF, and browser-policy rejection does not replay audible intent.
+All Audio clicks require `event.isTrusted`, including enabling, muting/cancellation
+and retry: synthetic `.click()` or dispatched events cannot change sound or start
+retry downloads. Failures remain visible even with desired Audio ON; the status
+instructs the user to turn OFF, then retry/turn ON with a fresh press when ready.
+Pending ON status explicitly offers OFF to cancel sound.
 
 All eight PNGs are site-owned at `/weaver/assets/controller/`, not embedded in
 WASM or supplied by this standalone engine checkout. The site asset README at

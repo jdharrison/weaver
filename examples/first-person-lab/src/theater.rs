@@ -450,16 +450,16 @@ impl Theater {
             wall,
         );
 
-        // Sealed entrance artwork sits just inside the solid south wall. The
-        // Portrait artwork is 35% taller than the old 2.4m door, with its 2:3
-        // aspect preserved. Map once, top at v=0, without mirroring either leaf.
-        let door_z = LOBBY_MAX.y - 0.05;
+        // Enlarge the portrait door by 30% from 2.16x3.24m, keeping it grounded
+        // and at 2:3 aspect. Stand clear of the sealed wall to avoid depth fighting.
+        // Map once, top at v=0, without mirroring either leaf.
+        let door_z = LOBBY_MAX.y - 0.15;
         scene.quad(
             [
-                Vec3::new(1.08, 0.0, door_z),
-                Vec3::new(-1.08, 0.0, door_z),
-                Vec3::new(-1.08, 3.24, door_z),
-                Vec3::new(1.08, 3.24, door_z),
+                Vec3::new(1.404, 0.0, door_z),
+                Vec3::new(-1.404, 0.0, door_z),
+                Vec3::new(-1.404, 4.212, door_z),
+                Vec3::new(1.404, 4.212, door_z),
             ],
             [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
             [1.0; 4],
@@ -1189,9 +1189,9 @@ mod tests {
             44 + CHAIR_MESH_COUNT + PROJECTOR_MESH_COUNT
         );
         assert_eq!(scene.colliders.len(), 10 + SEAT_COUNT);
-        // Layout baseline includes the approved 749:623 Godfather poster ratio
-        // and its fitted frame; all other geometry and collision stay fixed.
-        assert_eq!(layout_fingerprint(&scene), 15_869_346_825_415_653_359);
+        // Layout baseline includes the fitted posters and 30% larger entrance
+        // door with 15cm wall clearance; all other geometry and collision stay fixed.
+        assert_eq!(layout_fingerprint(&scene), 12_294_538_374_175_280_347);
     }
 
     fn eye(x: f32, z: f32) -> Vec3 {
@@ -2357,11 +2357,14 @@ mod tests {
         let door = &scene.assets.meshes[door_index];
         assert_eq!(door.vertices[0].uv, [0.0, 1.0]);
         assert_eq!(door.vertices[2].uv, [1.0, 0.0]);
-        assert_eq!(door.vertices[0].position, [1.08, 0.0, 9.95]);
-        assert_eq!(door.vertices[2].position, [-1.08, 3.24, 9.95]);
+        assert_eq!(door.vertices[0].position, [1.404, 0.0, 9.85]);
+        assert_eq!(door.vertices[2].position, [-1.404, 4.212, 9.85]);
         let width = door.vertices[0].position[0] - door.vertices[2].position[0];
         let height = door.vertices[2].position[1];
-        assert!((height / 2.4 - 1.35).abs() < 0.000_001);
+        assert!((width / 2.16 - 1.30).abs() < 0.000_001);
+        assert!((height / 3.24 - 1.30).abs() < 0.000_001);
+        assert!((LOBBY_MAX.y - door.vertices[0].position[2] - 0.15).abs() < 0.000_001);
+        assert!((ceiling_height(Vec3::new(0.0, 0.0, 9.85)) - height - 0.288).abs() < 0.000_001);
         assert!((width / height - 2.0 / 3.0).abs() < 0.000_001);
         assert_eq!(
             (
@@ -2440,7 +2443,7 @@ mod tests {
             .find(|v| v.position == doorway)
             .unwrap();
         assert_eq!(lobby.uv, hallway.uv);
-        assert_eq!(layout_fingerprint(&scene), 15_869_346_825_415_653_359);
+        assert_eq!(layout_fingerprint(&scene), 12_294_538_374_175_280_347);
     }
 
     #[test]

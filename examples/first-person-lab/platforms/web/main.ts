@@ -283,6 +283,7 @@ let theaterSchedule: TheaterScheduleController | undefined;
 let theaterStartup: TheaterStartup | undefined;
 let theaterStartTimer: ReturnType<typeof setTimeout> | undefined;
 let theaterStarted = false;
+let controllerStartupPresented = false;
 const theaterPlayer = new TheaterVideoPlayer({
   media: theaterMedia,
 
@@ -312,6 +313,9 @@ const theaterPlayer = new TheaterVideoPlayer({
     theaterStartup?.update();
   },
 });
+
+// Select the minimal-mode preference once, before any schedule or playback work.
+if (document.documentElement.dataset.weaverPresentation === "minimal") theaterPlayer.setMuted(true);
 
 theaterSchedule = new TheaterScheduleController({
   player: theaterPlayer,
@@ -343,7 +347,7 @@ theaterSchedule = new TheaterScheduleController({
     theaterStartup?.update();
   },
 });
-theaterStartup = new TheaterStartup({
+if (document.documentElement.dataset.weaverPresentation !== "minimal") theaterStartup = new TheaterStartup({
   window, document,
   root: requiredElement("theater-startup"),
   status: requiredElement("theater-startup-status"),
@@ -518,8 +522,8 @@ if (document.documentElement.dataset.weaverPresentation === "minimal") {
     subtitles: requiredElement<HTMLButtonElement>("controller-subtitles"),
     fullscreen: requiredElement<HTMLButtonElement>("controller-fullscreen"), status: requiredElement("controller-status"),
     background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls],
-    canOpen: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
-    canResume: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    canOpen: () => wasmReady && lifecycle.canJoin && document.visibilityState === "visible" && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    canResume: () => wasmReady && lifecycle.canJoin && document.visibilityState === "visible" && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
     clearInputs: clearHeldGameInputs,
     ownership: (open) => { controllerHudFocused = open; enterHeld = false; syncGameInputFocus(); },
     resume: (restoreLock) => {
@@ -541,6 +545,14 @@ if (document.documentElement.dataset.weaverPresentation === "minimal") {
     fullscreenAction: () => fullscreenControl.toggle(),
   });
   syncControllerHud();
+}
+
+function presentControllerStartup(): void {
+  if (!controllerHud || controllerStartupPresented) return;
+  // Ownership callbacks are synchronous; reserve the one-shot before opening.
+  controllerStartupPresented = true;
+  controllerHud.open(true);
+  controllerStartupPresented = controllerHud.openState;
 }
 
 function syncGameInputFocus(): void {
@@ -807,6 +819,7 @@ globalThis.weaverSetChatFocus = (active: boolean): boolean => {
     document.exitPointerLock();
   }
   syncGameInputFocus();
+  if (!active) presentControllerStartup();
   return true;
 };
 
@@ -1423,6 +1436,7 @@ function syncSceneReadiness(): void {
   updateControls(networkState);
   theaterPlayer.setSceneReady(lifecycle.initialized && lifecycle.rendererReady && !lifecycle.failed);
   theaterStartup?.setSceneReady(lifecycle.initialized && lifecycle.rendererReady && !lifecycle.failed);
+  presentControllerStartup();
   queueTheaterStart();
   lobbyLight.disabled = auditoriumLight.disabled = !lifecycle.canJoin || theaterPlayer.state.disposed;
   fullscreenControl.publish();
@@ -1479,6 +1493,7 @@ function restorePage(): void {
   theaterPlayer.setVisible(true);
   theaterSchedule?.setVisible(true);
   theaterStartup?.setVisible(true);
+  presentControllerStartup();
   queueTheaterStart();
   lobbyLight.disabled = auditoriumLight.disabled = !lifecycle.canJoin || theaterPlayer.state.disposed;
   updateControls(networkState);

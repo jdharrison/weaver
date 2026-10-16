@@ -74,7 +74,7 @@ export class ControllerHud {
       if (this.isLauncherCompatibilityClick(event)) this.consume(event);
       else this.open();
     });
-    this.listen(audio, "click", () => { if (!audio.disabled) options.audioAction(); });
+    this.listen(audio, "click", event => { if (event.isTrusted && !audio.disabled) options.audioAction(); });
     this.listen(subtitles, "click", () => options.subtitlesAction());
     this.listen(fullscreen, "click", () => options.fullscreenAction());
     this.listen(child, "keydown", (input) => this.keydown(input as KeyboardEvent), true);
@@ -189,11 +189,12 @@ export class ControllerHud {
     } else if (!this.contains(event.target)) this.consume(event);
   }
 
-  open(): void {
+  /** Startup dismissal returns keyboard focus only, never mouse capture or prior UI focus. */
+  open(startup = false): void {
     if (this.disposed || this.opened || !this.options.canOpen()) return;
     const { document: doc, launcher, overlay } = this.options;
-    this.previousFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
-    this.restoreLock = doc.pointerLockElement === doc.getElementById("scene");
+    this.previousFocus = !startup && doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
+    this.restoreLock = !startup && doc.pointerLockElement === doc.getElementById("scene");
     // Releases must precede all input guards/inertness so held native input clears.
     this.options.clearInputs();
     this.launcherTouch = undefined;
@@ -253,10 +254,12 @@ export class ControllerHud {
     audio.setAttribute("aria-busy", String(state.audioPending));
     fullscreen.setAttribute("aria-busy", String(state.fullscreenPending));
     status.textContent = state.audioFailed ? (state.audioEnabled ?
-      "" :
+      "Audio unavailable. Select Audio to turn OFF, then select again to retry/turn ON; sound requires a fresh press when ready." :
       "Audio unavailable. Select Audio to retry; then select again when ready for sound.") :
       state.fullscreenError ? "Fullscreen failed. Select Fullscreen to retry." :
-      state.audioPending ? "Preparing audio… Select Audio again when ready for sound." :
+      state.audioPending ? (state.audioEnabled ?
+              "Preparing audio… Select Audio to turn OFF and cancel sound." :
+              "Preparing audio… Select Audio again when ready for sound.") :
       !state.audioReady ? "Movie preparing. Sound requires a fresh Audio press when ready." :
       state.fullscreenPending ? "Changing fullscreen…" :
 

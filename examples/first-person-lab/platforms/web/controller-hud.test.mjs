@@ -17,6 +17,11 @@ class Element extends EventTarget {
   setAttribute(name, value) { this.attributes.set(name, value); }
   focus() { this.doc.activeElement = this; }
 }
+function trustedClick(element) {
+  const event = new Event("click", { cancelable: true });
+  Object.defineProperty(event, "isTrusted", { value: true });
+  element.dispatchEvent(event);
+}
 function fixture(t, coarse = false) {
   const original = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
   globalThis.HTMLElement = Element;
@@ -64,7 +69,7 @@ test("ownership clears first, preserves existing inertness, emits only transitio
   assert.deepEqual(f.resumes, [true]);
   assert.equal(f.elements.launcher.hidden, true);
   const count = f.events.length;
-  f.elements.audio.dispatchEvent(new Event("click")); f.hud.open();
+  trustedClick(f.elements.audio); f.hud.open();
   assert.equal(f.events.length, count);
 });
 
@@ -95,7 +100,7 @@ test("desired preference selects audio artwork while pending and errors remain s
   assert.equal(f.elements.subtitles.attributes.get("aria-pressed"), "true");
   assert.equal(f.elements.fullscreen.disabled, true);
   assert.match(f.elements.status.textContent, /Preparing audio/);
-  f.hud.open(); f.elements.audio.dispatchEvent(new Event("click"));
+  f.hud.open(); trustedClick(f.elements.audio);
   assert.equal(f.hud.openState, true); assert.equal(f.elements.audio.dataset.state, "off");
   f.hud.update({ ...state, audioEnabled: true, audioAudible: false, audioPending: false, audioReady: true, fullscreenPending: false, fullscreenError: true });
   assert.equal(f.elements.audio.dataset.state, "on");
@@ -135,7 +140,7 @@ test("initialization preloads all eight sprites without waiting for image readin
   // No load/error event is dispatched: opening and row actions must remain synchronous.
   f.elements.launcher.dispatchEvent(new Event("click"));
   assert.equal(f.hud.openState, true);
-  f.elements.audio.dispatchEvent(new Event("click"));
+  trustedClick(f.elements.audio);
   assert.equal(f.events.at(-1), "audio");
   f.hud.close(true); f.hud.open();
   assert.equal(links.length, 8);
@@ -217,13 +222,15 @@ test("ON remains selectable while inaudible or pending so OFF is always availabl
   assert.equal(f.elements.audio.dataset.state, "on"); assert.equal(f.elements.audio.disabled, false);
   assert.equal(f.elements.status.textContent, "");
   f.hud.update({ ...state, audioFailed: true });
-  assert.equal(f.elements.status.textContent, "");
+  assert.match(f.elements.status.textContent, /unavailable.*OFF.*retry\/turn ON.*fresh press/);
   f.hud.update({ ...state, audioPending: true });
   assert.equal(f.elements.audio.disabled, false); assert.equal(f.elements.audio.attributes.get("aria-busy"), "true");
-  f.hud.open(); f.elements.audio.dispatchEvent(new Event("click")); assert.equal(f.events.at(-1), "audio");
+  assert.match(f.elements.status.textContent, /Preparing audio.*OFF.*cancel/);
+  f.hud.open(); trustedClick(f.elements.audio); assert.equal(f.events.at(-1), "audio");
   f.hud.update({ ...state, audioEnabled: false, audioPending: true });
   assert.equal(f.elements.audio.disabled, true); assert.equal(f.doc.activeElement, f.elements.subtitles);
-  const count = f.events.length; f.elements.audio.dispatchEvent(new Event("click")); assert.equal(f.events.length, count);
+  assert.match(f.elements.status.textContent, /Preparing audio.*again when ready/);
+  const count = f.events.length; trustedClick(f.elements.audio); assert.equal(f.events.length, count);
 });
 
 function launcherPointer(f, type, values = {}) {
@@ -305,4 +312,41 @@ test("launcher touch candidate cannot survive lifecycle closure or disposal", t 
   launcherPointer(f, "pointerdown"); f.hud.dispose();
   launcherPointer(f, "pointerup", { timeStamp: 200 }); assert.equal(f.hud.openState, false);
   assert.deepEqual(f.events, []);
+});
+
+test("startup dismissal resumes keyboard only even with prior lock and unrelated focus; manual reopening retains prior-lock behavior", t => {
+  const f = fixture(t);
+  f.elements.background.focus();
+  f.hud.open(true); f.hud.open(true);
+  f.hud.close(true);
+  assert.deepEqual(f.resumes, [false]);
+  assert.equal(f.elements.scene.inert, false);
+  f.doc.pointerLockElement = f.elements.scene; f.elements.scene.focus();
+  f.hud.open(); f.hud.close(true);
+  assert.deepEqual(f.resumes, [false, true]);
+});
+
+test("startup lifecycle close and blocked explicit dismissal never restore focus or capture", t => {
+  const f = fixture(t);
+  f.hud.open(true); f.hud.close(false);
+  assert.deepEqual(f.resumes, []);
+  f.hud.open(true); f.block(); f.hud.close(true);
+  assert.deepEqual(f.resumes, []);
+  f.hud.open(true); assert.equal(f.hud.openState, false);
+});
+
+test("Audio rejects synthetic activation for ready, failed and pending preferences but accepts trusted enabled presses", t => {
+  const f = fixture(t);
+  const base = { audioEnabled: false, audioAudible: false, audioReady: true, audioPending: false, audioFailed: false,
+    subtitles: true, fullscreen: false, fullscreenAvailable: false, fullscreenPending: false, fullscreenError: false };
+  f.hud.open();
+  for (const state of [base, { ...base, audioFailed: true }, { ...base, audioEnabled: true, audioFailed: true },
+    { ...base, audioEnabled: true, audioPending: true }, { ...base, audioPending: true }]) {
+    f.hud.update(state);
+    const count = f.events.length;
+    f.elements.audio.dispatchEvent(new Event("click"));
+    assert.equal(f.events.length, count, "untrusted click must not enable, retry or cancel");
+    trustedClick(f.elements.audio);
+    assert.equal(f.events.length, count + (f.elements.audio.disabled ? 0 : 1));
+  }
 });

@@ -305,12 +305,21 @@ async function shell(t, options = {}) {
       const markup = shellMarkup.byId.get(id);
       assert.ok(markup, `Fixture id must exist in actual HTML: ${id}`);
       const element = new Element(); element.tagName = markup.tag.toUpperCase();
+      element.hidden = markup.attributes.has("hidden");
       return [id, element];
     }));
   for (const [id, value] of Object.entries({ "woven-auth": "bearer", "woven-url": TARGET.url,
     "woven-namespace": "2", "woven-session": "2", "woven-space": "3", "woven-epoch": "1" })) elements.get(id).value = value;
   for (const id of ["theater-lobby-light", "theater-auditorium-light"]) {
     elements.get(id).value = shellMarkup.byId.get(id).attributes.get("value");
+  }
+  const startupListeners = [];
+  for (const id of ["theater-startup", "theater-startup-play", "theater-startup-retry", "theater-startup-continue"]) {
+    const element = elements.get(id), listen = element.addEventListener;
+    t.mock.method(element, "addEventListener", function (...args) {
+      startupListeners.push([id, args[0]]);
+      return listen.apply(this, args);
+    });
   }
   const video = new VideoElement(), videoFrames = new Map();
   let nextVideoFrame = 0;
@@ -454,8 +463,11 @@ async function shell(t, options = {}) {
     const video = elements.get("theater-video");
     video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata")); video.dispatchEvent(new Event("loadeddata"));
   };
-  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs, videoFrames, metadata,
-    continueMuted: () => elements.get("theater-startup-continue").dispatchEvent(new Event("click")),
+  return { elements, harness, client, clients, storage, window, document, visible, advance, rafs, videoFrames, metadata, startupListeners,
+    dismissStartup: () => {
+      if (options.presentation === "minimal") key({ window }, "keydown", "Escape");
+      else elements.get("theater-startup-continue").dispatchEvent(new Event("click"));
+    },
     setUnixNow: (value) => { unixNow = value; } };
 }
 
@@ -568,7 +580,7 @@ test("NPC hook errors cannot break the scene; UTF-16 errors and lifecycle retire
 test("E opens the existing composer for a selected offline NPC and never submits on range entry", async (t) => {
   let opens = 0;
   const f = await shell(t, { visitor: false, presentation: "minimal", requestChat: () => { opens++; return true; } });
-  globalThis.weaverSceneReady(); f.continueMuted(); await flush();
+  globalThis.weaverSceneReady(); f.dismissStartup(); await flush();
   const press = () => f.window.dispatchEvent(new KeyboardFixtureEvent("keydown", { code: "KeyE", key: "e" }));
   press(); assert.equal(opens, 0);
   f.harness.npcContext = JSON.stringify(npcContext());
@@ -689,7 +701,7 @@ test("theater starts once in a later task, never in the synchronous ready callba
   assert.equal(f.harness.scheduleFetches.length, 1); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   assert.equal(f.elements.get("theater-startup").dataset.state, "ready");
-  f.continueMuted();
+  f.dismissStartup();
   assert.equal(video.playCount, 1);
 });
 
@@ -715,12 +727,12 @@ test("slow manifest cannot block ready and selects the current UTC slot only whe
   assert.deepEqual(f.harness.npcCycles, [[0, 120]]);
   f.metadata(); await flush();
   assert.equal(video.currentTime, 25); assert.equal(video.playCount, 1); assert.equal(video.muted, true);
-  f.continueMuted();
+  f.dismissStartup();
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
 });
 
 test("startup Play accepts metadata, stays synchronous, and waits for observed sound plus a frame", async (t) => {
-  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  const f = await shell(t, { visitor: false, presentation: "full" });
   const video = f.elements.get("theater-video"), dialog = f.elements.get("theater-startup");
   const play = f.elements.get("theater-startup-play");
   assert.equal(dialog.hidden, true);
@@ -799,7 +811,7 @@ test("Continue while preparing starts only the current and later selected UTC cl
     ],
   }), { headers: { "content-type": "application/json" } }) });
   const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
-  globalThis.weaverSceneReady(); f.continueMuted();
+  globalThis.weaverSceneReady(); f.dismissStartup();
   assert.equal(dialog.hidden, true); assert.equal(video.muted, true); assert.equal(video.playCount, 0);
   await f.advance(0);
   assert.deepEqual(video.sources, ["/first.mp4"]);
@@ -813,12 +825,12 @@ test("Continue while preparing starts only the current and later selected UTC cl
 test("World Sound reopens preparation and retries a failed current source instead of silently returning", async (t) => {
   const f = await shell(t, { visitor: false });
   const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup();
   assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 5);
   soundPanelClick(f);
   assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "preparing");
   assert.equal(video.playCount, 0); assert.deepEqual(video.sources, [SCHEDULED_VIDEO]);
-  f.continueMuted(); video.error = { code: 4 }; video.dispatchEvent(new Event("error"));
+  f.dismissStartup(); video.error = { code: 4 }; video.dispatchEvent(new Event("error"));
   assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 4);
   video.error = null; soundPanelClick(f);
   assert.equal(dialog.hidden, false); assert.equal(dialog.dataset.state, "preparing");
@@ -834,7 +846,7 @@ test("pending Sound reopens confirmation and slow Retry reloads once without rep
   const dialog = f.elements.get("theater-startup"), video = f.elements.get("theater-video");
   const retry = f.elements.get("theater-startup-retry"), pending = deferred();
   video.playPromise = pending.promise;
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata();
   assert.equal(video.playCount, 1); assert.equal(dialog.hidden, true);
   assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 2);
   soundPanelClick(f);
@@ -865,13 +877,13 @@ test("startup visibility pauses the slow indication and disposal cancels late UI
   assert.equal(dialog.hidden, true); assert.equal(f.elements.get("scene").inert, false);
   await f.advance(60_000); await f.visible("hidden"); await f.visible("visible");
   f.metadata(); trustedClick(f.elements.get("theater-startup-play"));
-  trustedClick(f.elements.get("theater-startup-retry")); f.continueMuted();
+  trustedClick(f.elements.get("theater-startup-retry")); f.dismissStartup();
   assert.equal(dialog.hidden, true); assert.equal(video.playCount, 0);
 });
 
 test("startup traps focus, releases held input and pointer lock, blocks chat/game input, and Escape restores canvas", async (t) => {
   let requests = 0;
-  const f = await shell(t, { visitor: false, presentation: "minimal", requestChat: () => { requests++; return true; } });
+  const f = await shell(t, { visitor: false, presentation: "full", requestChat: () => { requests++; return true; } });
   const canvas = f.elements.get("scene"), play = f.elements.get("theater-startup-play");
   const dialog = f.elements.get("theater-startup"), continued = f.elements.get("theater-startup-continue");
   const released = [];
@@ -927,7 +939,7 @@ test("a pending autoplay promise cannot block ready and cannot revive disposed m
   const f = await shell(t, { visitor: false });
   const video = f.elements.get("theater-video"), play = deferred();
   video.playPromise = play.promise;
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata();
   assert.equal(video.playCount, 1); assert.equal(f.harness.progress.at(-1).completed, 14);
   await f.advance(25000);
   assert.equal(f.elements.get("reload-scene").hidden, true);
@@ -977,7 +989,7 @@ test("shell onRecover wiring realigns and replays a watchdog decoder reload whil
   const load = video.load.bind(video), play = video.play.bind(video);
   video.load = () => { load(); video.currentTime = 0; video.paused = true; };
   video.play = () => { starts.push({ source: video.src, time: video.currentTime }); return play(); };
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   assert.equal(f.videoFrames.size, 1); assert.equal(video.playCount, 1);
   for (let second = 1; second <= 16; second++) {
     f.setUnixNow((123 + second) * 1000); await f.advance(1000);
@@ -999,7 +1011,7 @@ test("established playback resumes once across hidden/pagehide/BFCache events wi
   const f = await shell(t, { unixNow: 9000 });
   const video = f.elements.get("theater-video"), canvas = f.elements.get("scene");
   let locks = 0; canvas.requestPointerLock = () => { locks++; };
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   assert.equal(video.playCount, 1); assert.equal(video.currentTime, 9);
   await f.visible("hidden"); f.window.dispatchEvent(new Event("pagehide")); await f.advance(10_000);
   assert.equal(video.paused, true); assert.equal(video.playCount, 1); assert.equal(f.rafs.size, 0);
@@ -1021,7 +1033,7 @@ test("established playback resumes once across hidden/pagehide/BFCache events wi
 test("visibility restoration waits for asynchronous live alignment before resuming muted playback", async (t) => {
   const f = await shell(t, { visitor: false, unixNow: 12_000 });
   const video = f.elements.get("theater-video");
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   await f.visible("hidden"); f.setUnixNow(14_000);
   let position = video.currentTime;
   Object.defineProperty(video, "currentTime", { configurable: true, get: () => position,
@@ -1046,7 +1058,7 @@ test("explicit local selection before ready remains lazy, honors its configured 
   follow.checked = true; follow.dispatchEvent(new Event("change"));
   assert.deepEqual(video.sources, ["/diagnostics.mp4", SCHEDULED_VIDEO]);
   f.metadata(); await flush(); assert.equal(video.currentTime, 17); assert.equal(video.playCount, 1); assert.equal(video.muted, true);
-  f.continueMuted(); assert.equal(video.playCount, 1);
+  f.dismissStartup(); assert.equal(video.playCount, 1);
 });
 
 test("unavailable schedule cannot block ready or load fallback until explicit local diagnostics", async (t) => {
@@ -1080,7 +1092,7 @@ test("movie attachment waits for metadata plus initialized renderer; controls pa
   assert.deepEqual(f.harness.videoEvents, []);
   globalThis.weaverSceneReady(); await f.advance(0);
   assert.deepEqual(f.harness.videoEvents, []);
-  f.continueMuted(); f.metadata(); await flush();
+  f.dismissStartup(); f.metadata(); await flush();
   assert.deepEqual(f.harness.videoEvents.map(([event]) => event), ["attach", "frame"]);
   globalThis.weaverSceneReady();
   assert.equal(f.harness.videoEvents.filter(([event]) => event === "attach").length, 1);
@@ -1103,14 +1115,14 @@ test("movie attachment waits for metadata plus initialized renderer; controls pa
 });
 
 test("one combined picker dispatches offline seats and preserves synchronous, exclusive wall controls", async (t) => {
-  const f = await shell(t, { visitor: false, noWebTransport: true, presentation: "minimal" });
+  const f = await shell(t, { visitor: false, noWebTransport: true, presentation: "full" });
   f.harness.panelHit = 100;
   scenePointer(f, "pointerdown");
   assert.deepEqual(f.harness.seatTargets, [], "renderer readiness is required");
   globalThis.weaverSceneReady();
   scenePointer(f, "pointerdown");
   assert.deepEqual(f.harness.seatTargets, [], "startup confirmation owns input");
-  f.continueMuted();
+  f.dismissStartup();
   for (let target = 100; target <= 123; target++) {
     f.harness.panelHit = target;
     assert.equal(scenePointer(f, "pointerdown").defaultPrevented, true);
@@ -1135,7 +1147,7 @@ test("one combined picker dispatches offline seats and preserves synchronous, ex
 
 test("exit target is capture-only for an unlocked mouse and activates once for a locked mouse or touch", async (t) => {
   const f = await shell(t, { visitor: false, noWebTransport: true });
-  globalThis.weaverSceneReady(); f.continueMuted();
+  globalThis.weaverSceneReady(); f.dismissStartup();
   f.harness.panelHit = 200;
   for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) {
     assert.equal(scenePointer(f, type).defaultPrevented, false);
@@ -1158,7 +1170,7 @@ test("exit target is capture-only for an unlocked mouse and activates once for a
 
 test("seat rejection, invalid targets and unavailable interaction bindings never activate a fallback", async (t) => {
   const f = await shell(t, { visitor: false, noWebTransport: true });
-  globalThis.weaverSceneReady(); f.continueMuted();
+  globalThis.weaverSceneReady(); f.dismissStartup();
   f.harness.panelHit = 100; f.harness.seatAccept = false;
   assert.equal(scenePointer(f, "pointerdown").defaultPrevented, true);
   scenePointer(f, "pointerup"); scenePointer(f, "click");
@@ -1177,7 +1189,7 @@ test("seat rejection, invalid targets and unavailable interaction bindings never
 
 test("focus and viewport/capture phase changes clear both seat tap candidates and queued Rust intent", async (t) => {
   const f = await shell(t, { visitor: false, noWebTransport: true, presentation: "minimal" });
-  globalThis.weaverSceneReady(); f.continueMuted(); f.harness.panelHit = 100;
+  globalThis.weaverSceneReady(); f.dismissStartup(); f.harness.panelHit = 100;
   const touch = { pointerType: "touch" };
   for (const interrupt of [
     () => { globalThis.weaverSetChatFocus(true); globalThis.weaverSetChatFocus(false); },
@@ -1207,7 +1219,7 @@ test("focus and viewport/capture phase changes clear both seat tap candidates an
 
 test("hidden/pagehide, fatal and shutdown phases never replay an old seat gesture", async (t) => {
   const f = await shell(t, { visitor: false, noWebTransport: true });
-  globalThis.weaverSceneReady(); f.continueMuted(); f.harness.panelHit = 100;
+  globalThis.weaverSceneReady(); f.dismissStartup(); f.harness.panelHit = 100;
   const touch = { pointerType: "touch" };
   scenePointer(f, "pointerdown", touch);
   await f.visible("hidden"); await f.visible("visible");
@@ -1248,7 +1260,7 @@ test("sound panel invokes schedule audible play synchronously, observes state an
     return play();
   };
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   assert.equal(f.harness.panelStates.filter(([panel]) => panel === 1).at(-1)[1], 2);
   video.readyState = 3; video.dispatchEvent(new Event("canplay"));
@@ -1275,7 +1287,7 @@ test("shell surfaces blocked muted autoplay and permits one manual Play retry", 
   const video = f.elements.get("theater-video");
   video.playError = new Error("NotAllowedError");
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   const play = f.elements.get("theater-play");
   assert.equal(video.playCount, 1); assert.equal(video.muted, true);
   assert.equal(play.disabled, false); assert.equal(play.textContent, "Play");
@@ -1303,7 +1315,7 @@ test("movie audio controls synchronize external changes and preserve explicit mu
   assert.equal(volume.value, "0.4");
   assert.equal(mute.disabled, true);
   video.readyState = 2; video.dispatchEvent(new Event("loadedmetadata"));
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); f.metadata(); await flush();
+  globalThis.weaverSceneReady(); await f.advance(0); f.dismissStartup(); f.metadata(); await flush();
   assert.equal(mute.disabled, false); assert.equal(volume.disabled, false);
   assert.equal(video.playCount, 1);
   mute.dispatchEvent(new Event("click"));
@@ -1357,7 +1369,7 @@ test("early metadata and synchronous ready cannot attach until WASM startup comp
 });
 
 test("theater focus composes with host chat focus without reviving game input", async (t) => {
-  const f = await shell(t, { presentation: "minimal" }); globalThis.weaverSceneReady(); f.continueMuted(); await flush();
+  const f = await shell(t, { presentation: "minimal" }); globalThis.weaverSceneReady(); f.dismissStartup(); await flush();
   const panel = f.elements.get("theater-controls");
   panel.dispatchEvent(new Event("focusin"));
   assert.equal(f.harness.chatFocus.at(-1), true);
@@ -2119,7 +2131,7 @@ test("explicit resume focuses the scene and requests mouse lock without syntheti
   canvas.addEventListener("click", () => clicks += 1);
   assert.equal(globalThis.weaverResumeGameInput(), false);
   globalThis.weaverSceneReady();
-  f.continueMuted();
+  f.dismissStartup();
   canvas.focusCount = 0;
   await flush();
   globalThis.weaverSetChatFocus(true);
@@ -2319,7 +2331,7 @@ function hudPointer(f, type, target) {
 async function hudShell(t, options = {}) {
   const f = await shell(t, { visitor: false, presentation: "minimal", ...options });
   globalThis.weaverSceneReady(); await f.advance(0);
-  f.metadata(); await flush(); f.continueMuted(); await flush();
+  f.metadata(); await flush(); f.dismissStartup(); await flush();
   return f;
 }
 
@@ -2368,8 +2380,8 @@ test("HUD ignores editing, modifiers, composition and startup; completed outside
   const f = await shell(t, { visitor: false, presentation: "minimal" });
   globalThis.weaverSceneReady(); await f.advance(0);
   const overlay = f.elements.get("controller-overlay"), dialog = f.elements.get("controller-dialog");
-  q(f); assert.equal(overlay.hidden, true); // Startup owns focus and launcher is inert.
-  f.continueMuted(); q(f, "keyup");
+  assert.equal(overlay.hidden, false); // Controller itself is the startup presentation.
+  q(f); assert.equal(overlay.hidden, true); q(f, "keyup");
   for (const options of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }, { isComposing: true }, { repeat: true }]) {
     q(f, "keydown", options); assert.equal(overlay.hidden, true); q(f, "keyup");
   }
@@ -2424,18 +2436,23 @@ test("HUD audio and fullscreen run directly in the gesture, audio art follows pr
 
 test("HUD preparing and failed audio never queues a delayed audible attempt or reopens startup", async (t) => {
   const f = await shell(t, { visitor: false, presentation: "minimal" });
-  globalThis.weaverSceneReady(); await f.advance(0); f.continueMuted(); q(f);
+  globalThis.weaverSceneReady(); await f.advance(0);
   const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
   trustedClick(audio); assert.equal(video.playCount, 0);
   f.metadata(); await flush(); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
   video.playError = new Error("NotAllowedError"); trustedClick(audio); await flush();
   assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, true);
-  assert.equal(f.elements.get("controller-status").textContent, "");
+  assert.match(f.elements.get("controller-status").textContent, /unavailable.*OFF.*retry\/turn ON/);
   trustedClick(audio); assert.equal(audio.dataset.state, "off");
   video.playError = null;
   trustedClick(audio); await flush(); assert.equal(audio.dataset.state, "on");
   video.error = { code: 4 }; video.dispatchEvent(new Event("error")); video.error = null;
+  assert.match(f.elements.get("controller-status").textContent, /unavailable.*OFF.*retry\/turn ON/);
   trustedClick(audio); assert.equal(audio.dataset.state, "off");
+  assert.match(f.elements.get("controller-status").textContent, /unavailable.*retry.*again when ready/);
+  const failedSources = [...video.sources], failedPlays = video.playCount;
+  audio.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(video.sources, failedSources); assert.equal(video.playCount, failedPlays);
   trustedClick(audio); await flush();
   assert.equal(f.elements.get("theater-startup").hidden, true);
   f.metadata(); await flush(); assert.equal(video.muted, true);
@@ -2491,7 +2508,7 @@ for (const presentation of ["minimal", "full"]) {
     assert.equal(f.document.head.children.length, presentation === "minimal" ? 8 : 0);
     assert.equal(f.harness.scheduleFetches.length, 0); // Hints do not require renderer/media readiness.
     if (presentation === "minimal") {
-      globalThis.weaverSceneReady(); f.continueMuted();
+      globalThis.weaverSceneReady(); f.dismissStartup();
       trustedClick(f.elements.get("controller-launcher"));
       assert.equal(f.elements.get("controller-overlay").hidden, false);
       assert.equal(f.document.head.children.length, 8);
@@ -2499,19 +2516,22 @@ for (const presentation of ["minimal", "full"]) {
   });
 }
 
-test("HUD starts with desired Audio ON despite silent autoplay; startup Continue explicitly selects OFF", async t => {
+test("HUD starts expanded with desired Audio OFF; the first ready press enables sound synchronously", async t => {
   const f = await shell(t, { visitor: false, presentation: "minimal" });
   const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
-  assert.equal(audio.dataset.state, "on"); assert.equal(audio.getAttribute("aria-pressed"), "true");
-  assert.equal(video.muted, true);
-  globalThis.weaverSceneReady(); await f.advance(0); f.metadata(); await flush();
-  assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, true);
-  assert.equal(f.elements.get("controller-status").textContent, "");
-  assert.equal(f.elements.get("theater-startup").hidden, false);
-  assert.equal(f.elements.get("theater-startup-play").disabled, false);
-  f.continueMuted(); await flush();
   assert.equal(audio.dataset.state, "off"); assert.equal(audio.getAttribute("aria-pressed"), "false");
   assert.equal(video.muted, true);
+  globalThis.weaverSceneReady(); await f.advance(0); f.metadata(); await flush();
+  assert.equal(audio.dataset.state, "off"); assert.equal(video.muted, true);
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+  let gesture = false;
+  const play = video.play.bind(video);
+  video.play = () => { assert.equal(gesture, true); return play(); };
+  gesture = true; trustedClick(audio); gesture = false;
+  assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, false);
+  globalThis.weaverSceneReady();
+  assert.equal(audio.dataset.state, "on"); // Readiness must not reapply initial mute.
 });
 
 test("HUD permits OFF while enabling is pending but cannot enqueue a second enabling gesture", async t => {
@@ -2522,12 +2542,16 @@ test("HUD permits OFF while enabling is pending but cannot enqueue a second enab
   trustedClick(audio);
   assert.equal(video.playCount, plays + 1); assert.equal(audio.dataset.state, "on");
   assert.equal(audio.disabled, false); assert.equal(audio.getAttribute("aria-busy"), "true");
+  assert.match(f.elements.get("controller-status").textContent, /Preparing audio.*OFF.*cancel/);
   // Waiting removes observed audibility but must not turn the desired ON artwork off.
   video.dispatchEvent(new Event("waiting"));
   assert.equal(audio.dataset.state, "on");
+  audio.dispatchEvent(new Event("click"));
+  assert.equal(audio.dataset.state, "on"); assert.equal(video.muted, false);
   trustedClick(audio);
   assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
   assert.equal(audio.disabled, true);
+  assert.match(f.elements.get("controller-status").textContent, /Preparing audio.*again when ready/);
   assert.equal(f.document.activeElement, f.elements.get("controller-subtitles"));
   trustedClick(audio); assert.equal(video.playCount, plays + 1); assert.equal(audio.dataset.state, "off");
   video.playPromise = null; pending.resolve(); await flush();
@@ -2564,4 +2588,146 @@ test("second-finger launcher pointerup opens HUD while a canvas movement touch r
   assert.equal(scenePointer(f, "click", second).defaultPrevented, true);
   assert.equal(overlay.hidden, true); assert.deepEqual(transitions, [true, false]);
   assert.equal(key(f, "keydown", "w", { code: "KeyW", repeat: true }).defaultPrevented, true);
+});
+
+for (const readyOnStart of [false, true]) {
+  test(`minimal startup is combined-ready, one-shot and independent of slow media (synchronous=${readyOnStart})`, async t => {
+    const manifest = deferred();
+    const f = await shell(t, { visitor: false, presentation: "minimal", readyOnStart,
+      scheduleFetch: () => manifest.promise });
+    const overlay = f.elements.get("controller-overlay"), canvas = f.elements.get("scene");
+    assert.equal(overlay.hidden, !readyOnStart);
+    assert.deepEqual(f.startupListeners, [], "legacy startup is not constructed");
+    assert.equal(f.elements.get("theater-startup").hidden, true);
+    const transitions = [];
+    f.window.addEventListener("weaver-controller-change", event => transitions.push(event.detail.open));
+    globalThis.weaverSceneReady(); globalThis.weaverSceneReady();
+    assert.equal(overlay.hidden, false);
+    assert.equal(canvas.inert, true);
+    assert.equal(globalThis.weaverResumeGameInput(), false);
+    assert.equal(f.harness.scheduleFetches.length, 0);
+    await f.advance(0); await f.advance(13_000);
+    assert.equal(overlay.hidden, false); assert.equal(f.elements.get("theater-startup").hidden, true);
+    f.dismissStartup();
+    globalThis.weaverSceneReady(); await f.visible("hidden"); await f.visible("visible");
+    const restored = new Event("pageshow"); Object.defineProperty(restored, "persisted", { value: true });
+    f.window.dispatchEvent(restored);
+    assert.equal(overlay.hidden, true); assert.equal(canvas.inert, false);
+    assert.deepEqual(transitions, readyOnStart ? [false] : [true, false]);
+    manifest.resolve(scheduleResponse()); await flush(); f.metadata(); await flush();
+    assert.equal(f.elements.get("theater-video").muted, true);
+    assert.equal(overlay.hidden, true);
+    q(f); assert.equal(overlay.hidden, false, "manual reopening remains available");
+  });
+}
+
+for (const terminal of ["none", "fatal", "disposed"]) {
+  test(`initially hidden ready scene presents once on first visibility unless ${terminal}`, async t => {
+    const f = await shell(t, { visitor: false, presentation: "minimal", visibility: "hidden", readyOnStart: true });
+    const overlay = f.elements.get("controller-overlay");
+    assert.equal(overlay.hidden, true); assert.equal(f.document.activeElement, null);
+    globalThis.weaverSceneReady();
+    if (terminal === "fatal") globalThis.weaverSceneFatal("fixture fatal");
+    if (terminal === "disposed") globalThis.weaverDisposeTheaterVideo();
+    const focus = f.document.activeElement;
+    await f.visible("visible");
+    assert.equal(overlay.hidden, terminal !== "none");
+    if (terminal !== "none") assert.equal(f.document.activeElement, focus);
+    else {
+      assert.equal(f.harness.scheduleFetches.length, 0);
+      await f.visible("hidden"); await f.visible("visible");
+      assert.equal(overlay.hidden, true, "suspension consumes no second presentation");
+    }
+  });
+}
+
+for (const dismissal of ["q", "Escape", "backdrop"]) {
+  test(`startup ${dismissal} restores canvas keyboard focus without capture, fullscreen or audio`, async t => {
+    let requests = 0;
+    const f = await shell(t, { visitor: false, presentation: "minimal", requestChat: () => { requests++; return true; } });
+    const canvas = f.elements.get("scene"), overlay = f.elements.get("controller-overlay"), video = f.elements.get("theater-video");
+    let locks = 0, fullscreens = 0;
+    canvas.requestPointerLock = () => { locks++; };
+    f.window.jdharrisonToggleFullscreen = () => { fullscreens++; };
+    // Even a pre-existing lock/UI focus must not be restored by startup dismissal.
+    f.elements.get("controller-launcher").focus(); f.document.pointerLockElement = canvas;
+    globalThis.weaverSceneReady();
+    assert.equal(f.document.pointerLockElement, null);
+    assert.equal(key(f, "keydown", "Enter").defaultPrevented, true); assert.equal(requests, 0);
+    assert.equal(key(f, "keydown", "w", { code: "KeyW" }).defaultPrevented, true);
+    if (dismissal === "q") { q(f); q(f, "keyup"); }
+    else if (dismissal === "Escape") key(f, "keydown", "Escape");
+    else for (const type of ["pointerdown", "pointerup", "click"]) hudPointer(f, type, overlay);
+    assert.equal(overlay.hidden, true); assert.equal(canvas.inert, false);
+    assert.equal(f.document.activeElement, canvas); assert.equal(f.harness.chatFocus.at(-1), false);
+    assert.equal(locks, 0); assert.equal(fullscreens, 0); assert.equal(video.playCount, 0); assert.equal(video.muted, true);
+    globalThis.weaverSceneReady(); assert.equal(overlay.hidden, true);
+  });
+}
+
+test("minimal startup defers to host chat ownership without losing its first presentation", async t => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  globalThis.weaverSetChatFocus(true);
+  globalThis.weaverSceneReady();
+  assert.equal(f.elements.get("controller-overlay").hidden, true);
+  globalThis.weaverSetChatFocus(false);
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+  f.dismissStartup();
+  globalThis.weaverSetChatFocus(true); globalThis.weaverSetChatFocus(false);
+  assert.equal(f.elements.get("controller-overlay").hidden, true);
+});
+
+test("failed manifest keeps controller usable; retry prepares silently and requires a fresh ready Audio press", async t => {
+  let available = false;
+  const f = await shell(t, { visitor: false, presentation: "minimal", scheduleFetch: () => available ? scheduleResponse() : jsonResponse() });
+  const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0);
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+  assert.equal(f.elements.get("theater-startup").hidden, true);
+  assert.match(f.elements.get("controller-status").textContent, /retry/);
+  assert.equal(audio.disabled, false);
+  const failedPlays = video.playCount;
+  audio.dispatchEvent(new Event("click")); await f.advance(1200);
+  assert.equal(f.harness.scheduleFetches.length, 1);
+  assert.equal(video.playCount, failedPlays); assert.equal(audio.dataset.state, "off");
+  available = true; trustedClick(audio); trustedClick(audio); await flush();
+  assert.equal(f.harness.scheduleFetches.length, 2); assert.equal(video.muted, true);
+  assert.equal(audio.dataset.state, "off");
+  f.metadata(); await flush(); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
+  trustedClick(audio); assert.equal(video.muted, false); assert.equal(audio.dataset.state, "on");
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+});
+
+test("minimal startup cannot focus or open during WASM initialization or the synchronous renderer callback", async t => {
+  let observed = false;
+  const f = await shell(t, { visitor: false, presentation: "minimal", readyOnStart: true,
+    init: async () => {
+      globalThis.weaverSceneReady();
+      assert.equal(document.getElementById("controller-overlay").hidden, true);
+      assert.equal(document.activeElement, null);
+      observed = true;
+    } });
+  assert.equal(observed, true);
+  assert.equal(f.elements.get("controller-overlay").hidden, false);
+  assert.equal(f.document.activeElement, f.elements.get("controller-audio"));
+  assert.equal(f.harness.scheduleFetches.length, 0);
+  assert.deepEqual(f.startupListeners, []);
+});
+
+test("synthetic ready Audio cannot enable or mute; first trusted ready press still enables synchronously", async t => {
+  const f = await shell(t, { visitor: false, presentation: "minimal" });
+  const audio = f.elements.get("controller-audio"), video = f.elements.get("theater-video");
+  globalThis.weaverSceneReady(); await f.advance(0); f.metadata(); await flush();
+  const plays = video.playCount;
+  audio.dispatchEvent(new Event("click")); await flush();
+  assert.equal(video.playCount, plays); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
+  let gesture = false;
+  const play = video.play.bind(video);
+  video.play = () => { assert.equal(gesture, true); return play(); };
+  gesture = true; trustedClick(audio); gesture = false;
+  assert.equal(video.playCount, plays + 1); assert.equal(video.muted, false); assert.equal(audio.dataset.state, "on");
+  await flush();
+  audio.dispatchEvent(new Event("click")); await flush();
+  assert.equal(video.playCount, plays + 1); assert.equal(video.muted, false); assert.equal(audio.dataset.state, "on");
+  trustedClick(audio); assert.equal(video.muted, true); assert.equal(audio.dataset.state, "off");
 });
