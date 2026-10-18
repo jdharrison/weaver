@@ -8,6 +8,11 @@ const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve()
 const entry = (id, start, duration, source = "/a.mp4", offset = 0, loop = false) => ({ id, title: id, startSeconds: start, durationSeconds: duration, source, sourceStartSeconds: offset, loop });
 const schedule = (entries = [entry("a", 0, 3600)], cycle = 3600) => ({ version: 1, revision: "r1", anchorUnixSeconds: 0, cycleSeconds: cycle, driftToleranceSeconds: 5, entries });
 const response = (data) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+const twentyMinuteSchedule = () => schedule([
+  entry("intermission", 0, 417, "/assets/theater/intermission.mp4"),
+  entry("feature", 417, 733, "/assets/theater/feature.mp4"),
+  entry("fin", 1150, 50, "/assets/theater/fin.mp4"),
+], 1200);
 class Media extends EventTarget {
   src = ""; muted = false; volume = 1; loop = true; currentTime = 0; duration = 4000;
   readyState = 0; paused = true; seeking = false; ended = false; error = null;
@@ -53,7 +58,7 @@ async function watchdogFixture(data = schedule(), initialUtc = 123) {
   const load = media.load.bind(media), play = media.play.bind(media);
   media.load = () => {
     loads.push({ at: now, source: media.src }); load();
-    media.currentTime = 0; media.paused = true; media.seeking = false;
+    media.currentTime = 0; media.paused = true; media.seeking = false; media.ended = false;
   };
   media.play = () => { starts.push({ at: now, source: media.src, time: media.currentTime }); const result = play(); return playPromise ?? result; };
   const player = new TheaterVideoPlayer({ media, scheduled: true, now: () => now, ...timerOptions("player"),
@@ -87,6 +92,7 @@ async function watchdogFixture(data = schedule(), initialUtc = 123) {
   };
   return { media, player, controller, frames, timers, seeks, loads, starts, recoveries, attaches, statuses, metadata, ready, advance,
     setUtc: (time) => { utcOffset = time - now / 1000; }, setPlayPromise: (promise) => { playPromise = promise; },
+    eventIn: (milliseconds, callback) => timerOptions("media").setTimeout(callback, milliseconds),
     hide: () => { controller.setVisible(false); player.setVisible(false); },
     restore: () => { player.setVisible(true); controller.setVisible(true); },
     dispose: () => { controller.dispose(); player.dispose(); },
@@ -796,6 +802,73 @@ test("short non-loop holds silent final frame; looping uses available duration a
   loop.media.currentTime = 10; loop.media.ended = true; loop.media.paused = true;
   loop.media.event("ended"); await flush(); assert.equal(loop.media.plays.at(-1), 5); assert.equal(loop.media.plays.length, 2); loop.dispose();
 });
+
+for (const [scenario, joinElapsed, retainedTime, naturalEnd] of [
+  ["natural EOF", 0, 6, true],
+  ["active playback entering hold", 0, 6, false],
+  ["lagging active playback within five-second drift tolerance", 0, 5, false],
+  ["joining when padding starts", 6, 5.999, false],
+  ["joining midway through padding", 28, 5.999, false],
+  ["joining in the last second of padding", 49, 5.999, false],
+]) {
+  test(`twenty-minute cycle: ${scenario} retains a silent short-source frame until exact rollover`, async (t) => {
+    const f = await watchdogFixture(twentyMinuteSchedule(), 1150 + joinElapsed); t.after(f.dispose);
+    f.media.duration = 6; await f.ready();
+    assert.equal(f.media.loop, false);
+    assert.deepEqual(f.seeks.map(({ time }) => time), [joinElapsed ? 5.999 : 0]);
+    assert.deepEqual(f.starts.map(({ time }) => time), joinElapsed ? [] : [0]);
+    assert.deepEqual(f.loads.map(({ source }) => source), ["/assets/theater/fin.mp4"]);
+    const counts = () => ({ seeks: f.seeks.length, plays: f.starts.length, loads: f.loads.length, attaches: f.attaches.length, recoveries: f.recoveries.length });
+    const baseline = counts();
+    assert.equal(baseline.attaches, 1); assert.equal(baseline.recoveries, 0);
+    if (joinElapsed === 0) {
+      // Queue EOF before the recurring sixth-second poll, as a browser media event can arrive independently.
+      f.eventIn(6000, () => {
+        f.media.currentTime = retainedTime;
+        if (naturalEnd) { f.media.ended = true; f.media.paused = true; f.media.event("ended"); }
+      });
+      for (let elapsed = 1; elapsed <= 5; elapsed++) {
+        f.media.currentTime = elapsed; await f.advance(1000);
+      }
+      await f.advance(1000);
+    }
+    const assertHold = () => {
+      assert.deepEqual(counts(), baseline, "holding must not seek, play, reload, reattach or recover");
+      assert.equal(f.media.plays.length, baseline.plays);
+      assert.equal(f.media.src, "/assets/theater/fin.mp4");
+      assert.equal(f.media.currentTime, retainedTime);
+      assert.equal(f.media.muted, true); assert.equal(f.media.paused, true); assert.equal(f.media.loop, false);
+      assert.equal(f.player.state.ready, true); assert.equal(f.player.state.frameReady, true);
+      assert.equal(f.player.state.playing, false); assert.equal(f.player.state.failed, false);
+      assert.equal(f.frames.size, 0);
+      assert.deepEqual([...f.timers.values()].map(({ owner }) => owner), ["schedule"], "the real playback watchdog must be cancelled while holding");
+      assert.match(f.statuses.at(-1), /source ended \(holding final frame\)/);
+    };
+    for (let elapsed = Math.max(6, joinElapsed); elapsed <= 49; elapsed++) {
+      if (elapsed > Math.max(6, joinElapsed)) await f.advance(1000);
+      assertHold();
+    }
+    if (retainedTime === 5) {
+      assert.equal(f.media.ended, false);
+      assert.ok(Math.abs(f.media.currentTime - 5.999) < 5, "tolerated drift retains the earlier frame; this is not proof of the exact final pixel");
+    }
+    await f.advance(999); assertHold(); // 1199.999 is still the final slot.
+    await f.advance(1); // 1200 belongs to intermission, not the held source.
+    assert.equal(f.media.src, "/assets/theater/intermission.mp4");
+    assert.equal(f.media.paused, true); assert.equal(f.player.state.ready, false);
+    assert.deepEqual(f.loads.slice(baseline.loads).map(({ source }) => source), ["", "/assets/theater/intermission.mp4"], "one retired-source release and one replacement load");
+    assert.equal(f.starts.length, baseline.plays); assert.equal(f.seeks.length, baseline.seeks);
+    f.media.duration = 417; await f.ready();
+    assert.deepEqual(f.seeks.slice(baseline.seeks).map(({ time }) => time), [0]);
+    assert.deepEqual(f.starts.slice(baseline.plays).map(({ source, time }) => ({ source, time })), [{ source: "/assets/theater/intermission.mp4", time: 0 }]);
+    assert.equal(f.media.muted, true); assert.equal(f.media.paused, false);
+    assert.equal(f.player.state.failed, false); assert.equal(f.recoveries.length, 0);
+    assert.equal(f.attaches.length, baseline.attaches + 1);
+    f.media.currentTime = 1; await f.advance(1000);
+    assert.equal(f.starts.length, baseline.plays + 1); assert.equal(f.seeks.length, baseline.seeks + 1);
+    assert.equal(f.loads.length, baseline.loads + 2);
+  });
+}
 
 test("loader rejects invalid paths, redirects, invalid schema, oversized/offline responses", async () => {
   const signal = new AbortController().signal;
