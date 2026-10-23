@@ -92,6 +92,15 @@ impl WovenAdapter {
         self.entity_id
     }
 
+    /// Read the running native QUIC transport's smoothed RTT to the Woven server.
+    ///
+    /// No I/O or probes; not one-way latency or application/server processing time.
+    /// Returns `None` when stopped, closed, or unsupported by the transport.
+    #[must_use]
+    pub fn round_trip_time(&self) -> Option<Duration> {
+        self.client.as_ref().and_then(Client::round_trip_time)
+    }
+
     /// Whether the connected server negotiated atomic positioned entity state.
     #[must_use]
     pub fn supports_positioned_state(&self) -> bool {

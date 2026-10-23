@@ -5,6 +5,9 @@ use thiserror::Error;
 /// Errors returned by the WGPU renderer.
 #[derive(Debug, Error)]
 pub enum WgpuRenderError {
+    /// The adapter cannot sample the current scene depth/color for camera blur.
+    #[error("camera motion blur is unsupported for this adapter, format, or sample count")]
+    UnsupportedMotionBlur,
     /// No suitable GPU adapter was found.
     #[error("no suitable GPU adapter found")]
     NoAdapter,

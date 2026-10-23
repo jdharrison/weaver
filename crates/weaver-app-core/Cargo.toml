@@ -6,10 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+glb = ["dep:gltf", "dep:image"]
+
 [dependencies]
 weaver-render.workspace = true
 weaver-render-wgpu.workspace = true
 glam.workspace = true
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"], optional = true }
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

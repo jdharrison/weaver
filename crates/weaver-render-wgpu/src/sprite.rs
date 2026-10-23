@@ -240,6 +240,21 @@ pub(crate) fn ordered_sprites(
     world
 }
 
+pub(crate) fn sprites_for_passes(
+    sprites: &[SpriteInstance],
+    view: glam::Mat4,
+    blur_enabled: bool,
+) -> (Vec<&SpriteInstance>, Vec<&SpriteInstance>) {
+    let ordered = ordered_sprites(sprites, view);
+    if blur_enabled {
+        ordered
+            .into_iter()
+            .partition(|sprite| sprite.space == SpriteSpace::World)
+    } else {
+        (ordered, Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +393,24 @@ mod tests {
             .collect();
         // Off-axis distance must not override view depth; equal depths stay stable.
         assert_eq!(indices, [2, 3, 0, 5, 1, 4]);
+        let (disabled, overlay) = sprites_for_passes(&sprites, Mat4::IDENTITY, false);
+        assert!(overlay.is_empty());
+        assert!(
+            disabled
+                .iter()
+                .zip(&ordered)
+                .all(|(a, b)| std::ptr::eq(*a, *b))
+        );
+        let (scene, overlay) = sprites_for_passes(&sprites, Mat4::IDENTITY, true);
+        assert_eq!(scene.len(), 4);
+        assert!(
+            scene
+                .iter()
+                .all(|sprite| sprite.space == SpriteSpace::World)
+        );
+        assert_eq!(overlay.len(), 2);
+        assert!(std::ptr::eq(overlay[0], &raw const sprites[1]));
+        assert!(std::ptr::eq(overlay[1], &raw const sprites[4]));
         assert_eq!(
             ordered.iter().map(|s| s.sprite).collect::<Vec<_>>(),
             [a, b, a, b, b, a]

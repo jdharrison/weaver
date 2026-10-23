@@ -3,9 +3,10 @@
 use crate::context::{WgpuContext, WgpuContextConfig};
 use crate::error::WgpuRenderError;
 use crate::mesh::{MeshPipeline, group_mesh_instances};
+use crate::motion_blur::{CameraHistory, History, MotionBlur};
 use crate::particle::ParticlePipeline;
 use crate::resource::{GpuMesh, GpuTexture, Vertex};
-use crate::sprite::{SpritePipeline, ordered_sprites};
+use crate::sprite::{SpritePipeline, sprites_for_passes};
 use crate::text::TextPipeline;
 use crate::ui::UiPipeline;
 use bytemuck::{Pod, Zeroable};
@@ -20,20 +21,39 @@ struct CameraUniform {
     _pad: f32,
 }
 
-/// A frame produced by the renderer.
+/// A frame produced by the renderer. Submit with [`WgpuRenderer::present`] or
+/// drop it before rendering the next frame; only one frame may be outstanding.
 pub struct RenderFrame {
     /// Surface texture, if rendering to a window.
     pub surface_texture: wgpu::SurfaceTexture,
-    /// Command buffer to submit.
-    pub command_buffer: wgpu::CommandBuffer,
+    // Keep submission and the lease together: extracting a pending command buffer
+    // would allow its instance slots to be overwritten before submission.
+    command_buffer: wgpu::CommandBuffer,
+    _mesh_lease: std::sync::Arc<()>,
+    motion_history: (u64, Option<CameraHistory>),
+}
+
+#[derive(Default)]
+struct FrameTracker(std::sync::Arc<()>);
+
+impl FrameTracker {
+    fn begin(&self) -> Result<std::sync::Arc<()>, WgpuRenderError> {
+        if std::sync::Arc::strong_count(&self.0) != 1 {
+            return Err(WgpuRenderError::Internal(
+                "present or drop the previous RenderFrame before rendering again".into(),
+            ));
+        }
+        Ok(self.0.clone())
+    }
 }
 
 /// WGPU renderer for Weaver.
 ///
-/// Background and scene share optional 4x color and matching depth attachments,
-/// resolved once before single-sample UI/text. No fullscreen filtering is applied.
+/// Background and scene share optional 4x/8x color and matching depth attachments,
+/// resolved before optional camera motion blur, sharp foreground meshes, and UI/text.
 /// For 4-byte color and `Depth32Float`, 4x adds about 28 bytes per surface pixel
-/// over single-sample depth (excluding the unchanged swapchain and GPU padding).
+/// over single-sample depth; 8x adds about 60 bytes (excluding the unchanged
+/// swapchain and GPU padding).
 pub struct WgpuRenderer {
     context: WgpuContext,
     camera_buffer: wgpu::Buffer,
@@ -43,7 +63,13 @@ pub struct WgpuRenderer {
     msaa_color: Option<SceneAttachment>,
     depth_format: wgpu::TextureFormat,
     mesh_pipeline: MeshPipeline,
+    motion_blur: Option<MotionBlur>,
+    motion_history: History,
+    foreground_pipeline: Option<MeshPipeline>,
+    foreground_depth: Option<wgpu::TextureView>,
+    frame_tracker: FrameTracker,
     sprite_pipeline: SpritePipeline,
+    screen_sprite_pipeline: Option<SpritePipeline>,
     particle_pipeline: ParticlePipeline,
     text_pipeline: TextPipeline,
     ui_pipeline: UiPipeline,
@@ -157,7 +183,13 @@ impl WgpuRenderer {
             msaa_color,
             depth_format,
             mesh_pipeline,
+            motion_blur: None,
+            motion_history: History::default(),
+            foreground_pipeline: None,
+            foreground_depth: None,
+            frame_tracker: FrameTracker::default(),
             sprite_pipeline,
+            screen_sprite_pipeline: None,
             particle_pipeline,
             text_pipeline,
             ui_pipeline,
@@ -199,13 +231,23 @@ impl WgpuRenderer {
             data,
             self.context.anisotropy,
         )?;
-        self.textures.insert(handle, texture);
+        if let Some(old) = self.textures.insert(handle, texture) {
+            self.mesh_pipeline.invalidate_texture(&old);
+            if let Some(pipeline) = &mut self.foreground_pipeline {
+                pipeline.invalidate_texture(&old);
+            }
+        }
         Ok(())
     }
 
     /// Remove a dynamic override, releasing its GPU resource and restoring the asset.
     pub fn remove_texture_override(&mut self, handle: weaver_render::SpriteHandle) {
-        self.texture_overrides.remove(&handle);
+        if let Some(old) = self.texture_overrides.remove(&handle) {
+            self.mesh_pipeline.invalidate_texture(&old);
+            if let Some(pipeline) = &mut self.foreground_pipeline {
+                pipeline.invalidate_texture(&old);
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         self.video_staging.remove(&handle);
     }
@@ -276,6 +318,14 @@ impl WgpuRenderer {
         } else {
             wgpu::ExternalImageSource::HTMLVideoElement(video.clone())
         };
+        if let Some(old) = self.texture_overrides.get(&handle)
+            && old.size != (width, height)
+        {
+            self.mesh_pipeline.invalidate_texture(old);
+            if let Some(pipeline) = &mut self.foreground_pipeline {
+                pipeline.invalidate_texture(old);
+            }
+        }
         let texture = &crate::external_image::ensure_texture(
             &mut self.texture_overrides,
             &self.context.device,
@@ -309,6 +359,9 @@ impl WgpuRenderer {
 
     /// Resize the renderer surface.
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.reset_motion_blur_history();
+        self.motion_blur = None;
+        self.foreground_depth = None;
         self.context.resize(width, height);
         self.depth_texture = create_scene_attachment(
             &self.context.device,
@@ -338,6 +391,7 @@ impl WgpuRenderer {
         &mut self,
         snapshot: &weaver_render::SceneSnapshot,
     ) -> Result<RenderFrame, WgpuRenderError> {
+        let mesh_lease = self.frame_tracker.begin()?;
         snapshot
             .validate()
             .map_err(|err| WgpuRenderError::Internal(err.to_string()))?;
@@ -346,6 +400,62 @@ impl WgpuRenderer {
         let view_matrix = snapshot.camera.view_matrix();
         let proj_matrix = snapshot.camera.projection.matrix(aspect);
         let view_proj = proj_matrix * view_matrix;
+        validate_blur_camera(
+            snapshot.motion_blur.is_some(),
+            [view_matrix, proj_matrix, view_proj],
+        )?;
+        let (scene_sprites, screen_sprites) = sprites_for_passes(
+            &snapshot.sprites,
+            view_matrix,
+            snapshot.motion_blur.is_some(),
+        );
+        let camera = CameraHistory {
+            view_projection: view_proj,
+            projection: proj_matrix,
+        };
+        let pending_history = self
+            .motion_history
+            .pending(snapshot.motion_blur.map(|_| camera));
+        if snapshot.motion_blur.is_some() && self.motion_blur.is_none() {
+            crate::motion_blur::check_support(
+                &self.context.adapter,
+                &self.context.device,
+                self.context.surface_config.format,
+                self.context.sample_count,
+            )?;
+            self.motion_blur = Some(MotionBlur::new(
+                &self.context.device,
+                self.context.surface_config.format,
+                self.context.surface_size,
+                self.context.sample_count,
+            ));
+        }
+        if !snapshot.foreground_meshes.is_empty() && self.foreground_pipeline.is_none() {
+            self.foreground_pipeline = Some(MeshPipeline::new(
+                &self.context.device,
+                self.context.surface_config.format,
+                1,
+                self.context.anisotropy,
+            )?);
+        }
+        if !screen_sprites.is_empty() && self.screen_sprite_pipeline.is_none() {
+            self.screen_sprite_pipeline = Some(SpritePipeline::new(
+                &self.context.device,
+                self.context.surface_config.format,
+                1,
+            )?);
+        }
+        if (!snapshot.foreground_meshes.is_empty() || !screen_sprites.is_empty())
+            && self.foreground_depth.is_none()
+        {
+            self.foreground_depth = Some(crate::motion_blur::target(
+                &self.context.device,
+                self.depth_format,
+                self.context.surface_size,
+                1,
+                false,
+            ));
+        }
         let eye = snapshot.camera.eye;
         self.context.queue.write_buffer(
             &self.camera_buffer,
@@ -365,15 +475,24 @@ impl WgpuRenderer {
                 });
 
         let surface_texture = self.context.acquire()?;
+        // The previous frame was submitted (same queue) or discarded. Writes
+        // queued below cannot precede a prior submitted draw on these slots.
+        self.mesh_pipeline.reset_instance_slots();
+        if let Some(pipeline) = &mut self.foreground_pipeline {
+            pipeline.reset_instance_slots();
+        }
         let surface_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let blur = snapshot.motion_blur.and(self.motion_blur.as_ref());
+        let resolved_view = blur.map_or(&surface_view, |blur| &blur.color);
+        let depth_view = blur.map_or(&self.depth_texture.view, |blur| &blur.depth);
         let scene_view = self
             .msaa_color
             .as_ref()
-            .map_or(&surface_view, |color| &color.view);
-        let resolve_target = self.msaa_color.as_ref().map(|_| &surface_view);
+            .map_or(resolved_view, |color| &color.view);
+        let resolve_target = self.msaa_color.as_ref().map(|_| resolved_view);
 
         // Background preserves multisample color/depth; only the main pass resolves.
         // Background pass: clear color/depth and render distant background particles.
@@ -389,7 +508,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
+                    view: depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -425,7 +544,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
+                    view: depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: if snapshot.background_particles.is_empty() {
                             wgpu::LoadOp::Clear(1.0)
@@ -464,8 +583,7 @@ impl WgpuRenderer {
 
             // Sort globally before selecting textures; texture grouping must not
             // reorder alpha-blended world sprites. Screen sprites keep input order.
-            let sprites = ordered_sprites(&snapshot.sprites, view_matrix);
-            let sprite_draws: Vec<_> = sprites
+            let sprite_draws: Vec<_> = scene_sprites
                 .into_iter()
                 .map(|sprite| {
                     let texture = self
@@ -497,6 +615,116 @@ impl WgpuRenderer {
                     &all_particles,
                 )?;
             }
+        }
+
+        if let (Some(blur), Some(settings)) = (blur, snapshot.motion_blur) {
+            blur.encode(
+                &self.context.queue,
+                &mut encoder,
+                &surface_view,
+                view_proj,
+                self.motion_history.previous(camera, settings.reset_history),
+                settings,
+            );
+        }
+
+        // Foreground is an overlay, not world-occluded geometry. Its fresh depth
+        // only orders foreground meshes against one another.
+        if !snapshot.foreground_meshes.is_empty() {
+            let pipeline = self
+                .foreground_pipeline
+                .as_mut()
+                .expect("foreground pipeline");
+            let mut draws = Vec::new();
+            for ((handle, texture_handle, _), instances) in
+                group_mesh_instances(&snapshot.foreground_meshes)
+            {
+                if let Some(mesh) = self.meshes.get(&handle) {
+                    let texture = texture_handle
+                        .and_then(|handle| {
+                            self.texture_overrides
+                                .get(&handle)
+                                .or_else(|| self.textures.get(&handle))
+                        })
+                        .unwrap_or(&self.default_mesh_texture);
+                    draws.push((mesh.clone(), texture, instances));
+                }
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sharp-foreground"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.foreground_depth.as_ref().expect("foreground depth"),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pipeline.render(
+                &mut pass,
+                &self.context.device,
+                &self.context.queue,
+                &self.camera_bind_group,
+                &draws,
+            )?;
+        }
+
+        if !screen_sprites.is_empty() {
+            let draws: Vec<_> = screen_sprites
+                .into_iter()
+                .map(|sprite| {
+                    let texture = self
+                        .texture_overrides
+                        .get(&sprite.sprite)
+                        .or_else(|| self.textures.get(&sprite.sprite))
+                        .unwrap_or(&self.default_texture);
+                    (texture, sprite)
+                })
+                .collect();
+            // Screen sprites compare Always and never write depth. The existing
+            // pipeline still requires a compatible attachment; reuse the lazy
+            // overlay target, independently cleared after foreground meshes.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sharp-screen-sprites"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.foreground_depth.as_ref().expect("overlay depth"),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.screen_sprite_pipeline
+                .as_mut()
+                .expect("screen sprite pipeline")
+                .render(
+                    &mut pass,
+                    &self.context.device,
+                    &self.camera_bind_group,
+                    &draws,
+                )?;
         }
 
         // UI and text stay single-sample on the resolved surface, without depth.
@@ -540,6 +768,8 @@ impl WgpuRenderer {
         Ok(RenderFrame {
             surface_texture,
             command_buffer,
+            _mesh_lease: mesh_lease,
+            motion_history: pending_history,
         })
     }
 
@@ -547,9 +777,16 @@ impl WgpuRenderer {
     pub fn present(&mut self, frame: RenderFrame) {
         self.context.queue.submit([frame.command_buffer]);
         frame.surface_texture.present();
+        self.motion_history.commit(frame.motion_history);
         // Dynamic debug and tooltip text can otherwise retain glyph atlas work
         // indefinitely across frames.
         self.text_pipeline.trim_atlas();
+    }
+
+    /// Invalidate camera motion history after a user/platform camera cut.
+    /// Also prevents an already encoded frame from restoring pre-cut history.
+    pub fn reset_motion_blur_history(&mut self) {
+        self.motion_history.reset();
     }
 
     /// Mutable access to the WGPU context.
@@ -563,6 +800,20 @@ impl WgpuRenderer {
     pub fn context(&self) -> &WgpuContext {
         &self.context
     }
+}
+
+fn validate_blur_camera(enabled: bool, matrices: [glam::Mat4; 3]) -> Result<(), WgpuRenderError> {
+    // Legacy screen/UI-only snapshots need not supply an invertible 3D camera.
+    if enabled
+        && matrices
+            .into_iter()
+            .any(|matrix| !crate::motion_blur::valid_matrix(matrix))
+    {
+        return Err(WgpuRenderError::Internal(
+            "nonfinite or singular camera matrix".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn background_color(color: &[f32; 4]) -> wgpu::Color {
@@ -633,4 +884,37 @@ fn create_checker_texture(
     }
     GpuTexture::from_rgba_with_anisotropy(device, queue, size, size, &data, anisotropy)
         .expect("default texture upload")
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::{FrameTracker, validate_blur_camera};
+
+    #[test]
+    fn screen_only_snapshot_requires_invertible_camera_only_for_blur() {
+        let snapshot = weaver_render::SceneSnapshot::new(weaver_core::Revision::ZERO);
+        assert!(snapshot.validate().is_ok());
+        assert!(snapshot.motion_blur.is_none());
+        let view = snapshot.camera.view_matrix();
+        let projection = snapshot.camera.projection.matrix(1.0);
+        let matrices = [view, projection, projection * view];
+        assert!(validate_blur_camera(snapshot.motion_blur.is_some(), matrices).is_ok());
+        assert!(validate_blur_camera(true, matrices).is_err());
+        assert!(validate_blur_camera(false, [glam::Mat4::ZERO; 3]).is_ok());
+        assert!(validate_blur_camera(true, [glam::Mat4::ZERO; 3]).is_err());
+    }
+
+    #[test]
+    fn pending_frame_blocks_reuse_until_submitted_or_discarded() {
+        let tracker = FrameTracker::default();
+        let pending = tracker.begin().unwrap();
+        assert!(tracker.begin().is_err());
+        // present holds this lease through queue.submit; an abandoned frame
+        // releases it only when its privately owned command buffer is dropped.
+        drop(pending);
+        let next = tracker.begin().unwrap();
+        assert!(tracker.begin().is_err());
+        drop(next);
+        assert!(tracker.begin().is_ok());
+    }
 }

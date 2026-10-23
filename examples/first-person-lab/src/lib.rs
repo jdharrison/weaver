@@ -1138,6 +1138,7 @@ impl WeaverApp for FirstPersonLab {
                 sequence,
                 payload,
             } => self.receive_unreliable_pose(entity_id, sequence, &payload),
+            RealtimeEvent::LatencyUpdated { .. } => {}
             RealtimeEvent::Disconnected { reason } => {
                 self.host_chat.borrow_mut().reset_connection();
                 self.local_entity_id = None;

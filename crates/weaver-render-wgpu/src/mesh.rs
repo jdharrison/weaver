@@ -11,7 +11,89 @@ use crate::resource::{GpuMesh, GpuTexture, Vertex};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use weaver_render::{MeshHandle, MeshInstance, MeshTextureFit, SpriteHandle};
-use wgpu::util::DeviceExt;
+
+// Retain transient peaks briefly, not for the lifetime of the renderer.
+const RESOURCE_IDLE_FRAMES: u16 = 120;
+const INSTANCE_BUFFER_SIZE: u64 = (MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>()) as u64;
+
+struct InstanceSlot {
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+struct DrawSlots<T> {
+    slots: Vec<(T, u16)>,
+    used: usize,
+}
+
+impl<T> Default for DrawSlots<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            used: 0,
+        }
+    }
+}
+
+impl<T> DrawSlots<T> {
+    fn next(&mut self, create: impl FnOnce() -> T) -> &T {
+        if self.used == self.slots.len() {
+            self.slots.push((create(), 0));
+        }
+        let index = self.used;
+        self.used += 1;
+        self.slots[index].1 = 0;
+        &self.slots[index].0
+    }
+
+    fn reset(&mut self) {
+        for (_, idle) in &mut self.slots[self.used..] {
+            *idle = idle.saturating_add(1);
+        }
+        while self
+            .slots
+            .last()
+            .is_some_and(|(_, idle)| *idle >= RESOURCE_IDLE_FRAMES)
+        {
+            self.slots.pop();
+        }
+        self.used = 0;
+    }
+}
+
+// Key by the actual resolved view, not the logical asset handle or its address.
+// Replacing an override/view (including fallback white) cannot hit an old entry.
+struct TextureBindings<K, V> {
+    entries: HashMap<(K, MeshSamplingMode), (V, u16)>,
+}
+
+impl<K: Eq + std::hash::Hash, V> TextureBindings<K, V> {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    fn invalidate(&mut self, view: &K) {
+        self.entries.retain(|(key, _), _| key != view);
+    }
+
+    fn age(&mut self) {
+        self.entries.retain(|_, (_, idle)| {
+            *idle = idle.saturating_add(1);
+            *idle < RESOURCE_IDLE_FRAMES
+        });
+    }
+
+    fn get_or_insert(&mut self, view: K, mode: MeshSamplingMode, create: impl FnOnce() -> V) -> &V {
+        let (binding, idle) = self
+            .entries
+            .entry((view, mode))
+            .or_insert_with(|| (create(), 0));
+        *idle = 0;
+        binding
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MeshSamplingMode {
@@ -157,11 +239,8 @@ fn mesh_instance_batches(
     instances: &[MeshInstance],
 ) -> impl Iterator<Item = (&[MeshInstance], Vec<MeshInstanceRaw>)> {
     instances.chunks(MAX_INSTANCES).map(|chunk| {
-        // The shader declares a fixed-size array, including in the final partial batch.
-        let mut raw = vec![MeshInstanceRaw::zeroed(); MAX_INSTANCES];
-        for (out, instance) in raw.iter_mut().zip(chunk) {
-            *out = MeshInstanceRaw::from(instance);
-        }
+        // Only active records are uploaded; the GPU binding remains the full array.
+        let raw = chunk.iter().map(MeshInstanceRaw::from).collect();
         (chunk, raw)
     })
 }
@@ -174,6 +253,8 @@ pub struct MeshPipeline {
     texture_layout: wgpu::BindGroupLayout,
     repeat_sampler: wgpu::Sampler,
     clamp_sampler: wgpu::Sampler,
+    instance_slots: DrawSlots<InstanceSlot>,
+    texture_bindings: TextureBindings<wgpu::TextureView, wgpu::BindGroup>,
 }
 
 impl MeshPipeline {
@@ -272,10 +353,33 @@ impl MeshPipeline {
             texture_layout,
             repeat_sampler,
             clamp_sampler,
+            instance_slots: DrawSlots::default(),
+            texture_bindings: TextureBindings::new(),
         })
     }
 
+    /// Immediately release cached bindings for a removed/replaced texture view.
+    /// Already encoded draws retain their own WGPU references. In-place pixel
+    /// updates require no invalidation; new views cannot hit old cache entries.
+    pub fn invalidate_texture(&mut self, texture: &GpuTexture) {
+        self.texture_bindings.invalidate(&texture.view);
+    }
+
+    /// Reclaim instance slots after ALL previously encoded mesh draws have been
+    /// submitted to the same queue, or their command buffers have been discarded.
+    /// GPU completion is not required: subsequent queue writes execute after the
+    /// earlier submission. Never reset between passes/draws of a pending submission.
+    /// Surplus slots are released after 120 idle resets; active slots are retained.
+    pub fn reset_instance_slots(&mut self) {
+        self.instance_slots.reset();
+    }
+
     /// Render mesh instances from a snapshot.
+    ///
+    /// Calls append distinct instance slots until `reset_instance_slots` is called.
+    /// Use the same device/queue for this pipeline's lifetime. Texture bindings
+    /// follow resolved view identity and sampling mode; unused entries expire
+    /// after 120 render calls (in-place pixel updates do not invalidate bindings).
     ///
     /// # Errors
     ///
@@ -284,10 +388,11 @@ impl MeshPipeline {
         &'pass mut self,
         pass: &mut wgpu::RenderPass<'pass>,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         camera_bind_group: &'pass wgpu::BindGroup,
         meshes: &[(GpuMesh, &GpuTexture, Vec<MeshInstance>)],
     ) -> Result<(), WgpuRenderError> {
+        self.texture_bindings.age();
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera_bind_group, &[]);
 
@@ -302,41 +407,47 @@ impl MeshPipeline {
                 MeshSamplingMode::Repeat => &self.repeat_sampler,
                 MeshSamplingMode::ClampToEdge => &self.clamp_sampler,
             };
-            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("mesh-texture-bind-group"),
-                layout: &self.texture_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            });
-            pass.set_bind_group(2, &texture_bind_group, &[]);
+            let texture_bind_group =
+                self.texture_bindings
+                    .get_or_insert(texture.view.clone(), sampling_mode, || {
+                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("mesh-texture-bind-group"),
+                            layout: &self.texture_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&texture.view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(sampler),
+                                },
+                            ],
+                        })
+                    });
+            pass.set_bind_group(2, texture_bind_group, &[]);
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             for (chunk, raw) in mesh_instance_batches(instances) {
-                // Distinct storage prevents later batches overwriting earlier draws
-                // before the command buffer is submitted, as in the sprite pipeline.
-                let instance_buffer =
-                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                let slot = self.instance_slots.next(|| {
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("mesh-instances"),
-                        contents: bytemuck::cast_slice(&raw),
-                        usage: wgpu::BufferUsages::UNIFORM,
+                        size: INSTANCE_BUFFER_SIZE,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
                     });
-                let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("mesh-instance-bind-group"),
-                    layout: &self.instance_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: instance_buffer.as_entire_binding(),
-                    }],
+                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("mesh-instance-bind-group"),
+                        layout: &self.instance_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    });
+                    InstanceSlot { buffer, bind_group }
                 });
-                pass.set_bind_group(1, &instance_bind_group, &[]);
+                queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&raw));
+                pass.set_bind_group(1, &slot.bind_group, &[]);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..chunk.len() as u32);
             }
         }
@@ -348,6 +459,91 @@ impl MeshPipeline {
 mod tests {
     use super::*;
     use weaver_render::{MeshLighting, RenderTransform};
+
+    #[test]
+    fn slots_are_distinct_until_reset_and_reused_without_creation() {
+        let mut slots = DrawSlots::default();
+        // Multiple materials, chunks, and render calls in one submission append.
+        for id in 0..6 {
+            assert_eq!(*slots.next(|| id), id);
+        }
+        assert_eq!(slots.used, 6);
+        slots.reset();
+        for id in 0..6 {
+            assert_eq!(*slots.next(|| panic!("warm slot allocated")), id);
+        }
+        slots.reset();
+        for _ in 0..RESOURCE_IDLE_FRAMES {
+            assert_eq!(*slots.next(|| panic!("active slot allocated")), 0);
+            slots.reset();
+        }
+        assert_eq!(slots.slots.len(), 1);
+        for _ in 0..RESOURCE_IDLE_FRAMES {
+            slots.reset();
+        }
+        assert!(slots.slots.is_empty());
+        assert_eq!(*slots.next(|| 99), 99);
+    }
+
+    #[test]
+    fn texture_cache_tracks_resolved_identity_modes_and_eviction() {
+        let mut cache = TextureBindings::new();
+        let repeat = MeshSamplingMode::Repeat;
+        let clamp = MeshSamplingMode::ClampToEdge;
+        // Synthetic view identities exercise the same cache as WGPU views.
+        let (white, asset, replacement, video) = (0, 1, 2, 3);
+        assert_eq!(*cache.get_or_insert(white, repeat, || 10), 10);
+        assert_eq!(*cache.get_or_insert(white, clamp, || 11), 11);
+        assert_eq!(*cache.get_or_insert(asset, repeat, || 20), 20);
+        assert_eq!(*cache.get_or_insert(asset, clamp, || 21), 21);
+        // In-place updates and cloned handles preserve binding identity.
+        assert_eq!(
+            *cache.get_or_insert(asset, repeat, || panic!("cache miss")),
+            20
+        );
+        // Even without explicit invalidation (direct callers), replacement views
+        // must not reuse a binding for the old view at the same logical handle.
+        assert_eq!(*cache.get_or_insert(replacement, repeat, || 30), 30);
+        assert_eq!(
+            *cache.get_or_insert(asset, repeat, || panic!("old view changed")),
+            20
+        );
+        cache.invalidate(&asset);
+        assert!(!cache.entries.keys().any(|(view, _)| *view == asset));
+        assert_eq!(*cache.get_or_insert(replacement, repeat, || 30), 30);
+        assert_eq!(*cache.get_or_insert(video, repeat, || 40), 40);
+        cache.invalidate(&video);
+        assert_eq!(
+            *cache.get_or_insert(replacement, repeat, || panic!("restored asset miss")),
+            30
+        );
+        cache.invalidate(&replacement);
+        assert_eq!(
+            *cache.get_or_insert(white, repeat, || panic!("fallback miss")),
+            10
+        );
+        cache.invalidate(&white);
+        assert!(cache.entries.is_empty());
+        cache.get_or_insert(white, repeat, || 50);
+        cache.get_or_insert(asset, clamp, || 60);
+        for _ in 0..RESOURCE_IDLE_FRAMES {
+            cache.age();
+            cache.get_or_insert(white, repeat, || panic!("live binding expired"));
+        }
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(*cache.get_or_insert(asset, clamp, || 61), 61);
+    }
+
+    #[test]
+    fn tiny_batch_uploads_only_active_records_but_binding_is_16_kib() {
+        let instances = [MeshInstance::new(
+            MeshHandle::new(),
+            RenderTransform::default(),
+        )];
+        let (_, raw) = mesh_instance_batches(&instances).next().unwrap();
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&raw).len(), 128);
+        assert_eq!(INSTANCE_BUFFER_SIZE, 16 * 1024);
+    }
 
     #[test]
     fn uniform_batches_preserve_128_129_and_160_instances() {
@@ -371,7 +567,7 @@ mod tests {
             );
             let mut next = 0;
             for (chunk, raw) in &batches {
-                assert_eq!(raw.len(), MAX_INSTANCES);
+                assert_eq!(raw.len(), chunk.len());
                 assert!(raw.len() * std::mem::size_of::<MeshInstanceRaw>() <= 16 * 1024);
                 for (instance, encoded) in chunk.iter().zip(raw) {
                     assert!(std::ptr::eq(instance, &raw const instances[next]));
@@ -382,11 +578,7 @@ mod tests {
                     );
                     next += 1;
                 }
-                assert!(
-                    bytemuck::cast_slice::<MeshInstanceRaw, u8>(&raw[chunk.len()..])
-                        .iter()
-                        .all(|byte| *byte == 0)
-                );
+                assert_eq!(raw.len(), chunk.len());
             }
             assert_eq!(next, count);
             assert!(
@@ -669,7 +861,7 @@ mod tests {
 
     #[test]
     fn samplers_preserve_repeat_defaults_and_clamp_only_the_fitted_address_mode() {
-        for anisotropy in [1, 4, 8] {
+        for anisotropy in [1, 4, 8, 16] {
             let expected_repeat = wgpu::SamplerDescriptor {
                 label: Some("mesh-repeat-sampler"),
                 address_mode_u: wgpu::AddressMode::Repeat,

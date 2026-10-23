@@ -6,7 +6,7 @@ use glam::Vec2;
 use std::sync::Arc;
 use std::time::Instant;
 use weaver_app_core::{
-    AppAction, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeDriver,
+    AppAction, ButtonState, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeDriver,
     RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp,
 };
 use winit::application::ApplicationHandler;
@@ -26,6 +26,10 @@ pub struct DesktopConfig {
     pub height: u32,
     /// Surface presentation mode.
     pub present_mode: wgpu::PresentMode,
+    /// Requested scene MSAA: highest supported of 8, 4, 1 up to this request.
+    pub requested_sample_count: u32,
+    /// Static-texture anisotropy, clamped to 1..=16 and capability-gated.
+    pub requested_anisotropy: u16,
 }
 
 impl Default for DesktopConfig {
@@ -34,6 +38,8 @@ impl Default for DesktopConfig {
             width: 1280,
             height: 720,
             present_mode: wgpu::PresentMode::AutoVsync,
+            requested_sample_count: 4,
+            requested_anisotropy: 8,
         }
     }
 }
@@ -147,6 +153,7 @@ impl MovementKeys {
     const ARROW_RIGHT: u16 = 128;
     const SHIFT_LEFT: u16 = 256;
     const SHIFT_RIGHT: u16 = 512;
+    const CONTROL_LEFT: u16 = 1024;
 
     fn set(&mut self, key: PhysicalKey, pressed: bool) {
         let bit = match key {
@@ -160,6 +167,7 @@ impl MovementKeys {
             PhysicalKey::Code(KeyCode::ArrowRight) => Self::ARROW_RIGHT,
             PhysicalKey::Code(KeyCode::ShiftLeft) => Self::SHIFT_LEFT,
             PhysicalKey::Code(KeyCode::ShiftRight) => Self::SHIFT_RIGHT,
+            PhysicalKey::Code(KeyCode::ControlLeft) => Self::CONTROL_LEFT,
             _ => return,
         };
         if pressed {
@@ -186,11 +194,70 @@ impl MovementKeys {
         self.0 & (Self::SHIFT_LEFT | Self::SHIFT_RIGHT) != 0
     }
 
+    fn crouch(&self) -> bool {
+        self.0 & Self::CONTROL_LEFT != 0
+    }
+
     fn clear(&mut self) {
         self.0 = 0;
     }
 }
 
+/// Pure routing policy: a capture click is consumed, never forwarded as fire.
+#[derive(Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent application and window gates, not mutually exclusive states"
+)]
+struct GameplayRouting {
+    pointer: PointerMode,
+    enabled: bool,
+    focused: bool,
+    text_focused: bool,
+    captured: bool,
+}
+
+impl GameplayRouting {
+    fn available(self) -> bool {
+        self.pointer == PointerMode::LockedLook && self.focused && !self.text_focused
+    }
+
+    fn left_button(self, input: &mut InputFrame, pressed: bool) -> bool {
+        if !self.available() {
+            return false;
+        }
+        if !self.captured {
+            return pressed;
+        }
+        if self.enabled {
+            input.fire.set(pressed);
+        }
+        false
+    }
+
+    fn reload(self, input: &mut InputFrame, pressed: bool, repeat: bool) {
+        if self.available() && self.enabled && self.captured && !repeat {
+            input.reload.set(pressed);
+        }
+    }
+}
+
+fn reset_controls(input: &mut InputFrame) {
+    input.movement = Vec2::ZERO;
+    input.sprint = false;
+    input.crouch = false;
+    input.look_delta = Vec2::ZERO;
+    input.zoom_delta = 0.0;
+    input.toggle_perspective = false;
+    input.fire = ButtonState::default();
+    input.reload = ButtonState::default();
+    input.controls_reset = true;
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Tracks independent window, pointer, and application state"
+)]
 struct DesktopShell {
     app: Box<dyn WeaverApp>,
     config: DesktopConfig,
@@ -206,6 +273,10 @@ struct DesktopShell {
     last_cursor: Option<Vec2>,
     dragging: bool,
     cursor_captured: bool,
+    blocked_until_left_release: bool,
+    focused: bool,
+    last_pointer_mode: PointerMode,
+    last_gameplay_enabled: bool,
     last_text_input_mode: TextInputMode,
     started_at: Instant,
     last_frame: Instant,
@@ -218,6 +289,8 @@ impl DesktopShell {
         realtime: Option<Box<dyn RealtimeDriver>>,
     ) -> Self {
         let now = Instant::now();
+        let last_pointer_mode = app.pointer_mode();
+        let last_gameplay_enabled = app.gameplay_input_enabled();
         Self {
             app,
             config,
@@ -233,6 +306,10 @@ impl DesktopShell {
             last_cursor: None,
             dragging: false,
             cursor_captured: false,
+            blocked_until_left_release: false,
+            focused: false,
+            last_pointer_mode,
+            last_gameplay_enabled,
             last_text_input_mode: TextInputMode::Disabled,
             started_at: now,
             last_frame: now,
@@ -251,6 +328,53 @@ impl DesktopShell {
             window.set_cursor_visible(true);
         }
         self.cursor_captured = false;
+        self.blocked_until_left_release = false;
+        self.movement.clear();
+        self.dragging = false;
+        self.last_cursor = None;
+        reset_controls(&mut self.input);
+    }
+
+    fn capture_succeeded(&mut self) {
+        self.cursor_captured = true;
+        self.blocked_until_left_release = true;
+    }
+
+    fn left_button(&mut self, pressed: bool) -> bool {
+        // Capture consumes the entire click, including duplicate presses and holds
+        // across redraws. Keep fire neutral so held-button consumers cannot fire.
+        if self.blocked_until_left_release {
+            if !pressed {
+                self.blocked_until_left_release = false;
+            }
+            return false;
+        }
+        let routing = self.gameplay_routing();
+        routing.left_button(&mut self.input, pressed)
+    }
+
+    fn gameplay_routing(&self) -> GameplayRouting {
+        GameplayRouting {
+            pointer: self.app.pointer_mode(),
+            enabled: self.app.gameplay_input_enabled(),
+            focused: self.focused,
+            text_focused: self.app.text_input_mode() == TextInputMode::Focused
+                || self.input.text_events.contains(&TextInputEvent::Open),
+            captured: self.cursor_captured,
+        }
+    }
+
+    fn sync_input_modes(&mut self) {
+        let pointer = self.app.pointer_mode();
+        let enabled = self.app.gameplay_input_enabled();
+        if (pointer != self.last_pointer_mode || enabled != self.last_gameplay_enabled)
+            && (enabled || self.last_gameplay_enabled)
+        {
+            self.release_cursor();
+        }
+        self.last_pointer_mode = pointer;
+        self.last_gameplay_enabled = enabled;
+        self.sync_text_input();
     }
 
     fn push_text_event(&mut self, event: TextInputEvent) {
@@ -278,11 +402,14 @@ impl DesktopShell {
             self.movement.clear();
             self.input.movement = Vec2::ZERO;
             self.input.sprint = false;
+            self.input.crouch = false;
             self.input.toggle_perspective = false;
             self.input.zoom_delta = 0.0;
             self.input.look_delta = Vec2::ZERO;
             self.dragging = false;
-            self.release_cursor();
+            if self.last_text_input_mode != TextInputMode::Focused || self.cursor_captured {
+                self.release_cursor();
+            }
         }
         let mode = self.app.text_input_mode();
         if mode != self.last_text_input_mode {
@@ -296,7 +423,8 @@ impl DesktopShell {
 
 impl ApplicationHandler for DesktopShell {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if let Some(window) = self.window.as_ref() {
+            self.focused = window.has_focus();
             return;
         }
         let attributes = Window::default_attributes()
@@ -316,6 +444,8 @@ impl ApplicationHandler for DesktopShell {
             Arc::clone(&window),
             weaver_render_wgpu::WgpuContextConfig {
                 present_mode: self.config.present_mode,
+                requested_sample_count: self.config.requested_sample_count,
+                requested_anisotropy: self.config.requested_anisotropy,
                 ..weaver_render_wgpu::WgpuContextConfig::default()
             },
         )) {
@@ -342,6 +472,7 @@ impl ApplicationHandler for DesktopShell {
                 return;
             }
         }
+        self.focused = window.has_focus();
         self.window = Some(window);
         self.renderer = Some(renderer);
     }
@@ -352,6 +483,7 @@ impl ApplicationHandler for DesktopShell {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.sync_input_modes();
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -359,11 +491,12 @@ impl ApplicationHandler for DesktopShell {
                     renderer.resize(size.width, size.height);
                 }
             }
-            WindowEvent::Focused(false) => {
-                self.input = InputFrame::default();
-                self.movement.clear();
-                self.dragging = false;
-                self.release_cursor();
+            WindowEvent::Focused(focused) => {
+                self.focused = focused;
+                if !focused {
+                    self.input = InputFrame::default();
+                    self.release_cursor();
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = Vec2::new(position.x as f32, position.y as f32);
@@ -407,12 +540,16 @@ impl ApplicationHandler for DesktopShell {
                     self.dragging = state == ElementState::Pressed;
                     self.last_cursor = self.cursor_position;
                 }
-                PointerMode::LockedLook if state == ElementState::Pressed => {
-                    if let Some(window) = self.window.as_ref()
-                        && window.set_cursor_grab(CursorGrabMode::Locked).is_ok()
+                PointerMode::LockedLook => {
+                    if self.left_button(state == ElementState::Pressed)
+                        && let Some(window) = self.window.as_ref()
+                        && window
+                            .set_cursor_grab(CursorGrabMode::Locked)
+                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                            .is_ok()
                     {
                         window.set_cursor_visible(false);
-                        self.cursor_captured = true;
+                        self.capture_succeeded();
                     }
                 }
                 _ => {}
@@ -471,8 +608,13 @@ impl ApplicationHandler for DesktopShell {
                     }
                     return;
                 }
+                if physical_key == PhysicalKey::Code(KeyCode::KeyR) {
+                    let routing = self.gameplay_routing();
+                    routing.reload(&mut self.input, pressed, repeat);
+                }
                 self.movement.set(physical_key, pressed);
                 self.input.sprint = self.movement.sprint();
+                self.input.crouch = self.movement.crouch();
                 if pressed {
                     let action = match logical_key.as_ref() {
                         Key::Named(NamedKey::Space) => Some(AppAction::TogglePause),
@@ -512,9 +654,10 @@ impl ApplicationHandler for DesktopShell {
                 if !keep_realtime {
                     self.realtime = None;
                 }
+                self.sync_input_modes();
                 self.app.update(frame, &self.input);
-                self.sync_text_input();
                 self.input.clear_transient();
+                self.sync_input_modes();
                 if let (Some(window), Some(renderer)) =
                     (self.window.as_ref(), self.renderer.as_mut())
                 {
@@ -531,12 +674,18 @@ impl ApplicationHandler for DesktopShell {
         }
     }
 
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.focused = false;
+        self.release_cursor();
+    }
+
     fn device_event(
         &mut self,
         _event_loop: &ActiveEventLoop,
         _device_id: winit::event::DeviceId,
         event: DeviceEvent,
     ) {
+        self.sync_input_modes();
         if self.cursor_captured
             && let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
         {
@@ -554,6 +703,19 @@ impl ApplicationHandler for DesktopShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_quality_defaults_match_renderer() {
+        let desktop = DesktopConfig::default();
+        let renderer = weaver_render_wgpu::WgpuContextConfig::default();
+        assert_eq!(desktop.requested_sample_count, 4);
+        assert_eq!(desktop.requested_anisotropy, 8);
+        assert_eq!(
+            desktop.requested_sample_count,
+            renderer.requested_sample_count
+        );
+        assert_eq!(desktop.requested_anisotropy, renderer.requested_anisotropy);
+    }
     use std::cell::RefCell;
     use std::rc::Rc;
     use weaver_app_core::AppAssets;
@@ -564,6 +726,7 @@ mod tests {
         assets: AppAssets,
         command_count: usize,
         events: Vec<RealtimeEvent>,
+        input_modes: (PointerMode, bool, TextInputMode),
     }
 
     impl WeaverApp for RealtimeTestApp {
@@ -581,6 +744,18 @@ mod tests {
 
         fn assets(&self) -> &AppAssets {
             &self.assets
+        }
+
+        fn pointer_mode(&self) -> PointerMode {
+            self.input_modes.0
+        }
+
+        fn gameplay_input_enabled(&self) -> bool {
+            self.input_modes.1
+        }
+
+        fn text_input_mode(&self) -> TextInputMode {
+            self.input_modes.2
         }
 
         fn handle_realtime_event(&mut self, event: RealtimeEvent) {
@@ -620,6 +795,7 @@ mod tests {
             assets: AppAssets::default(),
             command_count: MAX_REALTIME_COMMANDS_PER_REDRAW + 1,
             events: Vec::new(),
+            input_modes: (PointerMode::None, false, TextInputMode::Disabled),
         };
         let seen_commands = Rc::new(RefCell::new(0));
         let mut driver = RealtimeTestDriver {
@@ -660,6 +836,306 @@ mod tests {
         movement.clear();
         assert!(!movement.sprint());
         assert_eq!(movement.axis(), Vec2::ZERO);
+    }
+
+    #[test]
+    fn crouch_tracks_only_left_control_without_changing_movement_or_sprint() {
+        let mut movement = MovementKeys::default();
+        movement.set(PhysicalKey::Code(KeyCode::ControlRight), true);
+        assert!(!movement.crouch());
+        for _ in 0..3 {
+            movement.set(PhysicalKey::Code(KeyCode::ControlLeft), true);
+            assert!(movement.crouch());
+            assert_eq!(movement.axis(), Vec2::ZERO);
+            assert!(!movement.sprint());
+        }
+        movement.set(PhysicalKey::Code(KeyCode::KeyW), true);
+        movement.set(PhysicalKey::Code(KeyCode::ShiftLeft), true);
+        movement.set(PhysicalKey::Code(KeyCode::ControlRight), false);
+        assert!(movement.crouch());
+        movement.set(PhysicalKey::Code(KeyCode::ControlLeft), false);
+        assert!(!movement.crouch());
+        assert_eq!(movement.axis(), Vec2::Y);
+        assert!(movement.sprint());
+        movement.set(PhysicalKey::Code(KeyCode::ControlLeft), true);
+        movement.clear();
+        assert!(!movement.crouch());
+    }
+
+    #[test]
+    fn cursor_release_clears_held_crouch_without_restoring_it_on_capture() {
+        let modes = (PointerMode::LockedLook, true, TextInputMode::Disabled);
+        let mut shell = DesktopShell::new(input_test_app(modes), DesktopConfig::default(), None);
+        shell
+            .movement
+            .set(PhysicalKey::Code(KeyCode::ControlLeft), true);
+        shell.input.crouch = shell.movement.crouch();
+        shell.capture_succeeded();
+        assert!(shell.input.crouch);
+        // Focus loss, suspension, and Escape share this reset path.
+        shell.release_cursor();
+        assert!(!shell.input.crouch);
+        assert!(!shell.movement.crouch());
+        assert!(shell.input.controls_reset);
+        shell.capture_succeeded();
+        shell.input.clear_transient();
+        assert!(!shell.input.crouch);
+    }
+
+    fn input_test_app(modes: (PointerMode, bool, TextInputMode)) -> Box<dyn WeaverApp> {
+        Box::new(RealtimeTestApp {
+            scene: SceneSnapshot::default(),
+            assets: AppAssets::default(),
+            command_count: 0,
+            events: Vec::new(),
+            input_modes: modes,
+        })
+    }
+
+    #[test]
+    fn shell_mode_changes_and_cursor_release_cancel_pending_controls() {
+        let modes = (PointerMode::LockedLook, true, TextInputMode::Available);
+        for next in [
+            (PointerMode::None, true, TextInputMode::Available),
+            (PointerMode::LockedLook, false, TextInputMode::Available),
+            (PointerMode::LockedLook, true, TextInputMode::Focused),
+        ] {
+            let mut shell =
+                DesktopShell::new(input_test_app(modes), DesktopConfig::default(), None);
+            shell.focused = true;
+            shell.cursor_captured = true;
+            shell.input.fire.set(true);
+            shell.input.reload.set(true);
+            shell.movement.set(PhysicalKey::Code(KeyCode::KeyW), true);
+            shell
+                .movement
+                .set(PhysicalKey::Code(KeyCode::ControlLeft), true);
+            shell.input.crouch = shell.movement.crouch();
+            shell.app = input_test_app(next);
+            // Mirrors a mode change after update: reset must survive until the next update.
+            shell.input.clear_transient();
+            shell.sync_input_modes();
+            assert!(shell.input.controls_reset);
+            assert_eq!(shell.input.fire, ButtonState::default());
+            assert_eq!(shell.input.reload, ButtonState::default());
+            assert_eq!(shell.movement.axis(), Vec2::ZERO);
+            assert!(!shell.cursor_captured);
+            assert!(!shell.input.crouch);
+            assert!(!shell.movement.crouch());
+            shell.input.clear_transient();
+            shell.sync_input_modes();
+            assert!(!shell.input.controls_reset);
+        }
+        let mut shell = DesktopShell::new(input_test_app(modes), DesktopConfig::default(), None);
+        shell.focused = true;
+        shell.cursor_captured = true;
+        shell.input.fire.set(true);
+        shell.input.reload.set(true);
+        shell.release_cursor();
+        assert!(shell.input.controls_reset);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert_eq!(shell.input.reload, ButtonState::default());
+        shell.input.text_events.push(TextInputEvent::Open);
+        shell.cursor_captured = true;
+        let routing = shell.gameplay_routing();
+        assert!(!routing.left_button(&mut shell.input, true));
+        routing.reload(&mut shell.input, true, false);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert_eq!(shell.input.reload, ButtonState::default());
+    }
+
+    fn shooter_routing() -> GameplayRouting {
+        GameplayRouting {
+            pointer: PointerMode::LockedLook,
+            enabled: true,
+            focused: true,
+            text_focused: false,
+            captured: false,
+        }
+    }
+
+    #[test]
+    fn capture_click_is_consumed_then_captured_clicks_fire_without_regrabbing() {
+        let mut shell = capture_test_shell(true);
+        assert!(shell.left_button(true));
+        assert_eq!(shell.input.fire, ButtonState::default());
+        // The adapter records capture only after a successful native grab.
+        shell.capture_succeeded();
+        for _ in 0..3 {
+            assert!(!shell.left_button(true));
+            assert_eq!(shell.input.fire, ButtonState::default());
+            shell.input.clear_transient();
+        }
+        assert!(shell.blocked_until_left_release);
+        // Reload is independent of the left-button barrier.
+        shell
+            .gameplay_routing()
+            .reload(&mut shell.input, true, false);
+        assert!(shell.input.reload.held && shell.input.reload.pressed);
+        assert!(!shell.left_button(false));
+        assert!(!shell.blocked_until_left_release);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert!(!shell.left_button(true));
+        assert!(shell.input.fire.held && shell.input.fire.pressed);
+        shell.input.clear_transient();
+        assert!(shell.input.fire.held);
+        assert!(!shell.left_button(false));
+        assert!(!shell.input.fire.held && shell.input.fire.released);
+    }
+
+    fn capture_test_shell(enabled: bool) -> DesktopShell {
+        let mut shell = DesktopShell::new(
+            input_test_app((PointerMode::LockedLook, enabled, TextInputMode::Disabled)),
+            DesktopConfig::default(),
+            None,
+        );
+        shell.focused = true;
+        shell
+    }
+
+    #[test]
+    fn capture_barrier_resets_cleanly_and_rearms_on_recapture() {
+        let mut shell = capture_test_shell(true);
+        assert!(shell.left_button(true));
+        shell.capture_succeeded();
+        shell.release_cursor(); // Also used on focus loss, suspend, and mode cancellation.
+        assert!(!shell.blocked_until_left_release);
+        assert!(!shell.cursor_captured);
+        assert!(shell.input.controls_reset);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert!(!shell.left_button(false));
+        assert!(shell.left_button(true));
+        shell.capture_succeeded();
+        assert!(!shell.left_button(true));
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert!(!shell.left_button(false));
+        assert!(!shell.left_button(true));
+        assert!(shell.input.fire.held && shell.input.fire.pressed);
+    }
+
+    #[test]
+    fn shell_failed_capture_and_legacy_capture_keep_fire_neutral() {
+        for enabled in [true, false] {
+            let mut shell = capture_test_shell(enabled);
+            // No successful grab: repeated presses only request capture.
+            for _ in 0..3 {
+                assert!(shell.left_button(true));
+                assert!(!shell.blocked_until_left_release);
+                assert_eq!(shell.input.fire, ButtonState::default());
+            }
+            assert!(!shell.left_button(false));
+        }
+        let mut shell = capture_test_shell(false);
+        assert!(shell.left_button(true));
+        shell.capture_succeeded();
+        assert!(!shell.left_button(true));
+        assert!(!shell.left_button(false));
+        assert!(!shell.left_button(true));
+        shell
+            .gameplay_routing()
+            .reload(&mut shell.input, true, false);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert_eq!(shell.input.reload, ButtonState::default());
+    }
+
+    #[test]
+    fn failed_capture_never_fires_and_legacy_apps_only_request_capture() {
+        let routing = shooter_routing();
+        let mut input = InputFrame::default();
+        for _ in 0..2 {
+            assert!(routing.left_button(&mut input, true));
+            assert!(!routing.left_button(&mut input, false));
+            assert_eq!(input.fire, Default::default());
+        }
+        let legacy = GameplayRouting {
+            enabled: false,
+            ..routing
+        };
+        assert!(legacy.left_button(&mut input, true));
+        let legacy = GameplayRouting {
+            captured: true,
+            ..legacy
+        };
+        assert!(!legacy.left_button(&mut input, true));
+        legacy.reload(&mut input, true, false);
+        assert_eq!(input.fire, Default::default());
+        assert_eq!(input.reload, Default::default());
+    }
+
+    #[test]
+    fn gameplay_requires_all_gates_and_reload_ignores_repeats() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        for blocked in [
+            GameplayRouting {
+                focused: false,
+                ..routing
+            },
+            GameplayRouting {
+                text_focused: true,
+                ..routing
+            },
+            GameplayRouting {
+                pointer: PointerMode::OrbitDrag,
+                ..routing
+            },
+            GameplayRouting {
+                pointer: PointerMode::None,
+                ..routing
+            },
+        ] {
+            let mut input = InputFrame::default();
+            assert!(!blocked.left_button(&mut input, true));
+            blocked.reload(&mut input, true, false);
+            assert_eq!(input.fire, Default::default());
+            assert_eq!(input.reload, Default::default());
+        }
+        let mut input = InputFrame::default();
+        routing.reload(&mut input, true, true);
+        assert_eq!(input.reload, Default::default());
+        routing.reload(&mut input, true, false);
+        assert!(input.reload.held && input.reload.pressed);
+        input.clear_transient();
+        routing.reload(&mut input, true, true);
+        assert!(input.reload.held && !input.reload.pressed);
+        routing.reload(&mut input, false, false);
+        assert!(input.reload.released && !input.reload.held);
+        routing.reload(&mut input, true, false);
+        reset_controls(&mut input);
+        routing.reload(&mut input, true, true);
+        assert_eq!(input.reload, Default::default());
+        assert!(input.controls_reset);
+    }
+
+    #[test]
+    fn cancellation_discards_pending_edges_and_preserves_non_gameplay_events() {
+        let mut input = InputFrame {
+            movement: Vec2::ONE,
+            look_delta: Vec2::ONE,
+            zoom_delta: 1.0,
+            sprint: true,
+            toggle_perspective: true,
+            actions: vec![AppAction::TogglePause],
+            text_events: vec![TextInputEvent::Open],
+            ..InputFrame::default()
+        };
+        input.fire.set(true);
+        input.fire.set(false);
+        input.reload.set(true);
+        reset_controls(&mut input);
+        assert_eq!(input.fire, Default::default());
+        assert_eq!(input.reload, Default::default());
+        assert_eq!(input.movement, Vec2::ZERO);
+        assert_eq!(input.look_delta, Vec2::ZERO);
+        assert_eq!(input.zoom_delta, 0.0);
+        assert!(!input.sprint && !input.toggle_perspective);
+        assert!(input.controls_reset);
+        assert_eq!(input.actions, vec![AppAction::TogglePause]);
+        assert_eq!(input.text_events, vec![TextInputEvent::Open]);
+        input.clear_transient();
+        assert!(!input.controls_reset);
     }
 
     #[test]

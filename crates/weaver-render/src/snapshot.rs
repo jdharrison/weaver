@@ -22,6 +22,13 @@ pub struct SceneSnapshot {
     pub background_color: [f32; 4],
     /// Mesh instances.
     pub meshes: Vec<MeshInstance>,
+    /// Optional camera-motion blur; `None` retains the direct rendering path.
+    pub motion_blur: Option<crate::CameraMotionBlur>,
+    /// Sharp foreground meshes drawn after scene effects, before UI/text.
+    /// These use the scene camera but a fresh, single-sample depth buffer: they
+    /// occlude one another, not world geometry. Intended for camera-mounted models.
+    /// Leave empty to retain the normal world-mesh path and its MSAA quality.
+    pub foreground_meshes: Vec<MeshInstance>,
     /// Sprite instances.
     pub sprites: Vec<SpriteInstance>,
     /// Particle emitters.
@@ -60,6 +67,8 @@ impl SceneSnapshot {
             },
             background_color: [0.0, 0.0, 0.0, 1.0],
             meshes: Vec::new(),
+            motion_blur: None,
+            foreground_meshes: Vec::new(),
             sprites: Vec::new(),
             particles: Vec::new(),
             background_particles: Vec::new(),
@@ -88,6 +97,9 @@ impl SceneSnapshot {
     ///
     /// Returns an error if required fields are inconsistent.
     pub fn validate(&self) -> Result<(), RenderError> {
+        if let Some(settings) = self.motion_blur {
+            settings.validate()?;
+        }
         for sample in &self.transforms {
             if sample.scale <= 0.0 {
                 return Err(RenderError::Internal(format!(

@@ -219,7 +219,7 @@ impl GpuTexture {
 
     /// Upload a static straight-alpha sRGB image with trilinear mip filtering.
     ///
-    /// `anisotropy` is clamped to 1..=8. The caller must pass 1 when the
+    /// `anisotropy` is clamped to 1..=16. The caller must pass 1 when the
     /// adapter does not support anisotropic filtering.
     ///
     /// # Errors
@@ -283,13 +283,7 @@ impl GpuTexture {
             (mip_width, mip_height) = next_mip_size(mip_width, mip_height);
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: anisotropy.clamp(1, 8),
-            ..Default::default()
-        });
+        let sampler = device.create_sampler(&static_sampler_descriptor(anisotropy));
         Ok(Self {
             texture,
             view,
@@ -299,9 +293,30 @@ impl GpuTexture {
     }
 }
 
+fn static_sampler_descriptor(anisotropy: u16) -> wgpu::SamplerDescriptor<'static> {
+    wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        anisotropy_clamp: anisotropy.clamp(1, 16),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_sampler_preserves_high_quality_and_bounds_requests() {
+        for (requested, expected) in [(0, 1), (1, 1), (8, 8), (16, 16), (17, 16), (u16::MAX, 16)] {
+            let sampler = static_sampler_descriptor(requested);
+            assert_eq!(sampler.anisotropy_clamp, expected);
+            assert_eq!(sampler.mag_filter, wgpu::FilterMode::Linear);
+            assert_eq!(sampler.min_filter, wgpu::FilterMode::Linear);
+            assert_eq!(sampler.mipmap_filter, wgpu::FilterMode::Linear);
+        }
+    }
 
     fn mip(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
         downsample_rgba(width, height, data, &srgb_decode_table()).unwrap()

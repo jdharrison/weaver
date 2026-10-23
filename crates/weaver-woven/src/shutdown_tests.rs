@@ -162,6 +162,7 @@ fn managed_adapter_admits_subscribes_publishes_and_releases_ccu() {
             private_key_file: fixture.0.join("key.pem"),
             admin_token_file: fixture.0.join("admin"),
             webtransport: None,
+            state_directory: None,
         }))
         .unwrap();
     server_runtime.block_on(provision(&server, 11, 17));

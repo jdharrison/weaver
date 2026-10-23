@@ -2,6 +2,9 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "glb")]
+pub mod glb;
+
 use glam::{UVec2, Vec2, Vec3};
 use weaver_render::{Camera, MeshHandle, SceneSnapshot, SpriteHandle};
 use weaver_render_wgpu::Vertex;
@@ -102,8 +105,39 @@ pub enum TextInputEvent {
     Cancel,
 }
 
+/// A held button and accumulated transitions since the previous presentation frame.
+/// Both edges may be true after a press and release within the same frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ButtonState {
+    /// Whether the button is currently down.
+    pub held: bool,
+    /// Whether an up-to-down transition occurred.
+    pub pressed: bool,
+    /// Whether a down-to-up transition occurred.
+    pub released: bool,
+}
+
+impl ButtonState {
+    /// Update the held state, accumulating edges; duplicate states do not add edges.
+    pub fn set(&mut self, held: bool) {
+        self.pressed |= held && !self.held;
+        self.released |= !held && self.held;
+        self.held = held;
+    }
+
+    /// Clear accumulated edges without changing the held state.
+    pub fn clear_transient(&mut self) {
+        self.pressed = false;
+        self.released = false;
+    }
+}
+
 /// Input accumulated by a platform shell for one frame.
 #[derive(Clone, Debug, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent held inputs and frame signals, not mutually exclusive states"
+)]
 pub struct InputFrame {
     /// Right/forward movement axis in `[-1, 1]`.
     pub movement: Vec2,
@@ -113,6 +147,15 @@ pub struct InputFrame {
     pub zoom_delta: f32,
     /// Held sprint request; controllers opt in via their sprint multiplier.
     pub sprint: bool,
+    /// Held crouch request; mapped to Left Ctrl on desktop, with behavior owned by the application.
+    pub crouch: bool,
+    /// Primary fire button; currently mapped only by the opted-in desktop adapter.
+    pub fire: ButtonState,
+    /// Reload button; currently mapped only by the opted-in desktop adapter.
+    pub reload: ButtonState,
+    /// Input was cancelled by capture, focus, text-mode, suspend, or input-mode changes.
+    /// Applications must discard buffered gameplay presses even when no simulation tick runs.
+    pub controls_reset: bool,
     /// One-frame request to toggle first/third-person presentation.
     pub toggle_perspective: bool,
     /// Discrete actions received since the previous frame.
@@ -127,6 +170,9 @@ impl InputFrame {
         self.look_delta = Vec2::ZERO;
         self.zoom_delta = 0.0;
         self.toggle_perspective = false;
+        self.fire.clear_transient();
+        self.reload.clear_transient();
+        self.controls_reset = false;
         self.actions.clear();
         self.text_events.clear();
     }
@@ -179,6 +225,13 @@ pub enum RealtimeEvent {
         sequence: u64,
         /// Opaque application payload.
         payload: String,
+    },
+    /// The native QUIC transport's smoothed round-trip time to the Woven server.
+    /// Not one-way latency, peer-pose age, or application/server processing time.
+    /// Best-effort telemetry; unsupported transports do not emit this event.
+    LatencyUpdated {
+        /// Transport RTT in whole microseconds, saturated to `u64::MAX`.
+        rtt_micros: u64,
     },
     /// The realtime connection stopped.
     Disconnected {
@@ -271,6 +324,13 @@ pub trait WeaverApp {
     /// Requested pointer behavior.
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
+    }
+    /// Opt into gameplay buttons (default: disabled).
+    /// Currently only the desktop adapter maps these, while focused, captured,
+    /// in `LockedLook`, and outside text entry. Other adapters leave them neutral.
+    /// Applications own gameplay rules and any fixed-tick edge buffering.
+    fn gameplay_input_enabled(&self) -> bool {
+        false
     }
     /// Current text editing focus requested from the platform shell.
     fn text_input_mode(&self) -> TextInputMode {
@@ -412,6 +472,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crouch_defaults_to_released_and_persists_between_frames() {
+        let mut input = InputFrame::default();
+        assert!(!input.crouch);
+        input.crouch = true;
+        for _ in 0..3 {
+            input.clear_transient();
+            assert!(input.crouch);
+        }
+        input.crouch = false;
+        input.clear_transient();
+        assert!(!input.crouch);
+    }
+
+    #[test]
     fn transient_input_clears_text_without_changing_movement() {
         let mut input = InputFrame {
             movement: Vec2::Y,
@@ -421,6 +495,7 @@ mod tests {
             text_events: vec![TextInputEvent::Insert("hello".to_owned())],
             sprint: true,
             toggle_perspective: true,
+            ..InputFrame::default()
         };
         input.clear_transient();
         assert_eq!(input.movement, Vec2::Y);
@@ -430,6 +505,58 @@ mod tests {
         assert!(!input.toggle_perspective);
         assert!(input.actions.is_empty());
         assert!(input.text_events.is_empty());
+    }
+
+    #[test]
+    fn buttons_accumulate_edges_and_preserve_held_between_frames() {
+        let mut button = ButtonState::default();
+        button.set(true);
+        button.set(true);
+        assert_eq!(
+            button,
+            ButtonState {
+                held: true,
+                pressed: true,
+                released: false
+            }
+        );
+        button.clear_transient();
+        button.set(true);
+        assert_eq!(
+            button,
+            ButtonState {
+                held: true,
+                ..ButtonState::default()
+            }
+        );
+        button.set(false);
+        button.set(true);
+        button.set(false);
+        assert_eq!(
+            button,
+            ButtonState {
+                held: false,
+                pressed: true,
+                released: true
+            }
+        );
+        button.clear_transient();
+        assert_eq!(button, ButtonState::default());
+    }
+
+    #[test]
+    fn frame_clears_button_edges_and_reset_but_not_held() {
+        let mut input = InputFrame {
+            controls_reset: true,
+            ..InputFrame::default()
+        };
+        input.fire.set(true);
+        input.reload.set(true);
+        input.clear_transient();
+        assert!(input.fire.held && input.reload.held);
+        assert!(!input.fire.pressed && !input.reload.pressed);
+        assert!(!input.fire.released && !input.reload.released);
+        assert!(!input.controls_reset);
     }
 
     #[test]

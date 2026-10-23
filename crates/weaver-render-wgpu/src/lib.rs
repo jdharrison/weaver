@@ -10,6 +10,7 @@ pub mod context;
 pub mod error;
 pub mod external_image;
 pub mod mesh;
+mod motion_blur;
 pub mod particle;
 pub mod pipeline;
 pub mod render;

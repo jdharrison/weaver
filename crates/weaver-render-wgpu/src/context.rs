@@ -17,10 +17,12 @@ pub struct WgpuContextConfig {
     pub desired_format: Option<wgpu::TextureFormat>,
     /// Present mode.
     pub present_mode: wgpu::PresentMode,
-    /// Requested scene samples: values below 4 select 1, otherwise 4.
-    /// Falls back to 1 unless surface color resolve and `Depth32Float` support 4x.
+    /// Requested scene samples: selects the highest supported of 8, 4, 1
+    /// not exceeding the request (0 selects 1). Multisampling requires color
+    /// resolve and matching `Depth32Float` support. Requests >= 8 enable
+    /// adapter-specific format features when available.
     pub requested_sample_count: u32,
-    /// Requested static-texture anisotropy, clamped to 1..=8 and capability-gated.
+    /// Requested static-texture anisotropy, clamped to 1..=16 and capability-gated.
     pub requested_anisotropy: u16,
 }
 
@@ -57,9 +59,9 @@ pub struct WgpuContext {
     /// Actual surface texture size in pixels, clamped to the device's maximum
     /// supported 2D texture dimension.
     pub surface_size: (u32, u32),
-    /// Effective scene samples (1 or 4); UI and text remain single-sample.
+    /// Effective scene samples (1, 4, or 8); UI and text remain single-sample.
     pub sample_count: u32,
-    /// Effective static-texture anisotropy (1..=8), or 1 without adapter support.
+    /// Effective static-texture anisotropy (1..=16), or 1 without adapter support.
     pub anisotropy: u16,
 }
 
@@ -98,7 +100,11 @@ impl WgpuContext {
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: config.required_features,
+                required_features: scene_device_features(
+                    config.required_features,
+                    config.requested_sample_count,
+                    adapter.features(),
+                ),
                 required_limits: adapter.limits(),
                 label: Some("weaver-device"),
                 memory_hints: wgpu::MemoryHints::default(),
@@ -119,10 +125,18 @@ impl WgpuContext {
         };
         let sample_count = select_sample_count(
             config.requested_sample_count,
-            adapter.get_texture_format_features(format).flags,
-            adapter
-                .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
-                .flags,
+            scene_format_flags(
+                format,
+                device.features(),
+                adapter.get_texture_format_features(format).flags,
+            ),
+            scene_format_flags(
+                wgpu::TextureFormat::Depth32Float,
+                device.features(),
+                adapter
+                    .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
+                    .flags,
+            ),
         );
         let anisotropy = select_anisotropy(
             config.requested_anisotropy,
@@ -236,25 +250,49 @@ impl WgpuContext {
 }
 
 // Keep quality selection independent of GPU initialization for fallback tests.
+fn scene_device_features(
+    required: wgpu::Features,
+    requested_samples: u32,
+    available: wgpu::Features,
+) -> wgpu::Features {
+    if requested_samples >= 8 {
+        required | (available & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+    } else {
+        required
+    }
+}
+
+fn scene_format_flags(
+    format: wgpu::TextureFormat,
+    enabled: wgpu::Features,
+    advertised: wgpu::TextureFormatFeatureFlags,
+) -> wgpu::TextureFormatFeatureFlags {
+    if enabled.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) {
+        advertised
+    } else {
+        advertised & format.guaranteed_format_features(enabled).flags
+    }
+}
 fn select_sample_count(
     requested: u32,
     color: wgpu::TextureFormatFeatureFlags,
     depth: wgpu::TextureFormatFeatureFlags,
 ) -> u32 {
     use wgpu::TextureFormatFeatureFlags as Flags;
-    if requested >= 4
-        && color.contains(Flags::MULTISAMPLE_X4 | Flags::MULTISAMPLE_RESOLVE)
-        && depth.contains(Flags::MULTISAMPLE_X4)
-    {
-        4
-    } else {
-        1
+    for (count, flag) in [(8, Flags::MULTISAMPLE_X8), (4, Flags::MULTISAMPLE_X4)] {
+        if requested >= count
+            && color.contains(flag | Flags::MULTISAMPLE_RESOLVE)
+            && depth.contains(flag)
+        {
+            return count;
+        }
     }
+    1
 }
 
 fn select_anisotropy(requested: u16, flags: wgpu::DownlevelFlags) -> u16 {
     if flags.contains(wgpu::DownlevelFlags::ANISOTROPIC_FILTERING) {
-        requested.clamp(1, 8)
+        requested.clamp(1, 16)
     } else {
         1
     }
@@ -369,6 +407,67 @@ mod tests {
     }
 
     #[test]
+    fn msaa_descends_through_common_supported_counts() {
+        use wgpu::TextureFormatFeatureFlags as F;
+        for color_samples in [
+            F::empty(),
+            F::MULTISAMPLE_X4,
+            F::MULTISAMPLE_X8,
+            F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8,
+        ] {
+            for depth in [
+                F::empty(),
+                F::MULTISAMPLE_X4,
+                F::MULTISAMPLE_X8,
+                F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8,
+            ] {
+                for resolve in [F::empty(), F::MULTISAMPLE_RESOLVE] {
+                    for requested in [0, 1, 2, 3, 4, 7, 8, 16, u32::MAX] {
+                        let common = color_samples & depth;
+                        let expected = if resolve.is_empty() {
+                            1
+                        } else if requested >= 8 && common.contains(F::MULTISAMPLE_X8) {
+                            8
+                        } else if requested >= 4 && common.contains(F::MULTISAMPLE_X4) {
+                            4
+                        } else {
+                            1
+                        };
+                        assert_eq!(
+                            select_sample_count(requested, color_samples | resolve, depth),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extended_samples_require_enabled_device_format_features() {
+        use wgpu::Features as F;
+        use wgpu::TextureFormatFeatureFlags as T;
+        let extension = F::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let required = F::PUSH_CONSTANTS;
+        assert_eq!(scene_device_features(required, 4, F::all()), required);
+        assert_eq!(scene_device_features(required, 8, F::empty()), required);
+        assert_eq!(
+            scene_device_features(required, 8, F::all()),
+            required | extension
+        );
+        let advertised = T::MULTISAMPLE_X4 | T::MULTISAMPLE_X8 | T::MULTISAMPLE_RESOLVE;
+        for enabled in [F::empty(), extension] {
+            let color =
+                scene_format_flags(wgpu::TextureFormat::Bgra8UnormSrgb, enabled, advertised);
+            let depth = scene_format_flags(wgpu::TextureFormat::Depth32Float, enabled, advertised);
+            assert_eq!(
+                select_sample_count(8, color, depth),
+                if enabled.is_empty() { 4 } else { 8 }
+            );
+        }
+    }
+
+    #[test]
     fn anisotropy_is_bounded_and_capability_gated() {
         for requested in [0, 1, 2, 4, 8, 16, u16::MAX] {
             assert_eq!(
@@ -377,7 +476,7 @@ mod tests {
             );
             assert_eq!(
                 select_anisotropy(requested, wgpu::DownlevelFlags::ANISOTROPIC_FILTERING),
-                requested.clamp(1, 8)
+                requested.clamp(1, 16)
             );
         }
     }

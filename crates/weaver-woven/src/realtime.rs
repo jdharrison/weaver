@@ -3,10 +3,11 @@
 use crate::{
     DeliveryClass, PayloadEnvelope, PersistenceClass, WovenAdapter, WovenAdapterError, WovenConfig,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 use weaver_app_core::{RealtimeCommand, RealtimeDriver, RealtimeEvent};
 
 const APPLICATION_CHANNEL: u64 = 1;
@@ -14,6 +15,30 @@ const CHANNEL_CAPACITY: usize = 128;
 const MAX_ITERATION_WORK: usize = 128;
 const MAX_OUTBOUND_COMMANDS: usize = MAX_ITERATION_WORK / 2;
 const MAX_POLL_EVENTS: usize = 128;
+const LATENCY_INTERVAL: Duration = Duration::from_millis(500);
+
+// Separate from reliable events: telemetry cannot occupy pose/lifecycle queue space.
+#[derive(Default)]
+struct LatencyTelemetry {
+    pending: Mutex<Option<u64>>,
+}
+
+impl LatencyTelemetry {
+    fn sample(&self, rtt: Option<Duration>) {
+        if let Ok(mut pending) = self.pending.try_lock() {
+            *pending = rtt.map(|rtt| u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX));
+        }
+    }
+
+    fn take(&self, now: Instant, last_emitted: &mut Option<Instant>) -> Option<RealtimeEvent> {
+        if last_emitted.is_some_and(|last| now.duration_since(last) < LATENCY_INTERVAL) {
+            return None;
+        }
+        let rtt_micros = self.pending.try_lock().ok()?.take()?;
+        *last_emitted = Some(now);
+        Some(RealtimeEvent::LatencyUpdated { rtt_micros })
+    }
+}
 
 #[derive(Debug)]
 enum WorkerCommand {
@@ -50,13 +75,18 @@ enum ForwardError {
 ///
 /// The Woven adapter and all network operations live on one dedicated worker
 /// thread. [`RealtimeDriver::poll`] only performs bounded nonblocking channel
-/// operations.
+/// operations. Native transport RTT is sampled and emitted at most once per
+/// 500 ms while connected. Telemetry coalesces in a separate single-value slot
+/// and is deferred or dropped under contention/budget pressure, never displacing
+/// application or lifecycle events.
 pub struct WovenRealtimeDriver {
     entity_id: u64,
     command_tx: SyncSender<WorkerCommand>,
     pending_pose: Option<WorkerCommand>,
     event_rx: Receiver<RealtimeEvent>,
     terminal_rx: Receiver<RealtimeEvent>,
+    latency: Arc<LatencyTelemetry>,
+    last_latency_emitted: Option<Instant>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     connected_emitted: bool,
@@ -90,6 +120,8 @@ impl WovenRealtimeDriver {
         let (terminal_tx, terminal_rx) = sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let latency = Arc::new(LatencyTelemetry::default());
+        let worker_latency = Arc::clone(&latency);
         let worker = std::thread::Builder::new()
             .name("weaver-woven-realtime".to_owned())
             .spawn(move || {
@@ -100,6 +132,7 @@ impl WovenRealtimeDriver {
                     &event_tx,
                     &terminal_tx,
                     worker_stop.as_ref(),
+                    worker_latency.as_ref(),
                 );
             })
             .map_err(|error| WovenAdapterError::InitializationFailed(error.to_string()))?;
@@ -110,6 +143,8 @@ impl WovenRealtimeDriver {
             pending_pose: None,
             event_rx,
             terminal_rx,
+            latency,
+            last_latency_emitted: None,
             stop,
             worker: Some(worker),
             connected_emitted: false,
@@ -306,13 +341,17 @@ impl RealtimeDriver for WovenRealtimeDriver {
 
         let event_budget =
             (MAX_ITERATION_WORK - commands.len()).min(MAX_POLL_EVENTS.saturating_sub(emitted + 1));
+        let mut inbound_empty = false;
         for _ in 0..event_budget {
             match self.event_rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
                     emitted += 1;
                 }
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => {
+                    inbound_empty = true;
+                    break;
+                }
                 Err(TryRecvError::Disconnected) => {
                     if !self.receive_terminal(events) {
                         self.fail_closed(
@@ -325,8 +364,18 @@ impl RealtimeDriver for WovenRealtimeDriver {
             }
         }
 
-        if emitted < MAX_POLL_EVENTS {
-            let _ = self.receive_terminal(events);
+        if emitted < MAX_POLL_EVENTS && self.receive_terminal(events) {
+            return;
+        }
+        // Only spare work/event budget may be used by best-effort telemetry.
+        if inbound_empty
+            && emitted + commands.len() < MAX_ITERATION_WORK
+            && emitted < MAX_POLL_EVENTS
+            && let Some(event) = self
+                .latency
+                .take(Instant::now(), &mut self.last_latency_emitted)
+        {
+            events.push(event);
         }
     }
 }
@@ -347,8 +396,10 @@ fn run_worker(
     event_tx: &SyncSender<RealtimeEvent>,
     terminal_tx: &SyncSender<RealtimeEvent>,
     stop: &AtomicBool,
+    latency: &LatencyTelemetry,
 ) {
-    let failure = worker_loop(&mut adapter, entity_id, command_rx, event_tx, stop);
+    let failure = worker_loop(&mut adapter, entity_id, command_rx, event_tx, stop, latency);
+    latency.sample(None);
     stop.store(true, Ordering::Release);
     if let Some(reason) = failure {
         let _ = terminal_tx.try_send(RealtimeEvent::Disconnected { reason });
@@ -362,10 +413,18 @@ fn worker_loop(
     command_rx: &Receiver<WorkerCommand>,
     event_tx: &SyncSender<RealtimeEvent>,
     stop: &AtomicBool,
+    latency: &LatencyTelemetry,
 ) -> Option<String> {
+    let mut last_sample = None;
     loop {
         if stop.load(Ordering::Acquire) {
             return None;
+        }
+
+        let now = Instant::now();
+        if last_sample.is_none_or(|last| now.duration_since(last) >= LATENCY_INTERVAL) {
+            latency.sample(adapter.round_trip_time());
+            last_sample = Some(now);
         }
 
         let mut work = 0;
@@ -645,6 +704,8 @@ mod tests {
             pending_pose: None,
             event_rx,
             terminal_rx,
+            latency: Arc::default(),
+            last_latency_emitted: None,
             stop: Arc::clone(&stop),
             worker: None,
             connected_emitted: false,
@@ -692,12 +753,129 @@ mod tests {
             pending_pose: None,
             event_rx,
             terminal_rx,
+            latency: Arc::default(),
+            last_latency_emitted: None,
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
             connected_emitted: false,
             disconnected: false,
         };
         (driver, command_rx, event_tx, terminal_tx)
+    }
+
+    #[test]
+    fn latency_coalesces_converts_and_throttles_without_sockets() {
+        let telemetry = LatencyTelemetry::default();
+        let now = Instant::now();
+        let mut last = None;
+        assert_eq!(telemetry.take(now, &mut last), None);
+        telemetry.sample(Some(Duration::from_nanos(123_999)));
+        telemetry.sample(Some(Duration::from_nanos(456_999)));
+        assert_eq!(
+            telemetry.take(now, &mut last),
+            Some(RealtimeEvent::LatencyUpdated { rtt_micros: 456 })
+        );
+        telemetry.sample(Some(Duration::ZERO));
+        assert_eq!(
+            telemetry.take(now + Duration::from_millis(499), &mut last),
+            None
+        );
+        assert_eq!(
+            telemetry.take(now + LATENCY_INTERVAL, &mut last),
+            Some(RealtimeEvent::LatencyUpdated { rtt_micros: 0 })
+        );
+        telemetry.sample(Some(Duration::MAX));
+        assert_eq!(
+            telemetry.take(now + LATENCY_INTERVAL * 2, &mut last),
+            Some(RealtimeEvent::LatencyUpdated {
+                rtt_micros: u64::MAX
+            })
+        );
+        telemetry.sample(Some(Duration::from_millis(1)));
+        telemetry.sample(None);
+        assert_eq!(telemetry.take(now + LATENCY_INTERVAL * 3, &mut last), None);
+    }
+
+    #[test]
+    fn latency_contention_is_nonblocking_and_best_effort() {
+        let telemetry = LatencyTelemetry::default();
+        let guard = telemetry.pending.lock().unwrap();
+        telemetry.sample(Some(Duration::from_millis(1)));
+        assert_eq!(telemetry.take(Instant::now(), &mut None), None);
+        drop(guard);
+        assert_eq!(telemetry.take(Instant::now(), &mut None), None);
+    }
+
+    #[test]
+    fn latency_never_displaces_inbound_events_or_exceeds_poll_budget() {
+        let (mut driver, _commands, event_tx, _terminal) = idle_driver(CHANNEL_CAPACITY);
+        driver.connected_emitted = true;
+        for entity_id in 0..CHANNEL_CAPACITY as u64 {
+            event_tx
+                .try_send(RealtimeEvent::EntityLeft { entity_id })
+                .unwrap();
+        }
+        driver.latency.sample(Some(Duration::from_millis(25)));
+        let mut events = Vec::new();
+        driver.poll(&[], &mut events);
+        assert_eq!(events.len(), MAX_POLL_EVENTS - 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, RealtimeEvent::EntityLeft { .. }))
+        );
+        events.clear();
+        driver.poll(&[], &mut events);
+        assert_eq!(
+            events,
+            vec![
+                RealtimeEvent::EntityLeft { entity_id: 127 },
+                RealtimeEvent::LatencyUpdated { rtt_micros: 25_000 },
+            ]
+        );
+        driver.latency.sample(Some(Duration::from_millis(30)));
+        events.clear();
+        driver.poll(&[], &mut events);
+        assert!(events.is_empty());
+        assert!(!driver.disconnected);
+    }
+
+    #[test]
+    fn latency_waits_for_command_budget_and_is_suppressed_on_disconnect() {
+        let (mut driver, _commands, _events, terminal) = idle_driver(CHANNEL_CAPACITY);
+        driver.connected_emitted = true;
+        driver.latency.sample(Some(Duration::from_millis(1)));
+        let commands = vec![
+            RealtimeCommand::PublishUnreliable {
+                sequence: 1,
+                payload: vec![],
+            };
+            MAX_ITERATION_WORK
+        ];
+        let mut events = Vec::new();
+        driver.poll(&commands, &mut events);
+        assert!(events.is_empty());
+        terminal
+            .try_send(RealtimeEvent::Disconnected {
+                reason: "closed".to_owned(),
+            })
+            .unwrap();
+        driver.poll(&[], &mut events);
+        assert_eq!(
+            events,
+            vec![RealtimeEvent::Disconnected {
+                reason: "closed".to_owned()
+            }]
+        );
+        events.clear();
+        driver.poll(&[], &mut events);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn stopped_adapter_has_no_round_trip_time() {
+        let adapter = WovenAdapter::new(WovenConfig::default()).unwrap();
+        assert_eq!(adapter.round_trip_time(), None);
     }
 
     #[test]
@@ -766,7 +944,14 @@ mod tests {
         assert!(stop.load(Ordering::Acquire));
         let mut adapter = WovenAdapter::new(WovenConfig::default()).unwrap();
         assert_eq!(
-            worker_loop(&mut adapter, 7, &command_rx, &event_tx, &stop),
+            worker_loop(
+                &mut adapter,
+                7,
+                &command_rx,
+                &event_tx,
+                &stop,
+                &LatencyTelemetry::default(),
+            ),
             None
         );
         assert!(matches!(
@@ -963,6 +1148,7 @@ mod tests {
                 &event_tx,
                 &terminal_tx,
                 worker_stop.as_ref(),
+                &LatencyTelemetry::default(),
             );
         });
         let received = [

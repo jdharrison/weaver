@@ -56,6 +56,7 @@ impl Fixture {
                 private_key_file: self.0.join("key.pem"),
                 admin_token_file: self.0.join("admin"),
                 webtransport: None,
+                state_directory: None,
             }))
             .unwrap();
         let body = json!({"revision": "1", "allocatedCCU": 1, "clientToken": TOKEN}).to_string();
