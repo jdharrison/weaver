@@ -143,6 +143,14 @@ pub struct InputFrame {
     pub movement: Vec2,
     /// Horizontal/vertical look delta in input units.
     pub look_delta: Vec2,
+    /// Absolute pointer position in physical viewport pixels, origin at top-left, Y down.
+    /// Desktop supplies this while focused and uncaptured; unavailable until cursor motion,
+    /// and cleared on cursor leave, capture, focus loss, or pointer-mode changes.
+    pub pointer_position: Option<Vec2>,
+    /// Primary UI pointer button (desktop left mouse in `PointerMode::None`).
+    /// Independent of gameplay opt-in; mode changes cancel edges/holds without a release
+    /// edge, and a button held across a transition must be released before another press.
+    pub pointer_primary: ButtonState,
     /// Signed zoom delta.
     pub zoom_delta: f32,
     /// Held sprint request; controllers opt in via their sprint multiplier.
@@ -153,8 +161,26 @@ pub struct InputFrame {
     pub fire: ButtonState,
     /// Reload button; currently mapped only by the opted-in desktop adapter.
     pub reload: ButtonState,
-    /// Input was cancelled by capture, focus, text-mode, suspend, or input-mode changes.
-    /// Applications must discard buffered gameplay presses even when no simulation tick runs.
+    /// Generic interact intent (physical F on opted-in desktop); application-owned behavior.
+    pub interact: ButtonState,
+    /// Generic pause intent (physical P on opted-in desktop); application-owned behavior.
+    pub pause: ButtonState,
+    /// Generic menu toggle intent (physical B on opted-in desktop); application-owned behavior.
+    /// Desktop menu intents work in `None` or captured `LockedLook`, require window focus,
+    /// and are suppressed by focused/pending text input. Repeated key presses are ignored.
+    pub menu_toggle: ButtonState,
+    /// Generic menu confirm intent (physical Enter on opted-in desktop); same gates as toggle.
+    /// Text input takes priority: `Available` opens text input and `Focused` submits it.
+    pub menu_confirm: ButtonState,
+    /// Generic secondary menu intent (physical Backspace on opted-in desktop); same gates as toggle.
+    pub menu_secondary: ButtonState,
+    /// Last weapon-slot press this frame: slots 1..=10 (desktop digits 1..9, then 0).
+    /// Transient intent only; applications own slot availability and selection rules.
+    pub weapon_slot: Option<u8>,
+    /// Input was cancelled by focus, text-mode, suspend, explicit cursor release,
+    /// or gameplay-enable changes. Desktop pointer-mode changes alone do not emit this.
+    /// Applications must discard buffered gameplay presses even when no simulation tick runs,
+    /// and must also discard their own buffered controls when requesting a pointer-mode change.
     pub controls_reset: bool,
     /// One-frame request to toggle first/third-person presentation.
     pub toggle_perspective: bool,
@@ -170,8 +196,15 @@ impl InputFrame {
         self.look_delta = Vec2::ZERO;
         self.zoom_delta = 0.0;
         self.toggle_perspective = false;
+        self.pointer_primary.clear_transient();
         self.fire.clear_transient();
         self.reload.clear_transient();
+        self.interact.clear_transient();
+        self.pause.clear_transient();
+        self.menu_toggle.clear_transient();
+        self.menu_confirm.clear_transient();
+        self.menu_secondary.clear_transient();
+        self.weapon_slot = None;
         self.controls_reset = false;
         self.actions.clear();
         self.text_events.clear();
@@ -181,12 +214,13 @@ impl InputFrame {
 /// Pointer behavior requested by an application.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PointerMode {
-    /// No camera pointer handling.
+    /// Visible, ungrabbed cursor; desktop routes left mouse to `pointer_primary`, not fire.
     None,
     /// Drag to orbit.
     #[default]
     OrbitDrag,
-    /// Click to enter relative pointer-lock mouse look.
+    /// Click to enter relative pointer-lock mouse look. Desktop consumes the capture click;
+    /// returning from another mode requires a fresh click, not automatic capture.
     LockedLook,
 }
 
@@ -542,6 +576,88 @@ mod tests {
         );
         button.clear_transient();
         assert_eq!(button, ButtonState::default());
+    }
+
+    #[test]
+    fn menu_buttons_default_neutral_and_clear_only_edges() {
+        let mut input = InputFrame::default();
+        for button in [
+            &mut input.menu_toggle,
+            &mut input.menu_confirm,
+            &mut input.menu_secondary,
+        ] {
+            assert_eq!(*button, ButtonState::default());
+            button.set(true);
+            button.set(false);
+            button.set(true);
+            assert!(button.held && button.pressed && button.released);
+        }
+        input.clear_transient();
+        for button in [input.menu_toggle, input.menu_confirm, input.menu_secondary] {
+            assert!(button.held && !button.pressed && !button.released);
+        }
+    }
+
+    #[test]
+    fn interact_defaults_neutral_and_retains_only_held_between_frames() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.interact, ButtonState::default());
+        input.interact.set(true);
+        input.interact.set(false);
+        assert!(input.interact.pressed && input.interact.released);
+        input.interact.set(true);
+        input.clear_transient();
+        assert_eq!(
+            input.interact,
+            ButtonState {
+                held: true,
+                pressed: false,
+                released: false
+            }
+        );
+    }
+
+    #[test]
+    fn pause_defaults_neutral_and_retains_only_held_between_frames() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.pause, ButtonState::default());
+        input.pause.set(true);
+        input.pause.set(false);
+        assert!(input.pause.pressed && input.pause.released);
+        input.pause.set(true);
+        input.clear_transient();
+        assert_eq!(
+            input.pause,
+            ButtonState {
+                held: true,
+                pressed: false,
+                released: false
+            }
+        );
+    }
+
+    #[test]
+    fn pointer_defaults_and_frame_edges() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.pointer_position, None);
+        assert_eq!(input.pointer_primary, ButtonState::default());
+        input.pointer_position = Some(Vec2::new(10.5, 20.0));
+        input.pointer_primary.set(true);
+        input.clear_transient();
+        assert_eq!(input.pointer_position, Some(Vec2::new(10.5, 20.0)));
+        assert!(input.pointer_primary.held);
+        assert!(!input.pointer_primary.pressed && !input.pointer_primary.released);
+        input.pointer_primary.set(false);
+        assert!(input.pointer_primary.released);
+    }
+
+    #[test]
+    fn weapon_slot_defaults_to_none_and_clears_between_frames() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.weapon_slot, None);
+        input.weapon_slot = Some(10);
+        input.clear_transient();
+        assert_eq!(input.weapon_slot, None);
     }
 
     #[test]
