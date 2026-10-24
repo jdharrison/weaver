@@ -570,6 +570,32 @@ impl DesktopShell {
         self.sync_text_input();
     }
 
+    fn handle_left_mouse_input(&mut self, state: ElementState) {
+        let pressed = state == ElementState::Pressed;
+        let routing = self.gameplay_routing();
+        // Cinema activation and opt-in gameplay fire are separate routes. Neither
+        // receives the click used to capture, including holds across redraws.
+        let activate = pressed
+            && routing.available()
+            && routing.captured
+            && !routing.enabled
+            && !self.blocked_until_left_release
+            && !self.left_held;
+        if self.left_button(pressed)
+            && let Some(window) = self.window.as_ref()
+            && window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                .is_ok()
+        {
+            window.set_cursor_visible(false);
+            self.capture_succeeded();
+        }
+        if activate {
+            self.app.primary_activation(Vec2::ZERO);
+        }
+    }
+
     fn push_text_event(&mut self, event: TextInputEvent) {
         if self.input.text_events.len() < MAX_TEXT_EVENTS_PER_REDRAW {
             self.input.text_events.push(event);
@@ -736,18 +762,7 @@ impl ApplicationHandler for DesktopShell {
                 button: MouseButton::Left,
                 state,
                 ..
-            } => {
-                if self.left_button(state == ElementState::Pressed)
-                    && let Some(window) = self.window.as_ref()
-                    && window
-                        .set_cursor_grab(CursorGrabMode::Locked)
-                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                        .is_ok()
-                {
-                    window.set_cursor_visible(false);
-                    self.capture_succeeded();
-                }
-            }
+            } => self.handle_left_mouse_input(state),
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -921,12 +936,14 @@ mod tests {
     use weaver_app_core::AppAssets;
     use weaver_render::SceneSnapshot;
 
+    #[derive(Default)]
     struct RealtimeTestApp {
         scene: SceneSnapshot,
         assets: AppAssets,
         command_count: usize,
         events: Vec<RealtimeEvent>,
         input_modes: (PointerMode, bool, TextInputMode),
+        activations: Rc<RefCell<Vec<Vec2>>>,
     }
 
     impl WeaverApp for RealtimeTestApp {
@@ -956,6 +973,11 @@ mod tests {
 
         fn text_input_mode(&self) -> TextInputMode {
             self.input_modes.2
+        }
+
+        fn primary_activation(&mut self, ndc: Vec2) -> bool {
+            self.activations.borrow_mut().push(ndc);
+            true
         }
 
         fn handle_realtime_event(&mut self, event: RealtimeEvent) {
@@ -1136,8 +1158,7 @@ mod tests {
             scene: SceneSnapshot::default(),
             assets: AppAssets::default(),
             command_count: MAX_REALTIME_COMMANDS_PER_REDRAW + 1,
-            events: Vec::new(),
-            input_modes: (PointerMode::None, false, TextInputMode::Disabled),
+            ..RealtimeTestApp::default()
         };
         let seen_commands = Rc::new(RefCell::new(0));
         let mut driver = RealtimeTestDriver {
@@ -1161,6 +1182,84 @@ mod tests {
             event,
             RealtimeEvent::Disconnected { reason } if reason.contains("event limit")
         )));
+    }
+
+    #[test]
+    fn primary_activation_requires_captured_locked_look_press_without_text_focus() {
+        for pointer_mode in [
+            PointerMode::None,
+            PointerMode::OrbitDrag,
+            PointerMode::LockedLook,
+        ] {
+            for text_input_mode in [
+                TextInputMode::Disabled,
+                TextInputMode::Available,
+                TextInputMode::Focused,
+            ] {
+                for captured in [false, true] {
+                    for state in [ElementState::Pressed, ElementState::Released] {
+                        let activations = Rc::new(RefCell::new(Vec::new()));
+                        let app = RealtimeTestApp {
+                            input_modes: (pointer_mode, false, text_input_mode),
+                            activations: Rc::clone(&activations),
+                            ..RealtimeTestApp::default()
+                        };
+                        let mut shell =
+                            DesktopShell::new(Box::new(app), DesktopConfig::default(), None);
+                        shell.focused = true;
+                        shell.cursor_captured = captured;
+                        shell.handle_left_mouse_input(state);
+                        let expected = pointer_mode == PointerMode::LockedLook
+                            && text_input_mode != TextInputMode::Focused
+                            && captured
+                            && state == ElementState::Pressed;
+                        assert_eq!(
+                            activations.borrow().as_slice(),
+                            if expected { &[Vec2::ZERO][..] } else { &[] }
+                        );
+                        if pointer_mode == PointerMode::OrbitDrag {
+                            assert_eq!(
+                                shell.dragging,
+                                state == ElementState::Pressed
+                                    && text_input_mode != TextInputMode::Focused
+                            );
+                        }
+                        shell.release_cursor();
+                        shell.handle_left_mouse_input(state);
+                        assert_eq!(activations.borrow().len(), usize::from(expected));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cinema_activation_and_gameplay_fire_are_isolated_and_capture_consumes_click() {
+        for gameplay in [false, true] {
+            let activations = Rc::new(RefCell::new(Vec::new()));
+            let app = RealtimeTestApp {
+                input_modes: (PointerMode::LockedLook, gameplay, TextInputMode::Disabled),
+                activations: Rc::clone(&activations),
+                ..RealtimeTestApp::default()
+            };
+            let mut shell = DesktopShell::new(Box::new(app), DesktopConfig::default(), None);
+            shell.focused = true;
+            shell.handle_left_mouse_input(ElementState::Pressed);
+            shell.capture_succeeded();
+            shell.handle_left_mouse_input(ElementState::Pressed);
+            assert!(activations.borrow().is_empty());
+            assert_eq!(shell.input.fire, ButtonState::default());
+            shell.handle_left_mouse_input(ElementState::Released);
+            shell.handle_left_mouse_input(ElementState::Pressed);
+            assert_eq!(shell.input.fire.pressed, gameplay);
+            assert_eq!(activations.borrow().len(), usize::from(!gameplay));
+            shell.handle_left_mouse_input(ElementState::Pressed);
+            assert_eq!(activations.borrow().len(), usize::from(!gameplay));
+            shell.handle_left_mouse_input(ElementState::Released);
+            shell.focused = false;
+            shell.handle_left_mouse_input(ElementState::Pressed);
+            assert_eq!(activations.borrow().len(), usize::from(!gameplay));
+        }
     }
 
     #[test]
@@ -1231,6 +1330,7 @@ mod tests {
             command_count: 0,
             events: Vec::new(),
             input_modes: modes,
+            ..RealtimeTestApp::default()
         })
     }
 

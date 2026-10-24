@@ -10,7 +10,7 @@ const MAX_INSTANCES: usize = 128;
 use crate::resource::{GpuMesh, GpuTexture, Vertex};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
-use weaver_render::{MeshHandle, MeshInstance, MeshTextureFit, SpriteHandle};
+use weaver_render::{MeshHandle, MeshInstance, MeshRenderMode, MeshTextureFit, SpriteHandle};
 
 // Retain transient peaks briefly, not for the lifetime of the renderer.
 const RESOURCE_IDLE_FRAMES: u16 = 120;
@@ -112,7 +112,33 @@ impl MeshSamplingMode {
     }
 }
 
-type MeshGroups = HashMap<(MeshHandle, Option<SpriteHandle>, MeshSamplingMode), Vec<MeshInstance>>;
+type MeshGroups = HashMap<
+    (
+        MeshHandle,
+        Option<SpriteHandle>,
+        MeshSamplingMode,
+        MeshRenderMode,
+    ),
+    Vec<MeshInstance>,
+>;
+
+fn mesh_blend_state(mode: MeshRenderMode) -> wgpu::BlendState {
+    match mode {
+        MeshRenderMode::Surface => wgpu::BlendState::ALPHA_BLENDING,
+        MeshRenderMode::Additive => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
+    }
+}
 
 fn mesh_sampler_descriptor(
     sampling_mode: MeshSamplingMode,
@@ -141,8 +167,9 @@ fn mesh_sampling_groups(
     // Also keep direct MeshPipeline callers safe when their input mixes modes.
     instances
         .chunk_by(|left, right| {
-            MeshSamplingMode::for_fit(left.texture_fit)
-                == MeshSamplingMode::for_fit(right.texture_fit)
+            left.render_mode == right.render_mode
+                && MeshSamplingMode::for_fit(left.texture_fit)
+                    == MeshSamplingMode::for_fit(right.texture_fit)
         })
         .map(|group| (MeshSamplingMode::for_fit(group[0].texture_fit), group))
 }
@@ -155,6 +182,7 @@ pub(crate) fn group_mesh_instances(instances: &[MeshInstance]) -> MeshGroups {
                 instance.mesh,
                 instance.texture,
                 MeshSamplingMode::for_fit(instance.texture_fit),
+                instance.render_mode,
             ))
             .or_default()
             .push(instance.clone());
@@ -252,6 +280,8 @@ pub struct MeshPipeline {
     skinned_pipeline: wgpu::RenderPipeline,
     skin_layout: wgpu::BindGroupLayout,
     skin_slots: DrawSlots<InstanceSlot>,
+    additive_pipeline: wgpu::RenderPipeline,
+    skinned_additive_pipeline: wgpu::RenderPipeline,
     _camera_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
@@ -340,7 +370,8 @@ impl MeshPipeline {
         );
         let make_pipeline = |layout: &wgpu::PipelineLayout,
                              shader: &wgpu::ShaderModule,
-                             buffers: &[wgpu::VertexBufferLayout<'_>]| {
+                             buffers: &[wgpu::VertexBufferLayout<'_>],
+                             mode: MeshRenderMode| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("mesh-pipeline"),
                 layout: Some(layout),
@@ -355,7 +386,7 @@ impl MeshPipeline {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(mesh_blend_state(mode)),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -364,7 +395,7 @@ impl MeshPipeline {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     // Skinning may reflect geometry during animation. Keep rigid
                     // culling unchanged; skinned geometry renders both windings.
-                    cull_mode: if buffers.len() > 1 {
+                    cull_mode: if buffers.len() > 1 || mode == MeshRenderMode::Additive {
                         None
                     } else {
                         Some(wgpu::Face::Back)
@@ -374,7 +405,7 @@ impl MeshPipeline {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
+                    depth_write_enabled: mode == MeshRenderMode::Surface,
                     depth_compare: wgpu::CompareFunction::Less,
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -388,15 +419,35 @@ impl MeshPipeline {
             })
         };
 
-        let pipeline = make_pipeline(&pipeline_layout, &shader, &[Vertex::layout()]);
+        let pipeline = make_pipeline(
+            &pipeline_layout,
+            &shader,
+            &[Vertex::layout()],
+            MeshRenderMode::Surface,
+        );
+        let additive_pipeline = make_pipeline(
+            &pipeline_layout,
+            &shader,
+            &[Vertex::layout()],
+            MeshRenderMode::Additive,
+        );
+        let skinned_additive_pipeline = make_pipeline(
+            &skinned_layout,
+            &skinned_shader,
+            &[Vertex::layout(), crate::SkinVertex::layout()],
+            MeshRenderMode::Additive,
+        );
         let skinned_pipeline = make_pipeline(
             &skinned_layout,
             &skinned_shader,
             &[Vertex::layout(), crate::SkinVertex::layout()],
+            MeshRenderMode::Surface,
         );
         Ok(Self {
             pipeline,
             skinned_pipeline,
+            additive_pipeline,
+            skinned_additive_pipeline,
             skin_layout,
             skin_slots: DrawSlots::default(),
             _camera_layout: camera_layout,
@@ -445,23 +496,27 @@ impl MeshPipeline {
         meshes: &[(GpuMesh, &GpuTexture, Vec<MeshInstance>)],
     ) -> Result<(), WgpuRenderError> {
         self.texture_bindings.age();
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera_bind_group, &[]);
 
-        for (mesh, texture, sampling_mode, instances) in
-            meshes.iter().flat_map(|(mesh, texture, instances)| {
-                mesh_sampling_groups(instances).map(move |(sampling_mode, instances)| {
-                    (mesh, texture, sampling_mode, instances)
+        // Finish depth-writing surfaces before additive draws, even for mixed-mode input.
+        for mode in [MeshRenderMode::Surface, MeshRenderMode::Additive] {
+            for (mesh, texture, sampling_mode, instances) in
+                meshes.iter().flat_map(|(mesh, texture, instances)| {
+                    mesh_sampling_groups(instances)
+                        .filter(move |(_, group)| group[0].render_mode == mode)
+                        .map(move |(sampling_mode, instances)| {
+                            (mesh, texture, sampling_mode, instances)
+                        })
                 })
-            })
-        {
-            let sampler = match sampling_mode {
-                MeshSamplingMode::Repeat => &self.repeat_sampler,
-                MeshSamplingMode::ClampToEdge => &self.clamp_sampler,
-            };
-            let texture_bind_group =
-                self.texture_bindings
-                    .get_or_insert(texture.view.clone(), sampling_mode, || {
+            {
+                let sampler = match sampling_mode {
+                    MeshSamplingMode::Repeat => &self.repeat_sampler,
+                    MeshSamplingMode::ClampToEdge => &self.clamp_sampler,
+                };
+                let texture_bind_group = self.texture_bindings.get_or_insert(
+                    texture.view.clone(),
+                    sampling_mode,
+                    || {
                         device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("mesh-texture-bind-group"),
                             layout: &self.texture_layout,
@@ -476,49 +531,77 @@ impl MeshPipeline {
                                 },
                             ],
                         })
-                    });
-            pass.set_bind_group(2, texture_bind_group, &[]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            let skinned = mesh.skin_buffer.is_some();
-            pass.set_pipeline(if skinned {
-                &self.skinned_pipeline
-            } else {
-                &self.pipeline
-            });
-            if let Some(buffer) = &mesh.skin_buffer {
-                pass.set_vertex_buffer(1, buffer.slice(..));
-            }
-            let batch_size = if skinned { 1 } else { MAX_INSTANCES };
-            for chunk in instances.chunks(batch_size) {
-                let raw: Vec<_> = chunk.iter().map(MeshInstanceRaw::from).collect();
-                if skinned {
-                    let palette = chunk[0].skin.as_ref().ok_or_else(|| {
-                        WgpuRenderError::Buffer("skinned mesh has no palette".into())
-                    })?;
-                    if palette.len() < mesh.skin_joint_count
-                        || palette.len() > weaver_render::mesh::MAX_SKIN_JOINTS
-                        || palette.iter().any(|m| {
-                            !m.is_finite()
-                                || !m.inverse().is_finite()
-                                || m.x_axis.w != 0.0
-                                || m.y_axis.w != 0.0
-                                || m.z_axis.w != 0.0
-                                || m.w_axis.w != 1.0
-                        })
-                    {
-                        return Err(WgpuRenderError::Buffer("invalid skin palette".into()));
+                    },
+                );
+                pass.set_bind_group(2, texture_bind_group, &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                let skinned = mesh.skin_buffer.is_some();
+                pass.set_pipeline(match (skinned, mode) {
+                    (false, MeshRenderMode::Surface) => &self.pipeline,
+                    (false, MeshRenderMode::Additive) => &self.additive_pipeline,
+                    (true, MeshRenderMode::Surface) => &self.skinned_pipeline,
+                    (true, MeshRenderMode::Additive) => &self.skinned_additive_pipeline,
+                });
+                if let Some(buffer) = &mesh.skin_buffer {
+                    pass.set_vertex_buffer(1, buffer.slice(..));
+                }
+                let batch_size = if skinned { 1 } else { MAX_INSTANCES };
+                for chunk in instances.chunks(batch_size) {
+                    let raw: Vec<_> = chunk.iter().map(MeshInstanceRaw::from).collect();
+                    if skinned {
+                        let palette = chunk[0].skin.as_ref().ok_or_else(|| {
+                            WgpuRenderError::Buffer("skinned mesh has no palette".into())
+                        })?;
+                        if palette.len() < mesh.skin_joint_count
+                            || palette.len() > weaver_render::mesh::MAX_SKIN_JOINTS
+                            || palette.iter().any(|m| {
+                                !m.is_finite()
+                                    || !m.inverse().is_finite()
+                                    || m.x_axis.w != 0.0
+                                    || m.y_axis.w != 0.0
+                                    || m.z_axis.w != 0.0
+                                    || m.w_axis.w != 1.0
+                            })
+                        {
+                            return Err(WgpuRenderError::Buffer("invalid skin palette".into()));
+                        }
+                        let slot = self.skin_slots.next(|| {
+                            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("skin-palette"),
+                                size: 8192,
+                                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: false,
+                            });
+                            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("skin-palette"),
+                                layout: &self.skin_layout,
+                                entries: &[wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: buffer.as_entire_binding(),
+                                }],
+                            });
+                            InstanceSlot { buffer, bind_group }
+                        });
+                        let matrices: Vec<_> =
+                            palette.iter().map(glam::Mat4::to_cols_array_2d).collect();
+                        queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&matrices));
+                        pass.set_bind_group(3, &slot.bind_group, &[]);
+                    } else if chunk.iter().any(|instance| instance.skin.is_some()) {
+                        return Err(WgpuRenderError::Buffer(
+                            "palette supplied for rigid geometry".into(),
+                        ));
                     }
-                    let slot = self.skin_slots.next(|| {
+                    let slot = self.instance_slots.next(|| {
                         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("skin-palette"),
-                            size: 8192,
+                            label: Some("mesh-instances"),
+                            size: INSTANCE_BUFFER_SIZE,
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                             mapped_at_creation: false,
                         });
                         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("skin-palette"),
-                            layout: &self.skin_layout,
+                            label: Some("mesh-instance-bind-group"),
+                            layout: &self.instance_layout,
                             entries: &[wgpu::BindGroupEntry {
                                 binding: 0,
                                 resource: buffer.as_entire_binding(),
@@ -526,35 +609,10 @@ impl MeshPipeline {
                         });
                         InstanceSlot { buffer, bind_group }
                     });
-                    let matrices: Vec<_> =
-                        palette.iter().map(glam::Mat4::to_cols_array_2d).collect();
-                    queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&matrices));
-                    pass.set_bind_group(3, &slot.bind_group, &[]);
-                } else if chunk.iter().any(|instance| instance.skin.is_some()) {
-                    return Err(WgpuRenderError::Buffer(
-                        "palette supplied for rigid geometry".into(),
-                    ));
+                    queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&raw));
+                    pass.set_bind_group(1, &slot.bind_group, &[]);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..chunk.len() as u32);
                 }
-                let slot = self.instance_slots.next(|| {
-                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("mesh-instances"),
-                        size: INSTANCE_BUFFER_SIZE,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("mesh-instance-bind-group"),
-                        layout: &self.instance_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: buffer.as_entire_binding(),
-                        }],
-                    });
-                    InstanceSlot { buffer, bind_group }
-                });
-                queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&raw));
-                pass.set_bind_group(1, &slot.bind_group, &[]);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..chunk.len() as u32);
             }
         }
         Ok(())
@@ -569,6 +627,58 @@ mod skin_tests;
 mod tests {
     use super::*;
     use weaver_render::{MeshLighting, RenderTransform};
+
+    #[test]
+    fn render_modes_separate_groups_without_changing_uniforms() {
+        let surface = MeshInstance::new(MeshHandle::new(), RenderTransform::default());
+        let mut additive = surface.clone();
+        additive.render_mode = MeshRenderMode::Additive;
+        assert_eq!(
+            bytemuck::bytes_of(&MeshInstanceRaw::from(&surface)),
+            bytemuck::bytes_of(&MeshInstanceRaw::from(&additive)),
+        );
+        let instances = [additive.clone(), surface.clone(), additive.clone()];
+        let groups = group_mesh_instances(&instances);
+        assert_eq!(groups.len(), 2);
+        for mode in [MeshRenderMode::Surface, MeshRenderMode::Additive] {
+            let group = &groups[&(surface.mesh, None, MeshSamplingMode::Repeat, mode)];
+            assert!(group.iter().all(|instance| instance.render_mode == mode));
+            assert_eq!(
+                group.len(),
+                if mode == MeshRenderMode::Surface {
+                    1
+                } else {
+                    2
+                }
+            );
+        }
+        let runs: Vec<_> = mesh_sampling_groups(&instances).collect();
+        assert_eq!(runs.len(), 3);
+        let ordered: Vec<_> = [MeshRenderMode::Surface, MeshRenderMode::Additive]
+            .into_iter()
+            .flat_map(|mode| {
+                runs.iter()
+                    .filter(move |(_, group)| group[0].render_mode == mode)
+            })
+            .flat_map(|(_, group)| group.iter().cloned())
+            .collect();
+        assert_eq!(ordered, [surface, additive.clone(), additive]);
+    }
+
+    #[test]
+    fn additive_blend_weights_rgb_and_preserves_destination_alpha() {
+        assert_eq!(
+            mesh_blend_state(MeshRenderMode::Surface),
+            wgpu::BlendState::ALPHA_BLENDING
+        );
+        let blend = mesh_blend_state(MeshRenderMode::Additive);
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
+        assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::Zero);
+        assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.alpha.operation, wgpu::BlendOperation::Add);
+    }
 
     #[test]
     fn slots_are_distinct_until_reset_and_reused_without_creation() {
@@ -728,7 +838,12 @@ mod tests {
                 assert!(chunk.len() <= MAX_INSTANCES);
                 for (instance, encoded) in chunk.iter().zip(&raw) {
                     assert_eq!(
-                        (instance.mesh, instance.texture, MeshSamplingMode::Repeat),
+                        (
+                            instance.mesh,
+                            instance.texture,
+                            MeshSamplingMode::Repeat,
+                            MeshRenderMode::Surface
+                        ),
                         *key
                     );
                     assert_eq!(encoded.emissive, next as f32);
@@ -808,7 +923,7 @@ mod tests {
                 assert!(scale > 0.0 && scale <= 1.0);
                 let image_uv = |uv: f32| (uv - 0.5) / scale + 0.5;
                 let start = (1.0 - scale) * 0.5;
-                let end = (1.0 + scale) * 0.5;
+                let end = f32::midpoint(1.0, scale);
                 assert!(image_uv(start).abs() < 1e-6);
                 assert!((image_uv(end) - 1.0).abs() < 1e-6);
                 assert_eq!(image_uv(0.5), 0.5);
@@ -915,8 +1030,18 @@ mod tests {
             exact.clone(),
         ]);
         assert_eq!(groups.len(), 2);
-        let repeating = &groups[&(mesh, Some(texture), MeshSamplingMode::Repeat)];
-        let fitted = &groups[&(mesh, Some(texture), MeshSamplingMode::ClampToEdge)];
+        let repeating = &groups[&(
+            mesh,
+            Some(texture),
+            MeshSamplingMode::Repeat,
+            MeshRenderMode::Surface,
+        )];
+        let fitted = &groups[&(
+            mesh,
+            Some(texture),
+            MeshSamplingMode::ClampToEdge,
+            MeshRenderMode::Surface,
+        )];
         assert_eq!(repeating, &[plain, invalid]);
         assert_eq!(fitted, &[narrower, wider, exact]);
         for (instances, sampling_mode, enabled) in [
@@ -1040,17 +1165,42 @@ mod tests {
             tinted.clone(),
         ]);
         assert_eq!(groups.len(), 4);
-        assert_eq!(groups[&(mesh, None, MeshSamplingMode::Repeat)], vec![plain]);
         assert_eq!(
-            groups[&(mesh, Some(texture), MeshSamplingMode::Repeat)],
+            groups[&(
+                mesh,
+                None,
+                MeshSamplingMode::Repeat,
+                MeshRenderMode::Surface
+            )],
+            vec![plain]
+        );
+        assert_eq!(
+            groups[&(
+                mesh,
+                Some(texture),
+                MeshSamplingMode::Repeat,
+                MeshRenderMode::Surface
+            )],
             vec![textured, tinted]
         );
         assert_eq!(
-            groups[&(mesh, Some(other_texture), MeshSamplingMode::Repeat)].len(),
+            groups[&(
+                mesh,
+                Some(other_texture),
+                MeshSamplingMode::Repeat,
+                MeshRenderMode::Surface
+            )]
+                .len(),
             1
         );
         assert_eq!(
-            groups[&(other_mesh, Some(texture), MeshSamplingMode::Repeat)].len(),
+            groups[&(
+                other_mesh,
+                Some(texture),
+                MeshSamplingMode::Repeat,
+                MeshRenderMode::Surface
+            )]
+                .len(),
             1
         );
         assert!(group_mesh_instances(&[]).is_empty());

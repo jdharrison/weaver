@@ -20,6 +20,37 @@ const ADJECTIVES: [&str; 64] = [
     "Steady", "Stellar", "Sunny", "Swift", "Upbeat", "Vibrant", "Warm", "Witty",
 ];
 
+const NOUNS: [&str; 16] = [
+    "Badger", "Bear", "Dolphin", "Falcon", "Finch", "Fox", "Heron", "Koala", "Lynx", "Otter",
+    "Owl", "Panda", "Robin", "Seal", "Sparrow", "Turtle",
+];
+
+/// Generate a friendly `Adjective Noun` guest name, bounded to 17 ASCII bytes.
+///
+/// Uses two secure UUID random selections. Names may collide and are not identities.
+///
+/// # Panics
+///
+/// Panics if the platform's secure random source is unavailable.
+#[must_use]
+pub fn generate_guest_name() -> String {
+    let adjective = ADJECTIVES[(Uuid::new_v4().as_u128() % ADJECTIVES.len() as u128) as usize];
+    let noun = NOUNS[(Uuid::new_v4().as_u128() % NOUNS.len() as u128) as usize];
+    format!("{adjective} {noun}")
+}
+
+/// Recognize exactly the old default: two distinct dictionary adjectives joined
+/// without a separator or affixes. This cannot distinguish an old generated name
+/// from a custom name that happens to match; callers should only migrate profiles
+/// that have not yet recorded a naming-format version.
+#[must_use]
+pub fn is_legacy_user_name(name: &str) -> bool {
+    ADJECTIVES.iter().any(|first| {
+        name.strip_prefix(first)
+            .is_some_and(|second| second != *first && ADJECTIVES.contains(&second))
+    })
+}
+
 /// Invalid options supplied to [`generate_user_name`].
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum UserNameError {
@@ -51,7 +82,8 @@ pub enum UserNameError {
 
 /// Generate a display name from distinct, friendly CamelCase adjectives.
 ///
-/// For the usual two-adjective default, call `generate_user_name(2, "", "")`.
+/// For the legacy two-adjective format, call `generate_user_name(2, "", "")`.
+/// New guest names should use [`generate_guest_name`] instead.
 /// This produces names such as `BrightCalm`, with no noun and at most 16 ASCII
 /// characters, comfortably below the labs' 24-character display-name limit.
 /// Names are not guaranteed to be unique across calls or users.
@@ -158,6 +190,47 @@ mod tests {
     use uuid::{Variant, Version};
 
     use super::*;
+
+    #[test]
+    fn guest_names_use_dictionary_adjective_space_noun() {
+        for _ in 0..1024 {
+            let name = generate_guest_name();
+            let (adjective, noun) = name.split_once(' ').unwrap();
+            assert!(ADJECTIVES.contains(&adjective));
+            assert!(NOUNS.contains(&noun));
+            assert!(name.len() <= 17);
+            assert!(!is_legacy_user_name(&name));
+        }
+        assert_eq!(NOUNS.iter().collect::<HashSet<_>>().len(), NOUNS.len());
+        assert!(NOUNS.iter().all(|noun| noun.len() <= 8));
+    }
+
+    #[test]
+    fn legacy_classifier_matches_only_exact_distinct_dictionary_pairs() {
+        for first in ADJECTIVES {
+            for second in ADJECTIVES {
+                assert_eq!(
+                    is_legacy_user_name(&format!("{first}{second}")),
+                    first != second
+                );
+            }
+        }
+        for custom in [
+            "",
+            "Bright",
+            "BrightBright",
+            "BrightCalmSunny",
+            "brightCalm",
+            "Bright Calm",
+            "BrightCalm ",
+            " BrightCalm",
+            "SuperCoder",
+            "Guest-BrightCalm",
+            "友",
+        ] {
+            assert!(!is_legacy_user_name(custom), "{custom}");
+        }
+    }
 
     fn words(name: &str) -> Vec<&str> {
         let mut words = Vec::new();

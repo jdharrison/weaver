@@ -4,6 +4,7 @@ export interface TheaterScheduleEntry {
   startSeconds: number;
   durationSeconds: number;
   source: string;
+  captions?: string;
   sourceStartSeconds: number;
   loop: boolean;
 }
@@ -33,15 +34,16 @@ function reject(): never {
 }
 
 /** Accept only exact, own data fields; do not invoke untrusted accessors. */
-function record(value: unknown, keys: string[]): Record<string, unknown> {
+function record(value: unknown, keys: string[], optionalKeys: string[] = []): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) reject();
   const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) reject();
   const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length !== keys.length || ownKeys.some((key) => typeof key !== "string" || !keys.includes(key))) reject();
+  if (ownKeys.some((key) => typeof key !== "string" || ![...keys, ...optionalKeys].includes(key))) reject();
   const result: Record<string, unknown> = {};
-  for (const key of keys) {
+  for (const key of [...keys, ...optionalKeys]) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor && optionalKeys.includes(key)) continue;
     if (!descriptor || !("value" in descriptor)) reject();
     result[key] = descriptor.value;
   }
@@ -89,7 +91,9 @@ export function validateTheaterSchedule(value: unknown): TheaterSchedule {
     for (let index = 0; index < rawEntries.length; index++) {
       const descriptor = Object.getOwnPropertyDescriptor(rawEntries, String(index));
       if (!descriptor || !("value" in descriptor)) reject();
-      const entry = record(descriptor.value, ENTRY_KEYS);
+      const entry = record(descriptor.value, ENTRY_KEYS, ["captions"]);
+      if (Object.prototype.hasOwnProperty.call(entry, "captions") &&
+        (!assetPath(entry.captions) || !entry.captions.endsWith(".vtt"))) reject();
       if (!identifier(entry.id) || ids.has(entry.id) || !title(entry.title) ||
         !integerInRange(entry.startSeconds, 0, input.cycleSeconds) || entry.startSeconds !== end ||
         !integerInRange(entry.durationSeconds, 1, input.cycleSeconds) ||
@@ -102,6 +106,7 @@ export function validateTheaterSchedule(value: unknown): TheaterSchedule {
         id: entry.id, title: entry.title, startSeconds: entry.startSeconds,
         durationSeconds: entry.durationSeconds, source: entry.source,
         sourceStartSeconds: entry.sourceStartSeconds, loop: entry.loop,
+        ...(typeof entry.captions === "string" ? { captions: entry.captions } : {}),
       }));
     }
     if (end !== input.cycleSeconds) reject();

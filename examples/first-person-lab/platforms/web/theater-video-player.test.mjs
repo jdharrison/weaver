@@ -30,10 +30,12 @@ class Media extends EventTarget {
   event(name) { this.dispatchEvent(new Event(name)); }
 }
 
-function fixture({ videoFrames = true, visible = true, attachResult = true, markResult = true, autoplay = false, scheduled = false } = {}) {
+function fixture({ videoFrames = true, visible = true, attachResult = true, markResult = true, autoplay = false, scheduled = false, onRecover } = {}) {
   const media = new Media();
   const frames = new Map();
   const rafs = new Map();
+  const timers = new Map();
+  let now = 0;
   let id = 0, attaches = 0, marks = 0, detaches = 0;
   if (videoFrames) {
     media.requestVideoFrameCallback = (callback) => { frames.set(++id, callback); return id; };
@@ -41,6 +43,9 @@ function fixture({ videoFrames = true, visible = true, attachResult = true, mark
   }
   const states = [];
   const player = new TheaterVideoPlayer({ media, visible, autoplay, scheduled,
+    onRecover: () => onRecover?.(player), now: () => now,
+    setTimeout: (callback, milliseconds) => { timers.set(++id, { callback, due: now + milliseconds }); return id; },
+    clearTimeout: (id) => timers.delete(id),
     attach: () => { attaches++; return attachResult; },
     markFrame: () => { marks++; return markResult; },
     detach: () => { detaches++; },
@@ -55,10 +60,116 @@ function fixture({ videoFrames = true, visible = true, attachResult = true, mark
     callback(0, { mediaTime: media.currentTime });
   };
   const metadata = () => { media.readyState = 1; media.event("loadedmetadata"); };
-  const ready = () => { player.setSceneReady(true); metadata(); media.readyState = 2; media.event("loadeddata"); };
-  return { media, player, frames, rafs, states, metadata, ready, fire,
+  const ready = () => {
+    if (scheduled && !media.src) player.setSource("/scheduled.mp4");
+    player.setSceneReady(true); metadata(); media.readyState = 2; media.event("loadeddata");
+  };
+  const advance = async (milliseconds) => {
+    const end = now + milliseconds;
+    while (timers.size) {
+      const [id, timer] = [...timers].sort((a, b) => a[1].due - b[1].due)[0];
+      if (timer.due > end) break;
+      now = timer.due; timers.delete(id); timer.callback(); await flush();
+    }
+    now = end;
+  };
+  return { media, player, frames, rafs, timers, states, metadata, ready, fire, advance,
     get attaches() { return attaches; }, get marks() { return marks; }, get detaches() { return detaches; } };
 }
+
+test("desired audio defaults ON and never queues an audible readiness retry", async () => {
+  const f = fixture({ scheduled: true });
+  assert.equal(f.player.state.audioEnabled, true);
+  assert.equal(f.player.state.muted, true);
+  assert.equal(f.player.state.audible, false);
+  f.player.setMuted(true); assert.equal(f.player.state.audioEnabled, false);
+  f.player.enableSound(); assert.equal(f.player.state.audioEnabled, true);
+  assert.equal(f.media.plays, 0);
+  f.ready(); await flush();
+  assert.equal(f.media.plays, 0);
+  f.player.scheduledAutoplay(); await flush();
+  assert.equal(f.player.state.muted, true);
+  assert.equal(f.player.state.audioEnabled, true);
+  f.player.enableSound(); await flush();
+  f.media.event("waiting");
+  assert.equal(f.player.state.audible, false);
+  assert.equal(f.player.state.audioEnabled, true);
+  f.player.setMuted(true);
+  assert.equal(f.player.state.audioEnabled, false);
+  assert.equal(f.player.state.playing, true);
+  f.player.setVisible(false); f.player.setSource("/next.mp4");
+  assert.equal(f.player.state.audioEnabled, false);
+  f.player.dispose();
+});
+
+test("stale audible scheduled denial does not block silent replacement autoplay", async () => {
+  const f = fixture({ scheduled: true }); f.ready();
+  f.player.setMuted(false);
+  const pending = deferred(); f.media.pending = pending;
+  f.player.scheduledAutoplay();
+  f.player.setSource("/next.mp4"); f.metadata();
+  f.media.pending = null;
+  pending.reject(new DOMException("denied", "NotAllowedError")); await flush();
+  assert.equal(f.player.state.autoplayBlocked, false);
+  assert.equal(f.player.state.audioEnabled, true);
+  assert.equal(f.player.state.muted, true);
+  assert.equal(f.player.scheduledAutoplay(), true); await flush();
+  assert.equal(f.player.state.playing, true);
+  assert.equal(f.player.state.audible, false);
+  f.player.dispose();
+});
+
+test("scheduled construction and readiness never load the fallback or attach a sourceless video", () => {
+  const f = fixture({ scheduled: true, autoplay: true });
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  f.player.setSceneReady(true); f.metadata(); f.player.setVisible(true);
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  assert.equal(f.attaches, 0); assert.equal(f.player.state.ready, false);
+  assert.equal(f.player.scheduledAutoplay(), false); assert.equal(f.media.plays, 0);
+  f.player.setSource("/selected.mp4"); f.metadata();
+  assert.equal(f.media.src, "/selected.mp4"); assert.equal(f.media.loads, 1);
+  assert.equal(f.attaches, 1); assert.equal(f.media.plays, 0);
+  f.player.dispose();
+});
+
+test("disposing an unstarted scheduled player never loads media, even after late readiness", () => {
+  const f = fixture({ scheduled: true });
+  f.player.dispose(); f.player.dispose();
+  f.player.setSceneReady(true); f.player.setVisible(true); f.metadata();
+  f.player.setSource(DEFAULT_THEATER_VIDEO); f.player.play();
+  assert.equal(f.media.src, ""); assert.equal(f.media.loads, 0);
+  assert.equal(f.attaches, 0); assert.equal(f.media.plays, 0);
+});
+
+test("loading, decoded frame readiness, buffering and terminal failure are distinct", async () => {
+  const f = fixture({ scheduled: true });
+  assert.equal(f.player.state.failed, false); assert.equal(f.player.state.ready, false);
+  assert.equal(f.player.state.frameReady, false);
+  f.player.setSource("/current.mp4"); f.player.setSceneReady(true); f.metadata();
+  assert.equal(f.player.state.ready, true); assert.equal(f.player.state.frameReady, false);
+  f.media.readyState = 2; f.media.event("loadeddata");
+  assert.equal(f.player.state.frameReady, true);
+  f.player.enableSound(); await flush(); f.media.event("waiting");
+  assert.equal(f.player.state.buffering, true); assert.equal(f.player.state.audible, false);
+  f.media.readyState = 4; f.media.event("canplay"); f.media.event("playing");
+  assert.equal(f.player.state.buffering, false); assert.equal(f.player.state.audible, true);
+  f.media.seeking = true; f.media.event("seeking"); assert.equal(f.player.state.frameReady, false);
+  f.media.seeking = false; f.media.event("seeked"); assert.equal(f.player.state.frameReady, true);
+  f.media.error = { code: 2 }; f.media.event("error");
+  assert.equal(f.player.state.failed, true); assert.equal(f.player.state.frameReady, false);
+  assert.equal(f.player.state.ready, false); assert.equal(f.media.src, "");
+  f.media.readyState = 0; f.media.error = null; f.player.setSource("/current.mp4");
+  assert.equal(f.player.state.failed, false); assert.equal(f.player.state.soundError, false);
+  assert.equal(f.player.state.frameReady, false); f.player.dispose();
+});
+
+test("a queued error from a retired resource cannot poison the replacement source", () => {
+  const f = fixture({ scheduled: true }); f.ready();
+  f.media.error = { code: 2 }; f.media.event("error"); assert.equal(f.player.state.failed, true);
+  f.media.error = null; f.player.setSource("/replacement.mp4");
+  f.media.event("error"); assert.equal(f.player.state.failed, false);
+  assert.equal(f.media.src, "/replacement.mp4"); f.player.dispose();
+});
 
 test("sound pending, denial, observed playback, zero-volume recovery and external changes are structured", async () => {
   const f = fixture({ scheduled: true }); f.ready();
@@ -436,14 +547,15 @@ test("audio property failures are actionable and retryable without starting anot
   f.player.dispose();
 });
 
-test("Enable sound unmute and synchronous play failures both leave an explicit retry available", async () => {
+test("Enable sound property failures keep video playable and synchronous failures remain retryable", async () => {
   const f = fixture(); f.ready();
   Object.defineProperty(f.media, "muted", { configurable: true, get: () => true, set: () => { throw new Error("browser restriction"); } });
   f.player.enableSound();
-  assert.match(f.player.state.status, /Audio change unavailable/);
+  await flush();
+  assert.equal(f.player.state.soundError, true);
   assert.equal(f.player.state.ready, true);
-  assert.equal(f.player.state.playing, false);
-  assert.equal(f.media.plays, 0);
+  assert.equal(f.player.state.playing, true);
+  assert.equal(f.media.plays, 1);
   delete f.media.muted;
   const play = f.media.play;
   f.media.play = () => { throw new Error("NotAllowedError"); };
@@ -454,9 +566,182 @@ test("Enable sound unmute and synchronous play failures both leave an explicit r
   f.media.play = play;
   f.player.enableSound(); await flush();
   assert.equal(f.media.muted, false);
-  assert.equal(f.media.plays, 1);
+  assert.equal(f.media.plays, 2);
   assert.match(f.player.state.status, /audio enabled/);
   f.player.dispose();
+});
+
+test("unavailable volume still permits muted playback", async () => {
+  const f = fixture(); f.ready(); f.player.setVolume(0);
+  Object.defineProperty(f.media, "volume", { configurable: true, get: () => 0, set: () => { throw new Error("unsupported volume"); } });
+  f.player.enableSound(); await flush();
+  assert.equal(f.player.state.playing, true);
+  assert.equal(f.player.state.muted, true);
+  assert.equal(f.player.state.soundError, true);
+  assert.equal(f.player.state.autoplayBlocked, false);
+  assert.equal(f.media.plays, 1);
+  f.player.dispose();
+});
+
+test("retired audible denial never retries against a replacement source", async () => {
+  const f = fixture({ scheduled: true }); f.ready();
+  const pending = deferred(); f.media.pending = pending;
+  f.player.enableSound();
+  f.player.setSource("/replacement.mp4"); f.metadata();
+  pending.reject(new DOMException("denied", "NotAllowedError")); await flush();
+  assert.equal(f.media.plays, 1);
+  assert.equal(f.player.state.autoplayBlocked, false);
+  assert.equal(f.player.state.playing, false);
+  f.player.dispose();
+});
+
+for (const synchronous of [false, true]) {
+  test(`denied audible play falls back once to muted video (${synchronous ? "sync" : "async"})`, async () => {
+    const f = fixture({ scheduled: true }); f.ready();
+    const play = f.media.play.bind(f.media);
+    const attempts = [];
+    let gesture = true;
+    f.media.play = () => {
+      attempts.push({ muted: f.media.muted, gesture });
+      if (!f.media.muted) {
+        const reason = new DOMException("denied", "NotAllowedError");
+        if (synchronous) throw reason;
+        return Promise.reject(reason);
+      }
+      return play();
+    };
+    f.player.enableSound(); gesture = false;
+    await flush();
+    assert.deepEqual(attempts.map(({ muted }) => muted), [false, true]);
+    assert.equal(attempts[0].gesture, true);
+    assert.equal(f.player.state.playing, true);
+    assert.equal(f.player.state.muted, true);
+    assert.equal(f.player.state.audible, false);
+    assert.equal(f.player.state.soundError, true);
+    assert.equal(f.player.state.audioEnabled, true);
+    assert.equal(f.player.state.autoplayBlocked, false);
+    assert.equal(f.player.state.soundPending, false);
+    f.media.event("canplay"); f.media.event("timeupdate"); await flush();
+    assert.equal(attempts.length, 2, "no asynchronous audible replay");
+    const pauses = f.media.pauses;
+    f.player.setMuted(true);
+    assert.equal(f.media.pauses, pauses);
+    assert.equal(f.player.state.audioEnabled, false);
+    assert.equal(f.player.state.playing, true);
+    f.player.dispose();
+  });
+}
+
+test("watchdog resumes an unexpected native pause without losing mute, volume or source", async () => {
+  const f = fixture({ scheduled: true }); f.ready();
+  f.player.setMuted(true); f.player.setVolume(0.23); f.player.play(); await flush();
+  const loads = f.media.loads;
+  f.media.pause();
+  assert.equal(f.player.state.playing, false);
+  await f.advance(1000);
+  assert.equal(f.media.plays, 2);
+  assert.equal(f.player.state.playing, true);
+  assert.equal(f.media.loads, loads);
+  assert.equal(f.media.muted, true); assert.equal(f.media.volume, 0.23);
+  assert.equal(f.timers.size, 1); assert.equal(f.frames.size, 1);
+  f.player.dispose(); assert.equal(f.timers.size, 0);
+});
+
+test("watchdog leaves progressing decoded and RAF playback alone", async () => {
+  for (const videoFrames of [true, false]) {
+    const f = fixture({ videoFrames }); f.ready(); f.player.play(); await flush();
+    const loads = f.media.loads;
+    for (let time = 1; time <= 40; time++) {
+      f.fire(videoFrames ? f.frames : f.rafs, time);
+      await f.advance(1000);
+    }
+    assert.equal(f.media.plays, 1); assert.equal(f.media.loads, loads);
+    assert.equal(f.timers.size, 1); f.player.dispose();
+  }
+});
+
+test("frozen decoded frames trigger one soft restart then one decoder reload, not endless retries", async () => {
+  let recoveries = 0;
+  const f = fixture({ scheduled: true, onRecover: (player) => {
+    recoveries++; player.seek(7); player.scheduledAutoplay();
+  } });
+  f.ready(); f.player.play(); await flush();
+  const loads = f.media.loads;
+  const staleFrame = [...f.frames.values()][0];
+  // Advancing media clocks and schedule seeks cannot conceal missing decoded frames.
+  for (let time = 1; time <= 8; time++) {
+    f.player.seek(time); f.media.event("timeupdate"); await f.advance(1000);
+  }
+  assert.equal(f.media.plays, 2); assert.equal(f.media.loads, loads);
+  f.media.event("stalled"); await f.advance(8000);
+  assert.equal(f.media.loads, loads + 1); assert.equal(f.player.state.ready, false);
+  assert.equal(recoveries, 0);
+  f.metadata(); await flush();
+  assert.equal(recoveries, 1); assert.equal(f.media.currentTime, 7);
+  assert.equal(f.media.plays, 3); assert.equal(f.frames.size, 1);
+  staleFrame(0, { mediaTime: 9 }); assert.equal(f.frames.size, 1);
+  await f.advance(8000);
+  assert.equal(f.player.state.failed, true); assert.match(f.player.state.status, /remains stalled/);
+  assert.equal(f.timers.size, 0); assert.equal(f.frames.size, 0);
+  const plays = f.media.plays, finalLoads = f.media.loads;
+  await f.advance(60_000); f.media.event("canplay");
+  assert.equal(f.media.plays, plays); assert.equal(f.media.loads, finalLoads);
+  f.player.dispose();
+});
+
+test("a hung play is retired by decoder recovery and late settlement cannot pause its replacement", async () => {
+  for (const reject of [false, true]) {
+    const f = fixture({ scheduled: true, onRecover: (player) => player.scheduledAutoplay() });
+    f.ready(); const old = deferred(); f.media.pending = old;
+    f.player.play(); await f.advance(14_000);
+    assert.equal(f.media.plays, 1); assert.equal(f.media.loads, 1);
+    await f.advance(1000);
+    assert.equal(f.media.loads, 2); assert.equal(f.player.state.soundPending, false);
+    f.media.pending = null; f.metadata(); await flush();
+    assert.equal(f.media.plays, 2); assert.equal(f.player.state.playing, true);
+    if (reject) old.reject(new DOMException("retired", "NotAllowedError")); else old.resolve();
+    await flush();
+    assert.equal(f.media.paused, false); assert.equal(f.player.state.playing, true);
+    assert.equal(f.player.state.autoplayBlocked, false); assert.equal(f.frames.size, 1);
+    f.player.dispose();
+  }
+});
+
+test("manual pause, hiding, unready scene and disposal cancel watchdogs and ignore queued polls", async () => {
+  for (const cancel of ["pause", "hidden", "unready", "dispose"]) {
+    const f = fixture(); f.ready(); f.player.play(); await flush();
+    const stalePoll = [...f.timers.values()][0].callback;
+    if (cancel === "pause") f.player.pause();
+    else if (cancel === "hidden") f.player.setVisible(false);
+    else if (cancel === "unready") f.player.setSceneReady(false);
+    else f.player.dispose();
+    const loads = f.media.loads;
+    await f.advance(60_000); stalePoll();
+    f.media.event("waiting"); f.media.event("canplay");
+    assert.equal(f.media.plays, 1); assert.equal(f.media.loads, loads);
+    assert.equal(f.timers.size, 0); assert.equal(f.frames.size, 0);
+    f.player.dispose();
+  }
+});
+
+test("autoplay denial and natural endings never start a watchdog retry loop", async () => {
+  const blocked = fixture(); blocked.ready();
+  blocked.media.play = () => { blocked.media.plays++; return Promise.reject(new DOMException("denied", "NotAllowedError")); };
+  blocked.player.scheduledAutoplay(); await flush(); await blocked.advance(60_000);
+  assert.equal(blocked.media.plays, 1); assert.equal(blocked.timers.size, 0);
+  blocked.player.dispose();
+  const ended = fixture(); ended.ready(); ended.player.play(); await flush();
+  ended.media.paused = true; ended.media.event("ended"); await ended.advance(60_000);
+  assert.equal(ended.media.plays, 1); assert.equal(ended.timers.size, 0); ended.player.dispose();
+});
+
+test("a frozen seek reloads once and a hung metadata recovery times out", async () => {
+  const f = fixture({ scheduled: true }); f.ready(); f.player.play(); await flush();
+  f.media.seeking = true; f.media.event("seeking"); await f.advance(8000);
+  assert.equal(f.media.loads, 2); assert.equal(f.media.plays, 1);
+  await f.advance(15_000);
+  assert.equal(f.player.state.failed, true); assert.match(f.player.state.status, /recovery timed out/);
+  assert.equal(f.timers.size, 0); f.player.dispose();
 });
 
 test("decoded callbacks keep one outstanding request and mark each new frame, not duplicate times", async () => {
@@ -551,11 +836,13 @@ test("a queued pause event after fulfilled replay cannot cancel the current run 
     assert.equal(f.media.paused, false);
     assert.equal(f.media.plays, 2);
     assert.equal(queue.size, 1);
-    // The same delayed pause is authoritative when the element really is paused.
+    // A real interruption stops frame scheduling but remains recoverable.
     f.media.pause(); deliverPause();
     assert.equal(f.player.state.playing, false);
     assert.equal(queue.size, 0);
-    assert.equal(f.player.state.status, "Paused · press Play");
+    assert.equal(f.player.state.status, "Playback interrupted · recovering…");
+    await f.advance(1000);
+    assert.equal(f.media.plays, 3); assert.equal(queue.size, 1);
     f.player.dispose();
   }
 });
@@ -574,7 +861,7 @@ test("a queued playing event while currently paused cannot change status or sche
   f.player.dispose();
 });
 
-test("a browser-originated pause also cancels playback and requires a fresh gesture", async () => {
+test("a browser-originated pause remains immediately retryable with explicit Play", async () => {
   const f = fixture(); f.ready(); f.player.play(); await flush();
   f.media.pause();
   assert.equal(f.frames.size, 0); assert.equal(f.player.state.playing, false);

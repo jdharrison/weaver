@@ -13,10 +13,15 @@ import { fetchBoundedText, fetchLobbyBootstrap, readLobbyConfig, type LobbyConfi
 import { loadUserProfile, saveUserProfile, type ProfileStorage, type UserProfile } from "./user-profile.js";
 import { scheduleConnectionLog } from "./connection-log.js";
 import { OutboundScheduler, parsePublishRateHz, PUBLISH_RATE_CONFIGURATION_ERROR } from "./outbound-scheduler.js";
-import { DEFAULT_THEATER_VIDEO, TheaterVideoPlayer } from "./theater-video-player.js";
+import { DEFAULT_THEATER_VIDEO, TheaterVideoPlayer, type TheaterVideoState } from "./theater-video-player.js";
 import { DEFAULT_THEATER_SCHEDULE, TheaterScheduleController } from "./theater-schedule-controller.js";
-import { FullscreenControl, fullscreenPanelState, installCanvasPanels, soundPanelState } from "./control-panels.js";
-import type { TheaterSchedule } from "./theater-schedule.js";
+import { FullscreenControl, fullscreenPanelState, installCanvasInteractions, isSeatInteraction, SEAT_COUNT, soundPanelState, type FullscreenState } from "./control-panels.js";
+import { resolveTheaterSchedule, type TheaterSchedule } from "./theater-schedule.js";
+import { captionsForMedia, TheaterSubtitles } from "./theater-subtitles.js";
+import { fetchWasmWithProgress } from "./wasm-loading.js";
+import { TheaterStartup } from "./theater-startup.js";
+import { ControllerHud } from "./controller-hud.js";
+import { isPortfolioInteraction, openPortfolioLink } from "./portfolio-links.js";
 
 type NpcInteractionSnapshot = {
   version: 1; npcId: string; profile: string; displayName: string;
@@ -113,17 +118,47 @@ function reportLoadProgress(stage: LoadStage): void {
   const completed = loadMilestones[stage];
   if (loadFailed || completed <= loadCompleted) return;
   loadCompleted = completed;
-  if (window.parent === window || !window.parent) return;
-  window.parent.postMessage(JSON.stringify({
-    type: "weaver-host", version: 1, event: "progress", stage, completed, total: 14,
-  }), window.location.origin);
+  bootActivity();
+  notifyLoading({ event: "progress", stage, completed, total: 14 });
+}
+
+function notifyLoading(message: Record<string, string | number | null>): void {
+  if (loadFailed || window.parent === window || !window.parent) return;
+  try {
+    window.parent.postMessage(JSON.stringify({ type: "weaver-host", version: 1, ...message }), window.location.origin);
+  } catch { /* A departing host must not interrupt engine initialization. */ }
+}
+
+function bootActivity(): void {
+  clearTimeout(bootTimer);
+  if (loadFailed || loadCompleted === loadMilestones.scene) return;
+  bootTimer = setTimeout(() => {
+    globalThis.weaverSceneFatal("Scene loading stalled. Check the connection and browser graphics support.");
+  }, 20_000);
+}
+
+let initializingReported = false;
+function reportInitializing(): void {
+  if (loadFailed || initializingReported) return;
+  initializingReported = true;
+  bootActivity();
+  notifyLoading({ event: "initializing" });
 }
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const SETUP_OPERATION_TIMEOUT_MS = 10_000;
 const MAX_PENDING_PUBLISHES = 32;
 const POSE_CHANNEL_ID = 4n;
-const POSE_PAYLOAD_BYTES = 25;
+const LEGACY_POSE_PAYLOAD_BYTES = 25;
+const POSE_PAYLOAD_BYTES = 26;
+
+// Float, world-bound and seat eligibility validation remains in the shared Rust codec.
+function validPosePayload(payload: unknown): payload is Uint8Array {
+  return payload instanceof Uint8Array && (
+    (payload.byteLength === LEGACY_POSE_PAYLOAD_BYTES && payload[0] === 1) ||
+    (payload.byteLength === POSE_PAYLOAD_BYTES && payload[0] === 2 && payload[1] <= SEAT_COUNT)
+  );
+}
 const LOCAL_DEVELOPMENT_ORIGINS = new Set([
   "http://127.0.0.1:8000",
   "http://localhost:8000",
@@ -131,6 +166,8 @@ const LOCAL_DEVELOPMENT_ORIGINS = new Set([
 const encoder = new TextEncoder();
 const lifecycle = new BrowserLifecycle(document.visibilityState === "visible");
 type FirstPersonWasm = typeof import("./pkg/first_person_lab.js") & {
+  GenerateGuestName(): string;
+  IsLegacyUserName(name: string): boolean;
   set_minimal_ui(value: boolean): void;
   send_host_chat(text: string): boolean;
   set_host_chat_focus(active: boolean): void;
@@ -141,6 +178,9 @@ type FirstPersonWasm = typeof import("./pkg/first_person_lab.js") & {
   detach_theater_video(): void;
   set_room_lighting(lobby: number, auditorium: number): boolean;
   pick_control_panel(x: number, y: number): number;
+  pick_scene_interaction(x: number, y: number): number;
+  activate_seat_interaction(target: number): boolean;
+  invalidate_scene_interactions(): void;
   set_control_panel_state(panel: number, state: number): boolean;
   invalidate_control_panels(): void;
   get_npc_interaction_context(): string | undefined;
@@ -153,12 +193,14 @@ type FirstPersonWasm = typeof import("./pkg/first_person_lab.js") & {
 };
 let wasm: FirstPersonWasm;
 let networkState: ConnectionState = "offline";
+let hasConnected = false;
 let lobbyConfig: LobbyConfig | null = null;
 let lobbyConfigurationError: string | null = null;
 let publishRateHz: number | null = null;
 let publishRateConfigurationError: string | null = null;
 let retryMode: JoinMode = LOCAL_DEVELOPMENT_ORIGINS.has(window.location.origin) ? "local" : "operator";
 let bootTimer: ReturnType<typeof setTimeout> | undefined;
+const bootAbort = new AbortController();
 let connection: Connection | null = null;
 let connectingClient: WovenClient | null = null;
 let setupAbort: AbortController | null = null;
@@ -171,6 +213,10 @@ let npcSchedule: TheaterSchedule | null = null;
 let npcCycleKey = "";
 let hostChatFocused = false;
 let theaterControlsFocused = false;
+let theaterStartupFocused = false;
+let controllerHudFocused = false;
+let controllerHud: ControllerHud | undefined;
+let subtitlePanelState = 3;
 let enterHeld = false;
 const heldGameKeys = new Map<string, string>();
 const movementCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight", "ShiftLeft", "ShiftRight"]);
@@ -187,6 +233,8 @@ const form = requiredElement<HTMLFormElement>("network-form");
 const connectButton = requiredElement<HTMLButtonElement>("connect-network");
 const disconnectButton = requiredElement<HTMLButtonElement>("disconnect-network");
 const networkStatus = requiredElement<HTMLElement>("network-status");
+const connectionBadge = requiredElement<HTMLElement>("connection-badge");
+const connectionLabel = requiredElement<HTMLElement>("connection-label");
 const authSelect = requiredElement<HTMLSelectElement>("woven-auth");
 const tokenInput = requiredElement<HTMLInputElement>("woven-token");
 const displayNameInput = requiredElement<HTMLInputElement>("display-name");
@@ -194,19 +242,34 @@ const retryButton = requiredElement<HTMLButtonElement>("join-network");
 const reloadLink = requiredElement<HTMLAnchorElement>("reload-scene");
 const settings = requiredElement<HTMLDetailsElement>("multiplayer-settings");
 const theaterPanel = requiredElement<HTMLElement>("theater-controls");
+const subtitleControls = requiredElement<HTMLElement>("subtitle-controls");
 const theaterMedia = requiredElement<HTMLVideoElement>("theater-video");
 const theaterPlay = requiredElement<HTMLButtonElement>("theater-play");
 const theaterRestart = requiredElement<HTMLButtonElement>("theater-restart");
 const theaterMute = requiredElement<HTMLButtonElement>("theater-mute");
 let panelsDisposed = false;
-let removeCanvasPanels: (() => void) | undefined;
+let canvasInteractions: ReturnType<typeof installCanvasInteractions> | undefined;
 const panelStates = new Map<number, number>();
 function setPanelState(panel: number, state: number): void {
   if (!wasmReady || panelsDisposed || panelStates.get(panel) === state) return;
   try { if (wasm.set_control_panel_state(panel, state)) panelStates.set(panel, state); }
   catch { /* Matching generated bindings are required; do not break media diagnostics. */ }
 }
-const fullscreenControl = new FullscreenControl(window, document, (state) => setPanelState(2, fullscreenPanelState(state)));
+const subtitles = new TheaterSubtitles({
+  media: theaterMedia,
+  hud: requiredElement("theater-subtitle-hud"),
+  button: requiredElement<HTMLButtonElement>("theater-subtitles"),
+  explanation: requiredElement("theater-subtitle-explanation"),
+  storage: {
+    getItem: (key) => window.localStorage.getItem(key),
+    setItem: (key, value) => window.localStorage.setItem(key, value),
+  },
+  panel: (state) => { subtitlePanelState = state; setPanelState(3, state); syncControllerHud(); },
+});
+const fullscreenControl = new FullscreenControl(window, document, (state) => {
+  setPanelState(2, fullscreenPanelState(state));
+  syncControllerHud(state);
+});
 const theaterVolume = requiredElement<HTMLInputElement>("theater-volume");
 const theaterSeek = requiredElement<HTMLInputElement>("theater-seek");
 const theaterTime = requiredElement<HTMLElement>("theater-time");
@@ -217,10 +280,15 @@ const theaterFollow = requiredElement<HTMLInputElement>("theater-follow-schedule
 const theaterScheduleStatus = requiredElement<HTMLElement>("theater-schedule-status");
 theaterFollow.checked = true;
 let theaterSchedule: TheaterScheduleController | undefined;
+let theaterStartup: TheaterStartup | undefined;
+let theaterStartTimer: ReturnType<typeof setTimeout> | undefined;
+let theaterStarted = false;
+let controllerStartupPresented = false;
 const theaterPlayer = new TheaterVideoPlayer({
   media: theaterMedia,
 
   scheduled: true,
+  onRecover: () => theaterSchedule?.recoverPlayback(),
   attach: () => wasm.attach_theater_video(theaterMedia),
   markFrame: () => wasm.mark_theater_video_frame(),
   detach: () => wasm.detach_theater_video(),
@@ -231,7 +299,7 @@ const theaterPlayer = new TheaterVideoPlayer({
     theaterStatus.textContent = state.status;
     theaterPlay.disabled = !state.ready;
     theaterPlay.textContent = state.playing ? "Pause" : "Play";
-    setPanelState(1, soundPanelState(state));
+    syncTheaterSound(state);
     theaterMute.disabled = !state.ready;
     theaterMute.textContent = state.muted ? "Unmute" : "Mute";
     theaterVolume.disabled = !state.ready;
@@ -242,14 +310,20 @@ const theaterPlayer = new TheaterVideoPlayer({
     theaterSeek.value = String(state.currentTime);
     theaterTime.textContent = `${movieTime(state.currentTime)} / ${movieTime(state.duration)}`;
     theaterSchedule?.playerChanged();
+    theaterStartup?.update();
   },
-}, document.querySelector<HTMLMetaElement>('meta[name="weaver-theater-video"]')?.content.trim() || DEFAULT_THEATER_VIDEO);
+});
+
+// Select the minimal-mode preference once, before any schedule or playback work.
+if (document.documentElement.dataset.weaverPresentation === "minimal") theaterPlayer.setMuted(true);
 
 theaterSchedule = new TheaterScheduleController({
   player: theaterPlayer,
   media: theaterMedia,
+  waitForGesture: false,
   path: document.querySelector<HTMLMetaElement>('meta[name="weaver-theater-schedule"]')?.content || DEFAULT_THEATER_SCHEDULE,
   origin: window.location.origin,
+  localSource: document.querySelector<HTMLMetaElement>('meta[name="weaver-theater-video"]')?.content.trim() || DEFAULT_THEATER_VIDEO,
   visible: document.visibilityState === "visible",
   onScheduleLoaded: (schedule) => {
     npcSchedule = schedule;
@@ -258,10 +332,89 @@ theaterSchedule = new TheaterScheduleController({
   onChange: (status, following) => {
     theaterScheduleStatus.textContent = status;
     theaterFollow.checked = following;
+    // Use the schedule's existing publication cadence, not a second timer.
+    let captions: string | undefined;
+    if (npcSchedule) {
+      let scheduled: TheaterSchedule["entries"][number] | undefined;
+      try {
+        scheduled = resolveTheaterSchedule(npcSchedule, Date.now() / 1000).entry;
+      } catch { /* Still match the loaded movie if the schedule clock cannot resolve. */ }
+      captions = captionsForMedia(npcSchedule.entries, scheduled, theaterMedia.getAttribute("src") ?? "", window.location.origin);
+    }
+    subtitles.setSource(captions);
     theaterRestart.disabled = theaterSeek.disabled = following || !theaterPlayer.state.ready || theaterPlayer.state.duration === 0;
+    syncTheaterSound(theaterPlayer.state);
+    theaterStartup?.update();
   },
 });
+if (document.documentElement.dataset.weaverPresentation !== "minimal") theaterStartup = new TheaterStartup({
+  window, document,
+  root: requiredElement("theater-startup"),
+  status: requiredElement("theater-startup-status"),
+  play: requiredElement<HTMLButtonElement>("theater-startup-play"),
+  retry: requiredElement<HTMLButtonElement>("theater-startup-retry"),
+  continueMuted: requiredElement<HTMLButtonElement>("theater-startup-continue"),
+  background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls, requiredElement("controller-launcher")],
+  player: theaterPlayer,
+  schedule: theaterSchedule,
+  onOpenChange: (open) => {
+    if (open) {
+      clearHeldGameInputs();
+      theaterStartupFocused = true;
+      controllerHud?.close(false);
+      if (document.pointerLockElement) document.exitPointerLock?.();
+      enterHeld = false;
+    }
+    theaterStartupFocused = open;
+    syncGameInputFocus();
+  },
+  onDismiss: () => {
+    if (lifecycle.canJoin && !hostChatFocused && !theaterControlsFocused && !controllerHudFocused) {
+      requiredElement("scene").focus({ preventScroll: true });
+    }
+  },
+});
+
+function syncControllerHud(fullscreenState?: FullscreenState): void {
+  if (!controllerHud) return;
+  const state = theaterPlayer.state;
+  const fullscreen = fullscreenState ?? fullscreenControl.state;
+  controllerHud.update({
+    audioEnabled: state.audioEnabled, audioAudible: state.audible, audioPending: state.soundPending || !!theaterSchedule?.state.loading,
+    audioFailed: state.failed || state.soundError || !!theaterSchedule?.state.failed,
+    audioReady: state.ready, subtitles: subtitlePanelState === 3,
+    fullscreen: fullscreen.active, fullscreenAvailable: fullscreen.available,
+    fullscreenPending: fullscreen.pending, fullscreenError: fullscreen.error,
+  });
+}
+
+function syncTheaterSound(state: TheaterVideoState): void {
+  subtitles.update(state.audible);
+  const playerState = soundPanelState(state);
+  const scheduleState = theaterSchedule?.state;
+  setPanelState(1, state.disposed ? playerState : scheduleState?.failed ? 4 :
+    scheduleState?.loading ? 5 : playerState);
+  syncControllerHud();
+}
+
 theaterFollow.addEventListener("change", () => theaterSchedule?.setFollowing(theaterFollow.checked));
+
+function queueTheaterStart(): void {
+  if (theaterStarted || theaterStartTimer !== undefined || !lifecycle.canJoin ||
+      document.visibilityState !== "visible" || theaterPlayer.state.disposed) return;
+  // Let the host's synchronous ready wrapper finish before any manifest/media work.
+  theaterStartTimer = setTimeout(() => {
+    theaterStartTimer = undefined;
+    if (!lifecycle.canJoin || document.visibilityState !== "visible" || theaterPlayer.state.disposed) return;
+    theaterStarted = true;
+    void theaterSchedule?.start();
+  }, 0);
+}
+
+function cancelTheaterStart(): void {
+  clearTimeout(theaterStartTimer);
+  theaterStartTimer = undefined;
+}
 
 function movieTime(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -269,6 +422,9 @@ function movieTime(seconds: number): string {
 
 // Host shutdown is independent of the page/network lifecycle and safe to repeat.
 globalThis.weaverDisposeTheaterVideo = (): void => {
+  cancelTheaterStart();
+  controllerHud?.dispose();
+  theaterStartup?.dispose();
   if (!npcDisposed) {
     npcDisposed = true;
     syncNpcRuntime();
@@ -277,12 +433,13 @@ globalThis.weaverDisposeTheaterVideo = (): void => {
   }
   if (!panelsDisposed) {
     panelsDisposed = true;
-    removeCanvasPanels?.();
+    canvasInteractions?.dispose();
     fullscreenControl.dispose();
     if (wasmReady) { try { wasm.invalidate_control_panels(); } catch { /* Already shut down. */ } }
   }
   theaterSchedule?.dispose();
   theaterFollow.disabled = true;
+  subtitles.dispose();
   theaterPlayer.dispose();
   theaterMedia.remove();
   lobbyLight.disabled = true;
@@ -310,7 +467,7 @@ for (const light of [lobbyLight, auditoriumLight]) {
   });
 }
 
-for (const controlRoot of [theaterPanel]) {
+for (const controlRoot of [theaterPanel, subtitleControls]) {
   controlRoot.addEventListener("focusin", () => {
     theaterControlsFocused = true;
     if (document.pointerLockElement && typeof document.exitPointerLock === "function") document.exitPointerLock();
@@ -319,7 +476,7 @@ for (const controlRoot of [theaterPanel]) {
   });
   controlRoot.addEventListener("focusout", (event) => {
     theaterControlsFocused = event.relatedTarget instanceof Node &&
-      theaterPanel.contains(event.relatedTarget);
+      (theaterPanel.contains(event.relatedTarget) || subtitleControls.contains(event.relatedTarget));
     syncGameInputFocus();
   });
   for (const event of ["keydown", "keyup", "pointerdown", "pointerup", "click", "wheel"]) {
@@ -327,21 +484,80 @@ for (const controlRoot of [theaterPanel]) {
   }
 }
 
-removeCanvasPanels = installCanvasPanels({
+canvasInteractions = installCanvasInteractions({
   window, document, canvas: requiredElement<HTMLCanvasElement>("scene"),
-  enabled: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused,
-  pick: (x, y) => wasm.pick_control_panel(x, y),
-  activate: (panel) => {
-    if (panel === 2) fullscreenControl.toggle();
-    else if (!theaterPlayer.state.soundPending) {
-      if (theaterPlayer.state.audible) theaterPlayer.setMuted(true);
-      else theaterSchedule?.play(true);
+  enabled: () => wasmReady && lifecycle.canJoin && !panelsDisposed && !hostChatFocused && !theaterControlsFocused &&
+    !theaterStartupFocused && !controllerHudFocused && !editableElement(document.activeElement),
+  pick: (x, y) => {
+    try { return wasm.pick_scene_interaction(x, y); }
+    catch { return 0; } // Stale bindings fail closed; never guess a seat or retry a panel-only pick.
+  },
+  activate: (target) => {
+    if (isSeatInteraction(target)) {
+      try { wasm.activate_seat_interaction(target); }
+      catch { /* A rejected/retired target must not fall through to another action. */ }
+    } else if (isPortfolioInteraction(target)) {
+      if (!openPortfolioLink(window, target)) theaterStatus.textContent = "LinkedIn profile link is not configured yet.";
+    } else if (target === 3) subtitles.toggle();
+    else if (target === 2) fullscreenControl.toggle();
+    else if (target === 1) {
+      if (theaterPlayer.state.audible && theaterPlayer.state.frameReady) theaterPlayer.setMuted(true);
+      else theaterStartup?.requestSound();
+    }
+  },
+  invalidate: () => {
+    if (wasmReady) {
+      try { wasm.invalidate_scene_interactions(); }
+      catch { /* Cleanup also works before matching WASM bindings are available. */ }
     }
   },
 });
 
+if (document.documentElement.dataset.weaverPresentation === "minimal") {
+  controllerHud = new ControllerHud({
+    window, document,
+    launcher: requiredElement<HTMLButtonElement>("controller-launcher"),
+    overlay: requiredElement("controller-overlay"), dialog: requiredElement("controller-dialog"),
+    audio: requiredElement<HTMLButtonElement>("controller-audio"),
+    subtitles: requiredElement<HTMLButtonElement>("controller-subtitles"),
+    fullscreen: requiredElement<HTMLButtonElement>("controller-fullscreen"), status: requiredElement("controller-status"),
+    background: [requiredElement("scene"), requiredElement("scene-instructions"), requiredElement("connection-controls"), theaterPanel, subtitleControls],
+    canOpen: () => wasmReady && lifecycle.canJoin && document.visibilityState === "visible" && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    canResume: () => wasmReady && lifecycle.canJoin && document.visibilityState === "visible" && !panelsDisposed && !hostChatFocused && !theaterControlsFocused && !theaterStartupFocused,
+    clearInputs: clearHeldGameInputs,
+    ownership: (open) => { controllerHudFocused = open; enterHeld = false; syncGameInputFocus(); },
+    resume: (restoreLock) => {
+      requiredElement("scene").focus({ preventScroll: true });
+      if (restoreLock) globalThis.weaverResumeGameInput();
+    },
+    audioAction: () => {
+      if (theaterPlayer.state.audioEnabled) theaterPlayer.setMuted(true);
+      else if (theaterPlayer.state.soundPending) {
+        syncControllerHud();
+        return;
+      } else if (theaterPlayer.state.failed || theaterSchedule?.state.failed) {
+        theaterPlayer.setMuted(true);
+        theaterSchedule?.retry();
+      } else if (theaterPlayer.state.ready && !theaterSchedule?.state.loading) theaterSchedule?.play(true);
+      syncControllerHud();
+    },
+    subtitlesAction: () => subtitles.toggle(),
+    fullscreenAction: () => fullscreenControl.toggle(),
+  });
+  syncControllerHud();
+}
+
+function presentControllerStartup(): void {
+  if (!controllerHud || controllerStartupPresented) return;
+  // Ownership callbacks are synchronous; reserve the one-shot before opening.
+  controllerStartupPresented = true;
+  controllerHud.open(true);
+  controllerStartupPresented = controllerHud.openState;
+}
+
 function syncGameInputFocus(): void {
-  if (wasmReady) wasm.set_host_chat_focus(hostChatFocused || theaterControlsFocused);
+  canvasInteractions?.reset();
+  if (wasmReady) wasm.set_host_chat_focus(hostChatFocused || theaterControlsFocused || theaterStartupFocused || controllerHudFocused);
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -431,7 +647,15 @@ function webTransportAvailable(): boolean {
 
 function updateControls(state: ConnectionState): void {
   networkState = state;
-  const canJoin = lifecycle.canJoin && webTransportAvailable() && !connectionAttemptActive &&
+  const label = lifecycle.failed || !webTransportAvailable() ? "Unavailable" :
+    state === "online" ? "CONNECTED" : state === "connecting" ? "Connecting" :
+    hasConnected ? "Disconnected" : "Offline";
+  // Only mutate the live region on transitions, not on repeated readiness updates.
+  if (connectionLabel.textContent !== label) {
+    connectionLabel.textContent = label;
+    connectionBadge.dataset.state = label.toLowerCase();
+  }
+  const canJoin = lifecycle.canJoin && window.navigator.onLine !== false && webTransportAvailable() && !connectionAttemptActive &&
     publishRateConfigurationError === null;
   connectButton.disabled = state !== "offline" || !canJoin;
   retryButton.disabled = state !== "offline" || !canJoin;
@@ -575,6 +799,7 @@ globalThis.weaverSendChat = (text: string): boolean => {
 };
 
 function clearHeldGameInputs(): void {
+  canvasInteractions?.reset();
   const canvas = document.getElementById("scene");
   // Winit tracks physical keys. Deliver releases before blocking focused input, and
   // blur the canvas through its supported focus-loss path (also clears touch/drag).
@@ -587,17 +812,19 @@ function clearHeldGameInputs(): void {
 
 globalThis.weaverSetChatFocus = (active: boolean): boolean => {
   if (typeof active !== "boolean" || !wasmReady || lifecycle.failed || lifecycle.suspended) return false;
+  clearHeldGameInputs();
+  hostChatFocused = active;
+  if (active) controllerHud?.close(false);
   if (active && document.pointerLockElement && typeof document.exitPointerLock === "function") {
     document.exitPointerLock();
   }
-  clearHeldGameInputs();
-  hostChatFocused = active;
   syncGameInputFocus();
+  if (!active) presentControllerStartup();
   return true;
 };
 
 globalThis.weaverResumeGameInput = (): boolean => {
-  if (!wasmReady || !lifecycle.canJoin || hostChatFocused || theaterControlsFocused) return false;
+  if (!wasmReady || !lifecycle.canJoin || hostChatFocused || theaterControlsFocused || theaterStartupFocused || controllerHudFocused) return false;
   const canvas = document.getElementById("scene");
   if (canvas === null) return false;
   // Called synchronously from the user's accepted send, never from lifecycle cleanup.
@@ -615,14 +842,22 @@ globalThis.weaverResumeGameInput = (): boolean => {
   return true;
 };
 
+function editableElement(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+}
+
 function editableTarget(event: Event): boolean {
-  const editable = (target: EventTarget | null): boolean => target instanceof HTMLElement &&
-    (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-  return event.composedPath().some(editable) || editable(document.activeElement);
+  return event.composedPath().some(editableElement) || editableElement(document.activeElement);
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.composedPath().includes(theaterPanel)) return;
+  if (controllerHud?.contains(event.target)) return;
+  if (controllerHudFocused) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (event.composedPath().includes(theaterPanel) || event.composedPath().includes(subtitleControls)) return;
   if (editableTarget(event)) return;
   if (hostChatFocused || theaterControlsFocused) {
     event.preventDefault();
@@ -759,6 +994,10 @@ async function establishConnection(mode: JoinMode): Promise<void> {
     showWebTransportUnavailable();
     return;
   }
+  if (window.navigator.onLine === false) {
+    updateControls("offline");
+    return;
+  }
   if (publishRateConfigurationError !== null) {
     setNetworkStatus(publishRateConfigurationError, true);
     return;
@@ -886,6 +1125,7 @@ async function establishConnectionAttempt(input: ConnectionInput, generation: nu
       disconnect("WASM realtime inbox overflow during connection", true);
       return;
     }
+    hasConnected = true;
     updateControls("online");
     setNetworkStatus(`Online as Woven entity ${entityId}`);
     active.cancelConnectionLog = scheduleConnectionLog(
@@ -947,7 +1187,10 @@ async function receiveLoop(active: Connection, generation: number): Promise<void
     await receiveWhileCurrent(
       () => connection === active && generation === connectionGeneration,
       () => active.client.recv(),
-      (envelope) => processEnvelope(envelope, active),
+      (envelope) => {
+        if (envelope === null) throw new Error("Woven receiver closed");
+        processEnvelope(envelope, active);
+      },
     );
   } catch (error) {
     if (connection === active) disconnect(`Woven receive failed: ${errorMessage(error)}`, true);
@@ -970,7 +1213,7 @@ async function receivePoseLoop(active: Connection, generation: number): Promise<
         envelope.payloadTypeId !== 1n ||
         envelope.entityId === null ||
         envelope.entityId === active.entityId ||
-        envelope.payload?.byteLength !== POSE_PAYLOAD_BYTES
+        !validPosePayload(envelope.payload)
       ) {
         continue;
       }
@@ -1123,8 +1366,8 @@ globalThis.weaverRealtimePublishPositionedUnreliable = (
 ): void => {
   const active = connection;
   if (active === null) return;
-  if (payload.byteLength !== POSE_PAYLOAD_BYTES) {
-    throw new Error(`pose payload must be exactly ${POSE_PAYLOAD_BYTES} bytes`);
+  if (!validPosePayload(payload)) {
+    throw new Error(`pose payload must be version 1 (25 bytes) or version 2 (26 bytes, seat code 0..${SEAT_COUNT})`);
   }
   if (![x, y, z].every(Number.isFinite)) {
     throw new Error("pose routing position must contain finite coordinates");
@@ -1192,6 +1435,9 @@ function syncSceneReadiness(): void {
   }
   updateControls(networkState);
   theaterPlayer.setSceneReady(lifecycle.initialized && lifecycle.rendererReady && !lifecycle.failed);
+  theaterStartup?.setSceneReady(lifecycle.initialized && lifecycle.rendererReady && !lifecycle.failed);
+  presentControllerStartup();
+  queueTheaterStart();
   lobbyLight.disabled = auditoriumLight.disabled = !lifecycle.canJoin || theaterPlayer.state.disposed;
   fullscreenControl.publish();
   syncNpcRuntime();
@@ -1211,6 +1457,7 @@ globalThis.weaverSceneReady = (): void => {
 };
 globalThis.weaverSceneFatal = (message: string): void => {
   loadFailed = true;
+  bootAbort.abort();
   lifecycle.fail();
   globalThis.weaverDisposeTheaterVideo();
   clearTimeout(bootTimer);
@@ -1223,7 +1470,11 @@ globalThis.weaverSceneFatal = (message: string): void => {
 };
 
 function suspendPage(): void {
+  clearHeldGameInputs();
+  controllerHud?.close(false);
   lifecycle.suspend();
+  cancelTheaterStart();
+  theaterStartup?.setVisible(false);
   syncNpcRuntime();
   globalThis.weaverClearNpcDialogue();
   publishNpcInteraction(null);
@@ -1236,10 +1487,14 @@ function suspendPage(): void {
 
 function restorePage(): void {
   if (document.visibilityState !== "visible") return;
+  canvasInteractions?.reset();
   lifecycle.resume();
   syncNpcRuntime();
   theaterPlayer.setVisible(true);
   theaterSchedule?.setVisible(true);
+  theaterStartup?.setVisible(true);
+  presentControllerStartup();
+  queueTheaterStart();
   lobbyLight.disabled = auditoriumLight.disabled = !lifecycle.canJoin || theaterPlayer.state.disposed;
   updateControls(networkState);
   if (lifecycle.failed) return;
@@ -1274,6 +1529,13 @@ disconnectButton.addEventListener("click", () => {
   lifecycle.cancelAutoJoin();
   disconnect("Offline · disconnected. Join / retry manually when ready.");
 });
+window.addEventListener("offline", () => {
+  if (connection !== null || connectionAttemptActive) {
+    disconnect("Offline · network unavailable. Join / retry manually when ready.");
+  } else updateControls(networkState);
+});
+// Connectivity is only a hint: Host/manual retry still owns reconnect admission.
+window.addEventListener("online", () => updateControls(networkState));
 window.addEventListener("pagehide", suspendPage);
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) restorePage();
@@ -1304,24 +1566,29 @@ updateControls("offline");
 if (!webTransportAvailable()) showWebTransportUnavailable();
 
 reportLoadProgress("shell");
-bootTimer = setTimeout(() => {
-  globalThis.weaverSceneFatal("Scene startup timed out. Check browser graphics support and the JS/WASM assets.");
-}, 20_000);
 try {
   wasm = await import("./pkg/first_person_lab.js") as FirstPersonWasm;
   reportLoadProgress("module");
-  await wasm.default();
+  const response = await fetchWasmWithProgress(new URL("./pkg/first_person_lab_bg.wasm", import.meta.url), {
+    signal: bootAbort.signal,
+    onDownload: (loadedBytes, totalBytes) => notifyLoading({ event: "download", loadedBytes, totalBytes }),
+    onActivity: bootActivity,
+    onComplete: reportInitializing,
+  });
+  await wasm.default({ module_or_path: response });
   if (lifecycle.failed) throw new Error("Scene startup already failed");
+  reportInitializing();
   reportLoadProgress("wasm");
   // Presentation must be applied before starting the scene, not on its first rendered frame.
   wasm.set_minimal_ui(document.documentElement.dataset.weaverPresentation === "minimal");
   userProfile = loadUserProfile(profileStorage, {
-    generateUserName: () => wasm.GenerateUserName(),
+    generateGuestName: () => wasm.GenerateGuestName(),
+    isLegacyUserName: (name) => wasm.IsLegacyUserName(name),
     generateUserId: wasm.GenerateUserID,
   });
   displayNameInput.value = userProfile.displayName;
   wasmReady = true;
-  if (hostChatFocused || theaterControlsFocused) syncGameInputFocus();
+  if (hostChatFocused || theaterControlsFocused || theaterStartupFocused) syncGameInputFocus();
   applyDisplayName();
   reportLoadProgress("profile");
   wasm.start();
@@ -1329,5 +1596,5 @@ try {
   reportLoadProgress("started");
   syncSceneReadiness();
 } catch (error) {
-  globalThis.weaverSceneFatal(`Unable to start Weaver: ${errorMessage(error)}`);
+  if (!loadFailed) globalThis.weaverSceneFatal(`Unable to start Weaver: ${errorMessage(error)}`);
 }

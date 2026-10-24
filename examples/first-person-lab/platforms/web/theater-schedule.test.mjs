@@ -15,6 +15,21 @@ function fixture() {
   };
 }
 
+function twentyMinuteFixture() {
+  return {
+    version: 1, revision: "twenty-minute-program", anchorUnixSeconds: 0,
+    cycleSeconds: 1200, driftToleranceSeconds: 5,
+    entries: [
+      { id: "intermission", title: "Intermission", startSeconds: 0, durationSeconds: 417,
+        source: "/assets/theater/intermission.mp4", sourceStartSeconds: 0, loop: false },
+      { id: "feature", title: "Feature", startSeconds: 417, durationSeconds: 733,
+        source: "/assets/theater/feature.mp4", sourceStartSeconds: 0, loop: false },
+      { id: "fin", title: "Fin", startSeconds: 1150, durationSeconds: 50,
+        source: "/assets/theater/fin.mp4", sourceStartSeconds: 0, loop: false },
+    ],
+  };
+}
+
 function invalid(mutator) {
   const value = fixture();
   mutator(value);
@@ -43,6 +58,87 @@ test("half-open entry boundaries, exact ends, cycle wrap, and fractional time", 
     assert.equal(result.entry, schedule.entries.find((entry) => entry.id === id));
     assert.deepEqual({ ...result, entry: id }, { entry: id, cycleIndex, elapsedSeconds, mediaTimeSeconds, remainingSeconds });
   }
+});
+
+test("twenty-minute cycle validates the extended non-looping tail only with the matching cycle total", () => {
+  const input = twentyMinuteFixture();
+  const schedule = validateTheaterSchedule(input);
+  assert.equal(schedule.anchorUnixSeconds, 0);
+  assert.equal(schedule.cycleSeconds, 1200);
+  assert.deepEqual(schedule.entries.map(({ durationSeconds }) => durationSeconds), [417, 733, 50]);
+  assert.deepEqual(schedule.entries[2], input.entries[2]);
+  for (const mutate of [
+    (value) => { value.cycleSeconds = 1156; },
+    (value) => { value.entries[2].durationSeconds = 6; },
+  ]) {
+    const invalid = twentyMinuteFixture(); mutate(invalid);
+    assert.throws(() => validateTheaterSchedule(invalid), { message: "Invalid theater schedule." });
+  }
+});
+
+test("twenty-minute cycle keeps half-open slots through the short source's entire padding interval", () => {
+  const schedule = validateTheaterSchedule(twentyMinuteFixture());
+  for (const [seconds, id, cycleIndex] of [
+    [0, "intermission", 0], [416.999, "intermission", 0], [417, "feature", 0],
+    [1149.999, "feature", 0], [1150, "fin", 0], [1155.999, "fin", 0],
+    [1156, "fin", 0], [1199.999, "fin", 0], [1200, "intermission", 1],
+  ]) {
+    const slot = at(schedule, seconds);
+    assert.equal(slot.entry.id, id, `${seconds}s`);
+    assert.equal(slot.cycleIndex, cycleIndex);
+    assert.equal(slot.elapsedSeconds, seconds - cycleIndex * 1200 - slot.entry.startSeconds);
+    assert.equal(slot.mediaTimeSeconds, slot.elapsedSeconds, "the resolver leaves media-duration clamping to the controller");
+  }
+  const tail = at(schedule, 1199.999);
+  assert.ok(Math.abs(tail.remainingSeconds - 0.001) < 1e-9);
+  assert.equal(at(schedule, 1200).mediaTimeSeconds, 0);
+  assert.equal(at(schedule, 1200).remainingSeconds, 417);
+});
+
+test("epoch-anchored twenty-minute intermissions start at UTC :00/:20/:40 across hours and midnight", () => {
+  const schedule = validateTheaterSchedule(twentyMinuteFixture());
+  const midnight = Date.parse("2024-07-15T00:00:00Z") / 1000;
+  for (const delta of [-3600, -2400, -1200, 0, 1200, 2400, 3600]) {
+    const seconds = midnight + delta;
+    assert.ok([0, 20, 40].includes(new Date(seconds * 1000).getUTCMinutes()));
+    const before = resolveTheaterSchedule(schedule, seconds - 0.001);
+    const boundary = resolveTheaterSchedule(schedule, seconds);
+    assert.equal(before.entry.id, "fin");
+    assert.equal(boundary.entry.id, "intermission");
+    assert.equal(boundary.elapsedSeconds, 0);
+    assert.equal(boundary.cycleIndex, before.cycleIndex + 1);
+  }
+});
+
+test("Pacific offsets, DST transitions and local day rollover preserve the UTC twenty-minute boundary", () => {
+  const schedule = validateTheaterSchedule(twentyMinuteFixture());
+  for (const [beforeLocal, afterLocal, beforeUtc, afterUtc] of [
+    ["2024-01-14T23:59:59.999-08:00", "2024-01-15T00:00:00-08:00", "2024-01-15T07:59:59.999Z", "2024-01-15T08:00:00Z"],
+    ["2024-07-14T23:59:59.999-07:00", "2024-07-15T00:00:00-07:00", "2024-07-15T06:59:59.999Z", "2024-07-15T07:00:00Z"],
+    ["2024-03-10T01:59:59.999-08:00", "2024-03-10T03:00:00-07:00", "2024-03-10T09:59:59.999Z", "2024-03-10T10:00:00Z"],
+    ["2024-11-03T01:59:59.999-07:00", "2024-11-03T01:00:00-08:00", "2024-11-03T08:59:59.999Z", "2024-11-03T09:00:00Z"],
+  ]) {
+    const before = resolveTheaterSchedule(schedule, Date.parse(beforeLocal) / 1000);
+    const after = resolveTheaterSchedule(schedule, Date.parse(afterLocal) / 1000);
+    assert.deepEqual(before, resolveTheaterSchedule(schedule, Date.parse(beforeUtc) / 1000));
+    assert.deepEqual(after, resolveTheaterSchedule(schedule, Date.parse(afterUtc) / 1000));
+    assert.equal(before.entry.id, "fin", beforeLocal);
+    assert.ok(Math.abs(before.remainingSeconds - 0.001) < 1e-6);
+    assert.equal(after.entry.id, "intermission", afterLocal);
+    assert.equal(after.elapsedSeconds, 0);
+    assert.equal(after.cycleIndex, before.cycleIndex + 1);
+  }
+});
+
+test("the repeated Pacific fall-back hour advances three cycles rather than replaying a local-clock cycle", () => {
+  const schedule = validateTheaterSchedule(twentyMinuteFixture());
+  const first = resolveTheaterSchedule(schedule, Date.parse("2024-11-03T01:20:00-07:00") / 1000);
+  const second = resolveTheaterSchedule(schedule, Date.parse("2024-11-03T01:20:00-08:00") / 1000);
+  assert.equal(first.entry.id, "intermission");
+  assert.equal(second.entry.id, "intermission");
+  assert.equal(first.elapsedSeconds, 0);
+  assert.equal(second.elapsedSeconds, 0);
+  assert.equal(second.cycleIndex, first.cycleIndex + 3);
 });
 
 test("independent devices agree; drift tolerance does not alter wall-clock resolution", () => {
@@ -229,6 +325,32 @@ test("untrusted accessors, prototypes and throwing proxies produce only the fixe
   invalid((value) => Object.setPrototypeOf(value, { secret: true }));
   assert.equal(reads, 0);
   assert.throws(() => validateTheaterSchedule(new Proxy({}, { ownKeys() { throw new Error("secret"); } })), { message: "Invalid theater schedule." });
+});
+
+test("optional captions survive validation and resolution without altering legacy entries", () => {
+  const input = fixture();
+  input.entries[0].captions = "/weaver/assets/theater/captions/intro.vtt";
+  const schedule = validateTheaterSchedule(input);
+  assert.deepEqual(schedule, input);
+  assert.equal(at(schedule, 0).entry.captions, input.entries[0].captions);
+  assert.equal(Object.isFrozen(schedule.entries[0]), true);
+  assert.equal(Object.hasOwn(schedule.entries[1], "captions"), false);
+  input.entries[0].captions = "/changed.vtt";
+  assert.notEqual(schedule.entries[0].captions, input.entries[0].captions);
+});
+
+test("captions require canonical root-relative VTT paths and reject accessors", () => {
+  for (const captions of [undefined, null, 1, "", "intro.vtt", "//host/intro.vtt",
+    "https://host/intro.vtt", "/intro.mp4", "/intro.VTT", "/intro.vtt?x=1",
+    "/intro.vtt#cue", "/../intro.vtt", "/a/./intro.vtt", "/%61.vtt",
+    "/a//intro.vtt", "/a\\intro.vtt", "/a b.vtt", "/" + "a".repeat(2048) + ".vtt"]) {
+    invalid((value) => { value.entries[0].captions = captions; });
+  }
+  let reads = 0;
+  invalid((value) => Object.defineProperty(value.entries[0], "captions", {
+    get() { reads++; return "/intro.vtt"; },
+  }));
+  assert.equal(reads, 0);
 });
 
 test("short looping media returns continuous raw media time; metadata modulo belongs to controller", () => {

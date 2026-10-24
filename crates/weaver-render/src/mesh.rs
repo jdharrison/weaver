@@ -33,6 +33,18 @@ pub struct MeshTextureFit {
     pub content_aspect: f32,
 }
 
+/// Framebuffer blending and depth policy for a mesh instance.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum MeshRenderMode {
+    /// Ordinary alpha-blended, back-face-culled surface with depth writes.
+    #[default]
+    Surface,
+    /// Two-sided, alpha-weighted additive RGB with destination alpha preserved.
+    /// Tests against scene depth without writing it; drawn after surfaces and
+    /// before sprites. Lighting and emission still use the ordinary mesh shader.
+    Additive,
+}
+
 /// One instanced draw of a mesh.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshInstance {
@@ -41,6 +53,8 @@ pub struct MeshInstance {
     /// Bind-space to actor-local joint matrices; shared by chunks, not mutable actor state.
     /// At most `MAX_SKIN_JOINTS` finite, invertible affine matrices.
     pub skin: Option<std::sync::Arc<[glam::Mat4]>>,
+    /// CPU-side pipeline selection, independent of emissive fragment lighting.
+    pub render_mode: MeshRenderMode,
     /// Optional color texture. `None` uses solid white.
     pub texture: Option<SpriteHandle>,
     /// Optional centered contain fit with opaque black bars. `None` preserves
@@ -64,6 +78,7 @@ impl MeshInstance {
         Self {
             mesh,
             skin: None,
+            render_mode: MeshRenderMode::Surface,
             texture: None,
             texture_fit: None,
             transform,
@@ -84,6 +99,8 @@ mod tests {
         let transform = RenderTransform::default();
         let mut instance = MeshInstance::new(mesh, transform);
         assert_eq!(instance.mesh, mesh);
+        assert_eq!(MeshRenderMode::default(), MeshRenderMode::Surface);
+        assert_eq!(instance.render_mode, MeshRenderMode::Surface);
         assert_eq!(instance.transform, transform);
         assert_eq!(instance.texture, None);
         assert_eq!(instance.texture_fit, None);

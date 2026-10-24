@@ -4,7 +4,7 @@ use crate::world::WeaverWorld;
 use glam::Vec2;
 use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
-use weaver_render::{SceneSnapshot, TextAnchor, TextRun, UiElement, UiRect};
+use weaver_render::{SceneSnapshot, TextAnchor, TextRun, TextWeight, UiElement, UiRect};
 
 /// Action triggered by a side-menu button.
 #[derive(Clone, Copy, Debug)]
@@ -180,6 +180,7 @@ impl DebugMenu {
             text: format!("T+{:.2}s | {}", simulation_time, self.overlay.status_text()),
             position: glam::Vec2::new(screen_width as f32 - 10.0, 10.0),
             size: 14.0,
+            weight: TextWeight::default(),
             color: [0.2, 1.0, 0.4, 1.0],
             anchor: TextAnchor::TopRight,
             bounds: None,
@@ -236,6 +237,7 @@ impl DebugMenu {
             text: format!("debuginfo> {services}"),
             position: glam::Vec2::new(10.0, 6.0),
             size: 13.0,
+            weight: TextWeight::default(),
             color: [0.9, 0.9, 0.9, 1.0],
             anchor: TextAnchor::TopLeft,
             bounds: None,
@@ -246,6 +248,7 @@ impl DebugMenu {
             text: performance,
             position: glam::Vec2::new(screen_width as f32 - 10.0, 6.0),
             size: 13.0,
+            weight: TextWeight::default(),
             color: [0.2, 1.0, 0.4, 1.0],
             anchor: TextAnchor::TopRight,
             bounds: None,
@@ -309,6 +312,7 @@ impl DebugMenu {
                 text: item.label.clone(),
                 position: Vec2::new(bx + bw / 2.0, by + button_height / 2.0 - 4.0),
                 size: 12.0,
+                weight: TextWeight::default(),
                 color: [0.9, 0.9, 0.9, 1.0],
                 anchor: TextAnchor::Center,
                 bounds: None,
@@ -356,6 +360,7 @@ impl DebugMenu {
             text: text.to_string(),
             position: text_pos,
             size: 12.0,
+            weight: TextWeight::default(),
             color: [0.9, 0.9, 0.9, 1.0],
             anchor: TextAnchor::TopLeft,
             bounds: None,

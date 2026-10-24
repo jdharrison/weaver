@@ -50,9 +50,11 @@ impl RenderLab {
             let angle = index as f32 * (PI * 2.0 / 8.0);
             scene.meshes.push(MeshInstance {
                 mesh: small_mesh,
+                render_mode: weaver_render::MeshRenderMode::Surface,
                 texture: None,
                 texture_fit: None,
                 lighting: None,
+                skin: None,
                 transform: RenderTransform {
                     translation: Vec3::new(angle.cos() * 2.5, 0.5, angle.sin() * 2.5),
                     rotation: Quat::from_axis_angle(Vec3::Y, angle),

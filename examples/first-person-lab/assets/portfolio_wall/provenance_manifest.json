@@ -1,0 +1,283 @@
+{
+  "archive": {
+    "bytes": 5793233,
+    "filename": "starlit_portfolio_wall_asset_pack_v1.zip",
+    "sha256": "7323b3fc3322183dd9afef53fd7da38feea599403d23827a6b11e7b032854291"
+  },
+  "assets": [
+    {
+      "bytes": 3859,
+      "filename": "DejaVuSans-LICENSE.txt",
+      "processing": "byte-for-byte copy",
+      "sha256": "63d3ba759d12804c5b31a9d5940d855c1820d1f5999e6b0872eb1c7ff045fbc9"
+    },
+    {
+      "bytes": 759720,
+      "filename": "DejaVuSans.ttf",
+      "processing": "byte-for-byte copy",
+      "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280"
+    },
+    {
+      "bytes": 1246,
+      "filename": "FONT_GUIDE.md",
+      "member": "starlit_portfolio_wall_asset_pack_v1/FONT_GUIDE.md",
+      "processing": "byte-for-byte copy",
+      "sha256": "b42dba46f1760d7381353f908361bbf1366200f4277f436523a7fe1dc37cedf9"
+    },
+    {
+      "bytes": 3644,
+      "filename": "README.md",
+      "processing": "generated",
+      "sha256": "a5804aebd3669c6eb2c2f0f5535f6b0846b2aae809f37229c48cab86e6e3b3eb"
+    },
+    {
+      "bytes": 943508,
+      "filename": "board_assembled_no_qr.png",
+      "height": 722,
+      "member": "starlit_portfolio_wall_asset_pack_v1/billboard/board_assembled_no_qr.png",
+      "mode": "RGBA",
+      "processing": "byte-for-byte copy",
+      "rgba8_base_bytes": 2879336,
+      "sha256": "efe2e308570d2e682d07f4ef49bda83447025f6250f0710b4f4aa4d657be8ecc",
+      "width": 997
+    },
+    {
+      "bytes": 18024,
+      "filename": "github-jdharrison.svg",
+      "processing": "byte-for-byte copy",
+      "sha256": "a68e134fd634a67c69a4b25bd3b19cc94d457ca31df693634eb92e144c4789f0"
+    },
+    {
+      "bytes": 6124,
+      "filename": "layout_manifest.json",
+      "member": "starlit_portfolio_wall_asset_pack_v1/layout_manifest.json",
+      "processing": "byte-for-byte copy",
+      "sha256": "7ad46b8dc4e8b58cc32ff4c06bc1a2e88dc92173e6c2c4a69c9cc8c54f72c42d"
+    },
+    {
+      "bytes": 26026,
+      "filename": "linkedin-jacobdharrison.svg",
+      "processing": "byte-for-byte copy",
+      "sha256": "8e590e96dd10e0b621e78932f6e8dd949110070da5c868eb51b4656395a93c11"
+    },
+    {
+      "bytes": 956752,
+      "filename": "portfolio_board.png",
+      "height": 722,
+      "mode": "RGBA",
+      "processing": "generated",
+      "rgba8_base_bytes": 2879336,
+      "sha256": "17acb70cbb91aeef9af0914c037391b985c5d2bd73a714567fe55ab59bf20234",
+      "width": 997
+    },
+    {
+      "bytes": 1894205,
+      "filename": "portfolio_preview.png",
+      "height": 1592,
+      "mode": "RGBA",
+      "processing": "generated",
+      "rgba8_base_bytes": 9781248,
+      "sha256": "3c5929b7611f23e7b98af9709408fce5922ea848fdd79bffa19457baa6ba8b31",
+      "width": 1536
+    },
+    {
+      "bytes": 1144836,
+      "filename": "portfolio_wall.png",
+      "height": 870,
+      "mode": "RGBA",
+      "processing": "generated",
+      "rgba8_base_bytes": 5345280,
+      "sha256": "f89988f6bb1dff77b7a61a9284fa504ada94fde228442b413e70c203754997d8",
+      "width": 1536
+    },
+    {
+      "bytes": 5793233,
+      "filename": "starlit_portfolio_wall_asset_pack_v1.zip",
+      "processing": "byte-for-byte copy",
+      "sha256": "7323b3fc3322183dd9afef53fd7da38feea599403d23827a6b11e7b032854291"
+    },
+    {
+      "bytes": 3117,
+      "filename": "upstream_README.md",
+      "member": "starlit_portfolio_wall_asset_pack_v1/README.md",
+      "processing": "byte-for-byte copy",
+      "sha256": "a1a68c9ab80ca8f60e4764138daf7d9926ac9273b3338caefd05403a34aec092"
+    },
+    {
+      "bytes": 1136106,
+      "filename": "wide_billboard_with_lighting_no_qr.png",
+      "height": 870,
+      "member": "starlit_portfolio_wall_asset_pack_v1/billboard/wide_billboard_with_lighting_no_qr.png",
+      "mode": "RGBA",
+      "processing": "byte-for-byte copy",
+      "rgba8_base_bytes": 5345280,
+      "sha256": "61a295af855d703828cdf93e7c27213f82b1ec8cdba69f05963c8079cbca5c4f",
+      "width": 1536
+    }
+  ],
+  "component_sources": [
+    {
+      "bytes": 918983,
+      "member": "starlit_portfolio_wall_asset_pack_v1/billboard/board_blank.png",
+      "sha256": "ea192cd1d7248900a24d394b792db5d1fcbb771021a4098023d9e3eb339e40f1"
+    },
+    {
+      "bytes": 28936,
+      "member": "starlit_portfolio_wall_asset_pack_v1/icons/github_plate.png",
+      "sha256": "4374a1c9587a561d88760cc9154d59057739bae1a1769f12bc1187b10397adf9"
+    },
+    {
+      "bytes": 25767,
+      "member": "starlit_portfolio_wall_asset_pack_v1/icons/linkedin_plate.png",
+      "sha256": "ac03b115a37f969d8a90106f7c5a226a7b1df755f6f82cb8b6698d756be7194b"
+    },
+    {
+      "bytes": 101,
+      "member": "starlit_portfolio_wall_asset_pack_v1/lines/center_vertical_divider.png",
+      "sha256": "8aa10ca4cc6673b2fe3e55ff0a148177e045711bc17e96a0d999a4f1bbf7967c"
+    },
+    {
+      "bytes": 86,
+      "member": "starlit_portfolio_wall_asset_pack_v1/lines/email_rule_short.png",
+      "sha256": "68212f567aa512e75be69250ff6d59efe1dfa0580d42b82e7b90d5bdff693a95"
+    },
+    {
+      "bytes": 83,
+      "member": "starlit_portfolio_wall_asset_pack_v1/lines/footer_rule.png",
+      "sha256": "deb709e7c22b1152a3686ae68d8a9fb408343f06d56cbfb9027c45d3da7d8067"
+    },
+    {
+      "bytes": 100,
+      "member": "starlit_portfolio_wall_asset_pack_v1/lines/long_header_rule.png",
+      "sha256": "1f612e3c0f82f555ee93b22192deb28431a76d7dc31a100cb583e470ea4655bc"
+    },
+    {
+      "bytes": 81,
+      "member": "starlit_portfolio_wall_asset_pack_v1/lines/qr_caption_rule.png",
+      "sha256": "ff10e5ed615bb90251638e90d18813aea9400fd0a0f720bff30d676b11661d2a"
+    },
+    {
+      "bytes": 5350,
+      "member": "starlit_portfolio_wall_asset_pack_v1/ornaments/compass_star_divider.png",
+      "sha256": "58e69880c9855e89db5520c862b05334e16bd50f3a8c8ec53dc4a0c590d1e9b1"
+    },
+    {
+      "bytes": 20497,
+      "member": "starlit_portfolio_wall_asset_pack_v1/ornaments/compass_star_main.png",
+      "sha256": "a2b71bf92597b62d5b2d5ac751702f96903554c8c04d58b9003fa9d379393fce"
+    },
+    {
+      "bytes": 22192,
+      "member": "starlit_portfolio_wall_asset_pack_v1/qr_mounts/github_qr_blank_mount.png",
+      "sha256": "eb0539ff763e23e23d0b659360c663b241060e3c2eb4a568d0de722b8906fac3"
+    },
+    {
+      "bytes": 22556,
+      "member": "starlit_portfolio_wall_asset_pack_v1/qr_mounts/linkedin_qr_blank_mount.png",
+      "sha256": "378ed7be9ae09ece9dec6d706f7ebabe5a31c386c473062a6616e8d9ee0d338f"
+    },
+    {
+      "bytes": 1387,
+      "member": "starlit_portfolio_wall_asset_pack_v1/typography/click_to_open.png",
+      "sha256": "bda20368c06fe2cf65bbe26a58df5e0863ec82cbef8c913b4780e03bf82e20d8"
+    },
+    {
+      "bytes": 2917,
+      "member": "starlit_portfolio_wall_asset_pack_v1/typography/discipline_footer.png",
+      "sha256": "60be78d003796858842635bc7023263979e3bc4be91bf05f14b28b34421ce84d"
+    },
+    {
+      "bytes": 4195,
+      "member": "starlit_portfolio_wall_asset_pack_v1/typography/email_me_at_jdharrison.png",
+      "sha256": "aab8a0800622db7895e3bda8bbfe3f1a7a01f37b382d3a4832cbe3b0278fcdb7"
+    },
+    {
+      "bytes": 7602,
+      "member": "starlit_portfolio_wall_asset_pack_v1/typography/portfolio_title.png",
+      "sha256": "c34feac136519f3b1e624fd7075b0e677e3dc299bc6d78c7e91a17951fdd56f6"
+    }
+  ],
+  "generator": {
+    "path": "tool/import_portfolio_wall_assets.py",
+    "sha256": "95342bfd5f71a4ef02fc49e3e3b7945de8ce74e6dd3c0769435dd30ff3f0332d"
+  },
+  "geometry": {
+    "github": {
+      "caption": "github.com/jdharrison",
+      "caption_box_xyxy": [
+        107,
+        519,
+        431,
+        558
+      ],
+      "caption_text_xy": [
+        185,
+        529
+      ],
+      "caption_width_px": 168.0,
+      "grid_xy": [
+        19,
+        19
+      ],
+      "inset_board_xywh": [
+        293,
+        383,
+        113,
+        113
+      ],
+      "modules": 25,
+      "pixels_per_module": 3,
+      "quiet_zone_modules": 4
+    },
+    "linkedin": {
+      "caption": "linkedin.com/in/jacobdharrison",
+      "caption_box_xyxy": [
+        569,
+        519,
+        890,
+        558
+      ],
+      "caption_text_xy": [
+        613,
+        529
+      ],
+      "caption_width_px": 233.0,
+      "grid_xy": [
+        12,
+        13
+      ],
+      "inset_board_xywh": [
+        754,
+        383,
+        111,
+        113
+      ],
+      "modules": 29,
+      "pixels_per_module": 3,
+      "quiet_zone_modules": 4
+    }
+  },
+  "qr_generation": false,
+  "qr_source": "supplied SVG rasterization",
+  "readme_sha256": "a5804aebd3669c6eb2c2f0f5535f6b0846b2aae809f37229c48cab86e6e3b3eb",
+  "renderer": {
+    "FreeType": "2.13.2",
+    "Pillow": "10.2.0",
+    "font": "DejaVu Sans Regular",
+    "font_size_px": 15,
+    "substitution": "Inter unavailable; DejaVu Sans Regular",
+    "text_layout": "BASIC",
+    "zlib": "1.3"
+  },
+  "rights_caveat": "User-supplied Starlit Cinema portfolio wall pack and QR SVGs; original bytes preserved. The supplied documentation does not provide an explicit redistribution license. Ownership, licensing, and redistribution rights have not been independently verified; confirm permission before publishing. DejaVu font licensing is preserved separately.",
+  "schema_version": 2,
+  "totals": {
+    "png_bytes": 6075407,
+    "png_count": 5,
+    "rgba8_base_bytes": 26230480
+  },
+  "wide_board_offset_xy": [
+    270,
+    100
+  ]
+}

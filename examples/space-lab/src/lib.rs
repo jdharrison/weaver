@@ -321,9 +321,11 @@ fn spawn_body(
     bodies.push(body);
     scene.meshes.push(MeshInstance {
         mesh: sphere_mesh,
+        render_mode: weaver_render::MeshRenderMode::Surface,
         texture: None,
         texture_fit: None,
         lighting: None,
+        skin: None,
         transform: RenderTransform {
             translation: Vec3::ZERO,
             rotation: Quat::IDENTITY,
@@ -941,11 +943,9 @@ mod tests {
         let (vertices, indices) = build_sphere(1.0, 24, 24);
         assert_eq!(vertices.len(), 25 * 25);
         assert_eq!(indices.len(), 24 * 24 * 6);
-        assert!(
-            indices
-                .iter()
-                .all(|&index| usize::from(index) < vertices.len())
-        );
+        assert!(indices
+            .iter()
+            .all(|&index| usize::from(index) < vertices.len()));
         assert!(vertices.iter().all(|vertex| {
             (Vec3::from_array(vertex.normal).length() - 1.0).abs() < f32::EPSILON * 4.0
         }));

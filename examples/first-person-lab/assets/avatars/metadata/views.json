@@ -1,0 +1,1380 @@
+[
+  {
+    "avatar_id": "avatar_01",
+    "view": "standing_front",
+    "path": "01_rust_drifter/avatar_01_rust_drifter.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      253,
+      58,
+      852,
+      1374
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      552.5,
+      1374
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_01",
+    "view": "standing_back",
+    "path": "01_rust_drifter/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      216,
+      29,
+      785,
+      1481
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      487.968,
+      1481
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_01",
+    "view": "standing_left",
+    "path": "01_rust_drifter/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      317,
+      15,
+      721,
+      1471
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      504.0,
+      1471
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_01",
+    "view": "seated_front",
+    "path": "01_rust_drifter/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      114,
+      36,
+      910,
+      1465
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      512.5,
+      1465
+    ],
+    "visible_height": 1.3949951798670657,
+    "seat_anchor_px": [
+      512,
+      950
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8922502410066466,
+    "boot_floor_offset": -0.02274493886041906
+  },
+  {
+    "avatar_id": "avatar_01",
+    "view": "seated_back",
+    "path": "01_rust_drifter/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      116,
+      34,
+      908,
+      1463
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      512.0,
+      1463
+    ],
+    "visible_height": 1.362206831622327,
+    "seat_anchor_px": [
+      512,
+      970
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8922502410066466,
+    "boot_floor_offset": 0.01004340938431969
+  },
+  {
+    "avatar_id": "avatar_01",
+    "view": "seated_left",
+    "path": "01_rust_drifter/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      66,
+      23,
+      963,
+      1478
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      303.0,
+      1478
+    ],
+    "visible_height": 1.3495053021462275,
+    "seat_anchor_px": [
+      700,
+      985
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Posterior thigh underside continues behind the hanging coat; contact inferred at pelvis X, not at the coat hem.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8922502410066466,
+    "boot_floor_offset": 0.022744938860419117
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "standing_front",
+    "path": "02_chrome_usher/avatar_02_chrome_usher.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      217,
+      43,
+      821,
+      1361
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      519.0,
+      1361
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "standing_back",
+    "path": "02_chrome_usher/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      300,
+      28,
+      720,
+      1458
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      510.564,
+      1458
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "standing_left",
+    "path": "02_chrome_usher/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      382,
+      30,
+      630,
+      1465
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      507.5,
+      1465
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "seated_front",
+    "path": "02_chrome_usher/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      221,
+      45,
+      803,
+      1477
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      512.0,
+      1477
+    ],
+    "visible_height": 1.357750281214848,
+    "seat_anchor_px": [
+      512,
+      940
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.72,
+    "head_above_seat": 0.84859392575928,
+    "boot_floor_offset": -0.02915635545556805
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "seated_back",
+    "path": "02_chrome_usher/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      181,
+      20,
+      844,
+      1480
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      512.803,
+      1480
+    ],
+    "visible_height": 1.3466816647919009,
+    "seat_anchor_px": [
+      512,
+      940
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.72,
+    "head_above_seat": 0.84859392575928,
+    "boot_floor_offset": -0.018087739032620898
+  },
+  {
+    "avatar_id": "avatar_02",
+    "view": "seated_left",
+    "path": "02_chrome_usher/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      73,
+      32,
+      879,
+      1476
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      314.256,
+      1476
+    ],
+    "visible_height": 1.299437570303712,
+    "seat_anchor_px": [
+      650,
+      975
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Visible flat trouser underside below the posterior thigh; excludes jacket tail.",
+    "previous_visible_height": 1.72,
+    "head_above_seat": 0.84859392575928,
+    "boot_floor_offset": 0.02915635545556805
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "standing_front",
+    "path": "03_moth_mechanic/avatar_03_moth_mechanic.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      207,
+      36,
+      934,
+      1386
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      553.5,
+      1386
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "standing_back",
+    "path": "03_moth_mechanic/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      134,
+      33,
+      878,
+      1471
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      524.382,
+      1471
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "standing_left",
+    "path": "03_moth_mechanic/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      304,
+      6,
+      812,
+      1457
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      446.5,
+      1457
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "seated_front",
+    "path": "03_moth_mechanic/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      16,
+      37,
+      1008,
+      1472
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      512.728,
+      1472
+    ],
+    "visible_height": 1.4094647568228227,
+    "seat_anchor_px": [
+      512,
+      940
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.8869314811226543,
+    "boot_floor_offset": -0.042533275700168405
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "seated_back",
+    "path": "03_moth_mechanic/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      53,
+      49,
+      977,
+      1492
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      521.462,
+      1492
+    ],
+    "visible_height": 1.3821189279265553,
+    "seat_anchor_px": [
+      515,
+      975
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.8869314811226543,
+    "boot_floor_offset": -0.01518744680390094
+  },
+  {
+    "avatar_id": "avatar_03",
+    "view": "seated_left",
+    "path": "03_moth_mechanic/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      16,
+      14,
+      1012,
+      1449
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      416.897,
+      1449
+    ],
+    "visible_height": 1.3243982054224859,
+    "seat_anchor_px": [
+      640,
+      975
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Trouser underside continues behind hanging moth coat; contact inferred at pelvis X, not wing tips.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.8869314811226543,
+    "boot_floor_offset": 0.042533275700168405
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "standing_front",
+    "path": "04_velvet_bones/avatar_04_velvet_bones.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      222,
+      36,
+      855,
+      1393
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      554.5,
+      1393
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "standing_back",
+    "path": "04_velvet_bones/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      234,
+      10,
+      791,
+      1497
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      515.519,
+      1497
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "standing_left",
+    "path": "04_velvet_bones/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      301,
+      14,
+      728,
+      1486
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      466.5,
+      1486
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "seated_front",
+    "path": "04_velvet_bones/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      108,
+      19,
+      919,
+      1483
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      511.091,
+      1483
+    ],
+    "visible_height": 1.4058043615386029,
+    "seat_anchor_px": [
+      512,
+      940
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8843892192466211,
+    "boot_floor_offset": -0.041415142291981843
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "seated_back",
+    "path": "04_velvet_bones/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      53,
+      20,
+      972,
+      1486
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      511.972,
+      1486
+    ],
+    "visible_height": 1.3229740769546392,
+    "seat_anchor_px": [
+      512,
+      1000
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8843892192466211,
+    "boot_floor_offset": 0.04141514229198179
+  },
+  {
+    "avatar_id": "avatar_04",
+    "view": "seated_left",
+    "path": "04_velvet_bones/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      28,
+      23,
+      996,
+      1469
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      238.5,
+      1469
+    ],
+    "visible_height": 1.3575656168053227,
+    "seat_anchor_px": [
+      720,
+      965
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Posterior thigh underside continues behind the long coat; excludes hanging hem.",
+    "previous_visible_height": 1.73,
+    "head_above_seat": 0.8843892192466211,
+    "boot_floor_offset": 0.006823602441298315
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "standing_front",
+    "path": "05_spore_scout/avatar_05_spore_scout.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      258,
+      70,
+      818,
+      1366
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      539.0,
+      1366
+    ],
+    "visible_height": 2.17
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "standing_back",
+    "path": "05_spore_scout/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      234,
+      17,
+      789,
+      1454
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      515.672,
+      1454
+    ],
+    "visible_height": 2.17
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "standing_left",
+    "path": "05_spore_scout/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      288,
+      40,
+      799,
+      1456
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      510.0,
+      1456
+    ],
+    "visible_height": 2.17
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "seated_front",
+    "path": "05_spore_scout/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      209,
+      33,
+      832,
+      1431
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      514.141,
+      1431
+    ],
+    "visible_height": 1.629032593139202,
+    "seat_anchor_px": [
+      512,
+      985
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.1093269160719028,
+    "boot_floor_offset": -0.039705677067299106
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "seated_back",
+    "path": "05_spore_scout/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      117,
+      12,
+      905,
+      1455
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      510.358,
+      1455
+    ],
+    "visible_height": 1.5496212390046038,
+    "seat_anchor_px": [
+      512,
+      1045
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.1093269160719028,
+    "boot_floor_offset": 0.03970567706729894
+  },
+  {
+    "avatar_id": "avatar_05",
+    "view": "seated_left",
+    "path": "05_spore_scout/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      51,
+      34,
+      1006,
+      1467
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      281.0,
+      1467
+    ],
+    "visible_height": 1.5801843645437739,
+    "seat_anchor_px": [
+      675,
+      1040
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Visible rounded trouser/short-jacket underside below posterior thigh, ahead of backpack.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.1093269160719028,
+    "boot_floor_offset": 0.009142551528128762
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "standing_front",
+    "path": "06_canid_courier/avatar_06_canid_courier.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      268,
+      12,
+      843,
+      1398
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      559.0,
+      1398
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "standing_back",
+    "path": "06_canid_courier/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      250,
+      8,
+      789,
+      1464
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      556.536,
+      1464
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "standing_left",
+    "path": "06_canid_courier/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      314,
+      5,
+      763,
+      1444
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      466.5,
+      1444
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "seated_front",
+    "path": "06_canid_courier/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      196,
+      16,
+      832,
+      1478
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      508.5,
+      1478
+    ],
+    "visible_height": 1.5653731577604644,
+    "seat_anchor_px": [
+      512,
+      980
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 1.0321612339815922,
+    "boot_floor_offset": -0.053211923778872294
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "seated_back",
+    "path": "06_canid_courier/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      139,
+      17,
+      935,
+      1463
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      552.152,
+      1463
+    ],
+    "visible_height": 1.45894931020272,
+    "seat_anchor_px": [
+      520,
+      1040
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 1.0321612339815922,
+    "boot_floor_offset": 0.05321192377887235
+  },
+  {
+    "avatar_id": "avatar_06",
+    "view": "seated_left",
+    "path": "06_canid_courier/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      20,
+      9,
+      960,
+      1480
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      222.0,
+      1480
+    ],
+    "visible_height": 1.5092536532673182,
+    "seat_anchor_px": [
+      650,
+      1015
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Visible trouser underside below posterior thigh, before hanging rear coat panel.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 1.0321612339815922,
+    "boot_floor_offset": 0.0029075807142739385
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "standing_front",
+    "path": "07_puddle_kid/avatar_07_puddle_kid.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      217,
+      60,
+      850,
+      1381
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      533.5,
+      1381
+    ],
+    "visible_height": 2.16
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "standing_back",
+    "path": "07_puddle_kid/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      190,
+      31,
+      844,
+      1477
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      499.625,
+      1477
+    ],
+    "visible_height": 2.16
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "standing_left",
+    "path": "07_puddle_kid/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      272,
+      42,
+      784,
+      1460
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      483.0,
+      1460
+    ],
+    "visible_height": 2.16
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "seated_front",
+    "path": "07_puddle_kid/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      171,
+      40,
+      862,
+      1453
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      511.339,
+      1453
+    ],
+    "visible_height": 1.6440676533108272,
+    "seat_anchor_px": [
+      512,
+      1040
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.163529832491739,
+    "boot_floor_offset": -0.0005378208190882083
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "seated_back",
+    "path": "07_puddle_kid/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      96,
+      71,
+      928,
+      1468
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      509.837,
+      1468
+    ],
+    "visible_height": 1.6603178508589982,
+    "seat_anchor_px": [
+      512,
+      1050
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.163529832491739,
+    "boot_floor_offset": -0.016788018367259294
+  },
+  {
+    "avatar_id": "avatar_07",
+    "view": "seated_left",
+    "path": "07_puddle_kid/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      70,
+      108,
+      983,
+      1439
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      279.0,
+      1439
+    ],
+    "visible_height": 1.6267418141244794,
+    "seat_anchor_px": [
+      680,
+      1060
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Visible rounded shorts/coat underside below posterior thigh, not waist belt.",
+    "previous_visible_height": 1.7,
+    "head_above_seat": 1.163529832491739,
+    "boot_floor_offset": 0.016788018367259405
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "standing_front",
+    "path": "08_aviary_pilot/avatar_08_aviary_pilot.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      214,
+      21,
+      789,
+      1393
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      520.0,
+      1393
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "standing_back",
+    "path": "08_aviary_pilot/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      217,
+      0,
+      796,
+      1480
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      502.151,
+      1480
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "standing_left",
+    "path": "08_aviary_pilot/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      292,
+      11,
+      805,
+      1483
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      445.0,
+      1483
+    ],
+    "visible_height": 2.21
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "seated_front",
+    "path": "08_aviary_pilot/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      95,
+      26,
+      920,
+      1467
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      528.192,
+      1467
+    ],
+    "visible_height": 1.5122271080122238,
+    "seat_anchor_px": [
+      528,
+      945
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.9644251993499192,
+    "boot_floor_offset": -0.06780190866230451
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "seated_back",
+    "path": "08_aviary_pilot/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      95,
+      22,
+      937,
+      1472
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      540.506,
+      1418
+    ],
+    "visible_height": 1.429873761817365,
+    "seat_anchor_px": [
+      520,
+      1000
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "floor_anchor_note": "Boot baseline alpha>=16 from x=[90,310) and [710,940), y>=1200; feather tail extends below feet to alpha-bound bottom 1472.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.9644251993499192,
+    "boot_floor_offset": 0.06780190866230446
+  },
+  {
+    "avatar_id": "avatar_08",
+    "view": "seated_left",
+    "path": "08_aviary_pilot/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      20,
+      48,
+      1008,
+      1453
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      388.4,
+      1453
+    ],
+    "visible_height": 1.4538813359298675,
+    "seat_anchor_px": [
+      650,
+      980
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Posterior thigh underside continues behind hanging coat; excludes feather tail and coat hem.",
+    "previous_visible_height": 1.75,
+    "head_above_seat": 0.9644251993499192,
+    "boot_floor_offset": -0.00945613657994826
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "standing_front",
+    "path": "09_tortoise_miner/avatar_09_tortoise_miner.png",
+    "dimensions": [
+      1086,
+      1448
+    ],
+    "alpha_bounds": [
+      181,
+      36,
+      896,
+      1402
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      528.5,
+      1402
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "standing_back",
+    "path": "09_tortoise_miner/back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      172,
+      13,
+      861,
+      1479
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      551.916,
+      1479
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "standing_left",
+    "path": "09_tortoise_miner/left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      250,
+      34,
+      855,
+      1482
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      488.5,
+      1482
+    ],
+    "visible_height": 2.18
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "seated_front",
+    "path": "09_tortoise_miner/seated_front.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      134,
+      67,
+      914,
+      1453
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      511.985,
+      1453
+    ],
+    "visible_height": 1.6236270491803277,
+    "seat_anchor_px": [
+      512,
+      985
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Pelvis center between proximal thighs; posterior cushion contact is occluded by front thighs. Row inferred from their lower support surface, not belt or crotch apex.",
+    "previous_visible_height": 1.71,
+    "head_above_seat": 1.075389344262295,
+    "boot_floor_offset": -0.06823770491803272
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "seated_back",
+    "path": "09_tortoise_miner/seated_back.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      70,
+      26,
+      965,
+      1449
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      520.747,
+      1449
+    ],
+    "visible_height": 1.4871516393442623,
+    "seat_anchor_px": [
+      512,
+      1055
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Rear pelvis midline; support row at lower buttock/trouser contour, inferred under overlying coat where hidden. Excludes hanging coat hem, bags, and tail.",
+    "previous_visible_height": 1.71,
+    "head_above_seat": 1.075389344262295,
+    "boot_floor_offset": 0.06823770491803277
+  },
+  {
+    "avatar_id": "avatar_09",
+    "view": "seated_left",
+    "path": "09_tortoise_miner/seated_left_side.png",
+    "dimensions": [
+      1024,
+      1536
+    ],
+    "alpha_bounds": [
+      11,
+      84,
+      1022,
+      1472
+    ],
+    "alpha_threshold": 16,
+    "floor_anchor_px": [
+      303.5,
+      1472
+    ],
+    "visible_height": 1.6032657463330457,
+    "seat_anchor_px": [
+      660,
+      1015
+    ],
+    "seat_anchor_method": "manual source-pixel support-surface calibration; not an authored joint",
+    "seat_anchor_note": "Visible trouser underside below posterior thigh, beneath hip pouch; excludes hanging jacket/tool.",
+    "previous_visible_height": 1.71,
+    "head_above_seat": 1.075389344262295,
+    "boot_floor_offset": -0.04787640207075061
+  }
+]

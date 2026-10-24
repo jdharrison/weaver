@@ -3,8 +3,8 @@
 //! Three room residents guarantee physical occupancy; two non-overlapping door
 //! visits add traffic. Schedules are compiled once and sampled directly from
 //! accepted, nondecreasing UTC, never advanced by frames, movies, player actions,
-//! or a catch-up scheduler. Invalid or backward UTC freezes the last safe poses,
-//! including bob, until UTC catches up to the last accepted sample.
+//! or a catch-up scheduler. Invalid or backward UTC freezes the last safe poses
+//! until UTC catches up to the last accepted sample.
 //!
 //! Authored routes enter and exit at the door. After suspension or a large forward
 //! clock jump, direct resynchronization can skip intermediate route positions and
@@ -12,16 +12,15 @@
 //! occur at the door. Skipped positions are never replayed, but physical room
 //! counts remain within 1–2 lobby / 2–3 auditorium at every sample and freeze.
 
-use crate::{avatars, theater};
+use crate::{avatars, motion::WalkWobble, theater};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use weaver_render::{SceneSnapshot, SpriteHandle};
+use weaver_render::SceneSnapshot;
 
 const NPC_COUNT: usize = 5;
 const MAX_ACTIONS: usize = 32;
 const MAX_SAFE_SECONDS: f64 = 9_007_199_254_740_991.0;
-const AMBIENT_BOB_HEIGHT: f32 = 0.18;
 const DEFINITIONS_JSON: &str = include_str!("../assets/npcs.json");
 
 #[derive(Clone, Deserialize)]
@@ -67,6 +66,9 @@ enum Schedule {
     Resident {
         point: String,
     },
+    ResidentSeat {
+        seat: String,
+    },
     DoorVisit {
         offset_seconds: f64,
         actions: Vec<Action>,
@@ -78,6 +80,7 @@ enum Schedule {
 enum Action {
     Move { point: String, speed: f64 },
     Wait { seconds: f64 },
+    Sit { seat: String, seconds: f64 },
 }
 
 fn config() -> &'static NpcConfig {
@@ -91,24 +94,27 @@ fn config() -> &'static NpcConfig {
 }
 
 fn known_waypoint(point: &str) -> bool {
-    matches!(
-        point,
-        "lobby_door"
-            | "lobby_entry"
-            | "lobby_center"
-            | "lobby_west"
-            | "lobby_east"
-            | "lobby_aisle"
-            | "passage_lobby"
-            | "corridor_turn"
-            | "auditorium_entry"
-            | "auditorium_back"
-            | "auditorium_left"
-            | "auditorium_right"
-            | "auditorium_center"
-            | "row_a"
-            | "row_b"
-    ) && theater::npc_waypoint(point).is_some()
+    theater::seat_index(point).is_some()
+        || matches!(
+            point,
+            "lobby_door"
+                | "lobby_entry"
+                | "lobby_center"
+                | "lobby_west"
+                | "lobby_east"
+                | "lobby_aisle"
+                | "passage_lobby"
+                | "corridor_turn"
+                | "auditorium_entry"
+                | "auditorium_back_aisle"
+                | "auditorium_back"
+                | "auditorium_left"
+                | "auditorium_right"
+                | "auditorium_center"
+                | "row_a"
+                | "row_b"
+                | "row_b_approach_aisle"
+        ) && theater::npc_waypoint(point).is_some()
 }
 
 fn validate_config(config: &NpcConfig) -> Result<(), &'static str> {
@@ -131,6 +137,11 @@ fn validate_config(config: &NpcConfig) -> Result<(), &'static str> {
             return Err("catalog must contain only the five noninteractive ambient guests");
         }
         match (&definition.schedule, index) {
+            (Schedule::ResidentSeat { seat }, 1..=2) => {
+                if theater::seat_index(seat).is_none() {
+                    return Err("unknown resident seat");
+                }
+            }
             (Schedule::Resident { point }, 0..=2) => {
                 if !known_waypoint(point) {
                     return Err("unknown resident anchor");
@@ -159,6 +170,14 @@ fn validate_config(config: &NpcConfig) -> Result<(), &'static str> {
                                 return Err("invalid authored walking leg");
                             }
                         }
+                        Action::Sit { seat, seconds } => {
+                            if theater::seat_index(seat).is_none()
+                                || !seconds.is_finite()
+                                || !(0.5..=60.0).contains(seconds)
+                            {
+                                return Err("invalid authored sit");
+                            }
+                        }
                         Action::Wait { seconds } => {
                             if !seconds.is_finite() || !(0.5..=60.0).contains(seconds) {
                                 return Err("invalid authored pause");
@@ -170,7 +189,7 @@ fn validate_config(config: &NpcConfig) -> Result<(), &'static str> {
                     .iter()
                     .filter_map(|action| match action {
                         Action::Move { point, .. } => Some(point.as_str()),
-                        Action::Wait { .. } => None,
+                        Action::Wait { .. } | Action::Sit { .. } => None,
                     })
                     .collect();
                 if points.last().copied() != Some("lobby_door")
@@ -215,7 +234,10 @@ fn grounded_eye(mut position: Vec3) -> Vec3 {
 }
 
 fn waypoint(point: &str) -> Vec3 {
-    grounded_eye(theater::npc_waypoint(point).expect("validated ambient waypoint"))
+    theater::seat(point).map_or_else(
+        || grounded_eye(theater::npc_waypoint(point).expect("validated ambient waypoint")),
+        theater::Seat::approach,
+    )
 }
 
 #[derive(Debug)]
@@ -224,11 +246,13 @@ struct Segment {
     duration_seconds: f64,
     from: Vec3,
     to: Vec3,
+    seat: Option<u8>,
 }
 
 #[derive(Debug)]
 enum Slot {
     Resident(Vec3),
+    ResidentSeat(u8),
     DoorVisit {
         offset_seconds: f64,
         visible_seconds: f64,
@@ -236,11 +260,28 @@ enum Slot {
     },
 }
 
+fn validate_docking(index: u8, colliders: &[theater::Collider]) -> Result<(), &'static str> {
+    let seat = theater::SEATS[usize::from(index)];
+    if !theater::npc_path_clear(seat.approach(), seat.approach(), colliders)
+        || !theater::has_line_of_sight(seat.approach(), seat.seated_eye(), colliders)
+    {
+        return Err("seat approach or docking is obstructed");
+    }
+    // Only this exact authored chair anchor bypasses standing collision. No
+    // walking segment enters its collider; departure resumes at its approach.
+    Ok(())
+}
+
 fn compile_slot(
     schedule: &Schedule,
     colliders: &[theater::Collider],
 ) -> Result<Slot, &'static str> {
     match schedule {
+        Schedule::ResidentSeat { seat } => {
+            let index = theater::seat_index(seat).ok_or("unknown resident seat")?;
+            validate_docking(index, colliders)?;
+            Ok(Slot::ResidentSeat(index))
+        }
         Schedule::Resident { point } => {
             let eye = waypoint(point);
             if !theater::npc_path_clear(eye, eye, colliders) {
@@ -272,6 +313,16 @@ fn compile_slot(
                         (to, dx.hypot(dz) / speed)
                     }
                     Action::Wait { seconds } => (position, *seconds),
+                    Action::Sit { seat, seconds } => {
+                        let index = theater::seat_index(seat).ok_or("unknown sit seat")?;
+                        validate_docking(index, colliders)?;
+                        if !position
+                            .abs_diff_eq(theater::SEATS[usize::from(index)].approach(), 0.001)
+                        {
+                            return Err("sit must be adjacent to its authored approach");
+                        }
+                        (position, *seconds)
+                    }
                 };
                 if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
                     return Err("authored NPC legs must have positive finite durations");
@@ -281,6 +332,10 @@ fn compile_slot(
                     duration_seconds,
                     from: position,
                     to,
+                    seat: match action {
+                        Action::Sit { seat, .. } => theater::seat_index(seat),
+                        _ => None,
+                    },
                 });
                 start_seconds += duration_seconds;
                 position = to;
@@ -308,6 +363,7 @@ fn compile_slots(
     let mut residents = (0, 0);
     for slot in &slots {
         match slot {
+            Slot::ResidentSeat(_) => residents.1 += 1,
             Slot::Resident(eye) => match zone(*eye) {
                 Zone::Lobby => residents.0 += 1,
                 Zone::Auditorium => residents.1 += 1,
@@ -348,6 +404,27 @@ fn compile_slots(
             }
         }
     }
+    // Visitor windows cannot overlap; residents hold their seats for the whole cycle.
+    let mut permanent = [false; theater::SEAT_COUNT];
+    for slot in &slots {
+        if let Slot::ResidentSeat(index) = slot {
+            if permanent[usize::from(*index)] {
+                return Err("duplicate resident seat");
+            }
+            permanent[usize::from(*index)] = true;
+        }
+    }
+    for slot in &slots {
+        if let Slot::DoorVisit { timeline, .. } = slot
+            && timeline.iter().any(|segment| {
+                segment
+                    .seat
+                    .is_some_and(|index| permanent[usize::from(index)])
+            })
+        {
+            return Err("visitor seat overlaps resident allocation");
+        }
+    }
     // Residents never leave their physical rooms. At most one other portrait
     // exists, so the maxima (2 lobby / 3 auditorium) hold even at thresholds.
     Ok(slots)
@@ -356,19 +433,20 @@ fn compile_slots(
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct NpcPose {
     eye: Vec3,
-    bob_height: f32,
+    seat: Option<u8>,
+    forward: Vec3,
+    walking: bool,
 }
 
-fn bob_height(unix_seconds: f64, index: usize) -> f32 {
-    // Five seconds is exactly nine bob cycles. Reduce the UTC input before
-    // trigonometry so large time jumps never degrade the visible animation.
-    let phase = unix_seconds.rem_euclid(5.0) + index as f64 * 0.17;
-    let bob = (phase * std::f64::consts::TAU * 1.8).sin() as f32;
-    (bob * 0.5 + 0.5) * AMBIENT_BOB_HEIGHT
-}
-
-fn pose_at(slot: &Slot, cycle_phase: f64, bob_height: f32) -> Option<NpcPose> {
+fn pose_at(slot: &Slot, cycle_phase: f64) -> Option<NpcPose> {
+    let mut seat = None;
+    let mut forward = Vec3::NEG_Z;
+    let mut walking = false;
     let eye = match slot {
+        Slot::ResidentSeat(index) => {
+            seat = Some(*index);
+            theater::SEATS[usize::from(*index)].approach()
+        }
         Slot::Resident(eye) => *eye,
         Slot::DoorVisit {
             offset_seconds,
@@ -382,10 +460,22 @@ fn pose_at(slot: &Slot, cycle_phase: f64, bob_height: f32) -> Option<NpcPose> {
                 return None;
             }
             let phase = cycle_phase - offset_seconds;
-            let segment = timeline
-                .iter()
-                .find(|segment| phase < segment.start_seconds + segment.duration_seconds)
-                .unwrap_or_else(|| timeline.last().expect("validated nonempty door route"));
+            let mut active = timeline.last().expect("validated nonempty door route");
+            for segment in timeline {
+                let tangent = (segment.to - segment.from) * Vec3::new(1.0, 0.0, 1.0);
+                if segment.seat.is_some() {
+                    forward = Vec3::NEG_Z;
+                } else if tangent.length_squared() > 0.0 {
+                    forward = tangent.normalize();
+                }
+                active = segment;
+                if phase < segment.start_seconds + segment.duration_seconds {
+                    walking = segment.seat.is_none() && tangent.length_squared() > 0.0;
+                    break;
+                }
+            }
+            let segment = active;
+            seat = segment.seat;
             let blend =
                 ((phase - segment.start_seconds) / segment.duration_seconds).clamp(0.0, 1.0) as f32;
             segment.from.lerp(segment.to, blend)
@@ -394,8 +484,13 @@ fn pose_at(slot: &Slot, cycle_phase: f64, bob_height: f32) -> Option<NpcPose> {
     // A single walking leg can cross several flats and ramps. Interpolating
     // endpoint heights would put portraits above or below the actual surface.
     Some(NpcPose {
-        eye: grounded_eye(eye),
-        bob_height,
+        eye: seat.map_or_else(
+            || grounded_eye(eye),
+            |index| theater::SEATS[usize::from(index)].seated_eye(),
+        ),
+        seat,
+        forward,
+        walking,
     })
 }
 
@@ -404,6 +499,9 @@ pub(crate) struct NpcRuntime {
     slots: [Slot; NPC_COUNT],
     poses: [Option<NpcPose>; NPC_COUNT],
     last_accepted_unix_seconds: Option<f64>,
+    player_occupied: [bool; theater::SEAT_COUNT],
+    wobble: [WalkWobble; NPC_COUNT],
+    rocks: [f32; NPC_COUNT],
 }
 
 impl NpcRuntime {
@@ -411,14 +509,62 @@ impl NpcRuntime {
         let config = config();
         let slots = compile_slots(config, colliders)
             .expect("bundled ambient routes must preserve safe physical room occupancy");
-        let poses =
-            std::array::from_fn(|index| pose_at(&slots[index], 0.0, bob_height(0.0, index)));
+        // Before the first occupancy sample, residents wait at their approaches.
+        let poses = std::array::from_fn(|index| {
+            pose_at(&slots[index], 0.0).map(|mut pose| {
+                if let Some(seat) = pose.seat.take() {
+                    pose.eye = theater::SEATS[usize::from(seat)].approach();
+                }
+                pose
+            })
+        });
         Self {
             period_seconds: config.schedule_period_seconds,
             slots,
             poses,
             last_accepted_unix_seconds: None,
+            player_occupied: [false; theater::SEAT_COUNT],
+            wobble: std::array::from_fn(|_| WalkWobble::default()),
+            rocks: [0.0; NPC_COUNT],
         }
+    }
+
+    pub(crate) fn occupied_seats(&self) -> [bool; theater::SEAT_COUNT] {
+        let mut occupied = [false; theater::SEAT_COUNT];
+        for pose in self.poses.iter().flatten() {
+            if let Some(index) = pose.seat {
+                occupied[usize::from(index)] = true;
+            }
+        }
+        occupied
+    }
+
+    pub(crate) fn set_player_occupied_seats(&mut self, occupied: [bool; theater::SEAT_COUNT]) {
+        self.player_occupied = occupied;
+        let previous = self.poses;
+        // Reconcile contention even while UTC is frozen, without advancing the schedule.
+        self.sample_poses(self.last_accepted_unix_seconds.unwrap_or(0.0));
+        for (index, before) in previous.iter().enumerate() {
+            if *before != self.poses[index] || !self.poses[index].is_some_and(|pose| pose.walking) {
+                self.wobble[index] = WalkWobble::default();
+                self.rocks[index] = 0.0;
+            }
+        }
+    }
+
+    fn sample_poses(&mut self, seconds: f64) {
+        let phase = seconds.rem_euclid(self.period_seconds);
+        self.poses = std::array::from_fn(|index| {
+            pose_at(&self.slots[index], phase).map(|mut pose| {
+                if let Some(seat) = pose.seat
+                    && self.player_occupied[usize::from(seat)]
+                {
+                    pose.eye = theater::SEATS[usize::from(seat)].approach();
+                    pose.seat = None;
+                }
+                pose
+            })
+        });
     }
 
     pub(crate) fn update(
@@ -436,31 +582,59 @@ impl NpcRuntime {
         {
             // Rejected clocks cannot rewind across an arrival/departure or reset
             // the acceptance watermark. Before any valid sample, phase zero holds.
+            self.clear_wobble();
             return;
         }
-        let cycle_phase = unix_seconds.rem_euclid(self.period_seconds);
-        self.poses = std::array::from_fn(|index| {
-            pose_at(
-                &self.slots[index],
-                cycle_phase,
-                bob_height(unix_seconds, index),
-            )
-        });
+        let previous = self.poses;
+        let advances = self
+            .last_accepted_unix_seconds
+            .is_some_and(|last| unix_seconds > last);
+        self.sample_poses(unix_seconds);
         self.last_accepted_unix_seconds = Some(unix_seconds);
+        if !advances {
+            self.clear_wobble();
+        }
+        for (index, before) in previous.iter().enumerate() {
+            let Some(pose) = self.poses[index] else {
+                self.wobble[index] = WalkWobble::default();
+                self.rocks[index] = 0.0;
+                continue;
+            };
+            let continuous_walk = advances
+                && pose.walking
+                && before.is_some_and(|before| before.walking && before.seat == pose.seat);
+            if !continuous_walk {
+                self.wobble[index] = WalkWobble::default();
+            }
+            // Exactly one visual sample per accepted update; occupancy sampling
+            // and sprite/nameplate queries never accumulate walking distance.
+            self.rocks[index] = self.wobble[index].sample(pose.eye, unix_seconds, continuous_walk);
+        }
+    }
+
+    fn clear_wobble(&mut self) {
+        self.wobble = std::array::from_fn(|_| WalkWobble::default());
+        self.rocks = [0.0; NPC_COUNT];
     }
 
     pub(crate) fn append_sprites(
         &self,
         scene: &mut SceneSnapshot,
-        avatars: &[SpriteHandle; avatars::AVATAR_COUNT],
+        avatars: &[avatars::AvatarTextures; avatars::AVATAR_COUNT],
         lobby_light: f32,
         auditorium_light: f32,
     ) {
         for (index, pose) in self.poses.iter().enumerate() {
             let Some(pose) = pose else { continue };
             // Catalog validation fixes guest_01..05 to avatar_01..05.
-            let mut sprite = crate::avatar_instance(avatars[index], pose.eye, scene.camera.eye);
-            sprite.transform.translation.y += pose.bob_height;
+            let mut sprite = avatars::sprite(
+                avatars[index],
+                pose.eye,
+                scene.camera.eye,
+                pose.forward,
+                pose.seat.is_some(),
+                self.rocks[index],
+            );
             let light = if zone(pose.eye) == Zone::Auditorium {
                 auditorium_light
             } else {
@@ -469,6 +643,17 @@ impl NpcRuntime {
             sprite.tint = [light, light, light, 1.0];
             scene.sprites.push(sprite);
         }
+    }
+
+    /// Only live portraits supply names, at their current grounded eye positions.
+    pub(crate) fn nameplates(&self) -> impl Iterator<Item = (&str, Vec3)> {
+        config()
+            .definitions
+            .iter()
+            .zip(&self.poses)
+            .filter_map(|(definition, pose)| {
+                pose.map(|pose| (definition.display_name.as_str(), pose.eye))
+            })
     }
 
     #[cfg(test)]
@@ -567,6 +752,14 @@ pub fn get_npc_definitions() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use weaver_render::SpriteHandle;
+
+    fn textures() -> [avatars::AvatarTextures; avatars::AVATAR_COUNT] {
+        std::array::from_fn(|_| avatars::AvatarTextures {
+            standing: std::array::from_fn(|_| SpriteHandle::new()),
+            seated: std::array::from_fn(|_| SpriteHandle::new()),
+        })
+    }
 
     fn runtime() -> (NpcRuntime, Vec<theater::Collider>) {
         let colliders = theater::Theater::new().colliders;
@@ -607,9 +800,349 @@ mod tests {
                     visible_seconds,
                     ..
                 } => Some((index, *offset_seconds, *visible_seconds)),
-                Slot::Resident(_) => None,
+                Slot::Resident(_) | Slot::ResidentSeat(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn analytical_headings_follow_route_tangents_and_hold_through_waits() {
+        let (runtime, _) = runtime();
+        for slot in &runtime.slots {
+            let Slot::DoorVisit {
+                offset_seconds,
+                timeline,
+                ..
+            } = slot
+            else {
+                let pose = pose_at(slot, 0.0).unwrap();
+                assert_eq!(pose.forward, Vec3::NEG_Z);
+                assert!(!pose.walking);
+                continue;
+            };
+            let mut expected = Vec3::NEG_Z;
+            for segment in timeline {
+                let tangent = (segment.to - segment.from) * Vec3::new(1.0, 0.0, 1.0);
+                if segment.seat.is_some() {
+                    expected = Vec3::NEG_Z;
+                } else if tangent.length_squared() > 0.0 {
+                    expected = tangent.normalize();
+                }
+                let time = offset_seconds + segment.start_seconds + segment.duration_seconds * 0.5;
+                let pose = pose_at(slot, time).unwrap();
+                assert!(pose.forward.abs_diff_eq(expected, 0.000_001));
+                assert_eq!(pose.forward.y, 0.0);
+                assert_eq!(
+                    pose.walking,
+                    segment.seat.is_none() && tangent.length_squared() > 0.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wobble_is_bounded_and_only_walks_even_when_chairs_are_occupied() {
+        for occupied in [false, true] {
+            let (mut runtime, colliders) = runtime();
+            runtime.set_player_occupied_seats([occupied; theater::SEAT_COUNT]);
+            let mut walked = [false; NPC_COUNT];
+            let mut waited = false;
+            let mut sat_or_yielded = false;
+            for step in 0..18_000 {
+                let time = f64::from(step) / 30.0;
+                let previous = runtime.poses;
+                sample(&mut runtime, time, &colliders);
+                for (index, pose) in runtime.poses.iter().enumerate() {
+                    let rock = runtime.rocks[index];
+                    assert!(rock.is_finite() && rock.abs() <= 0.1);
+                    let Some(pose) = pose else {
+                        assert_eq!(rock, 0.0);
+                        continue;
+                    };
+                    if pose.walking {
+                        if !previous[index].is_some_and(|before| before.walking) {
+                            assert_eq!(rock, 0.0, "spawn/departure must not bob");
+                        }
+                        walked[index] |= rock.abs() > 0.000_01;
+                    } else {
+                        assert_eq!(rock, 0.0);
+                        if index >= 3 {
+                            waited = true;
+                            let authored = pose_at(&runtime.slots[index], time).unwrap();
+                            if authored.seat.is_some() {
+                                sat_or_yielded = true;
+                                assert_eq!(pose.forward, Vec3::NEG_Z);
+                                assert_eq!(pose.seat.is_none(), occupied);
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(walked, [false, false, false, true, true]);
+            assert!(waited && sat_or_yielded);
+        }
+    }
+
+    fn walking_runtime() -> (NpcRuntime, Vec<theater::Collider>, f64, usize) {
+        let (mut runtime, colliders) = runtime();
+        let (index, start) = runtime
+            .slots
+            .iter()
+            .enumerate()
+            .find_map(|(index, slot)| {
+                let Slot::DoorVisit {
+                    offset_seconds,
+                    timeline,
+                    ..
+                } = slot
+                else {
+                    return None;
+                };
+                timeline
+                    .iter()
+                    .find(|segment| {
+                        segment.seat.is_none()
+                            && segment.from != segment.to
+                            && segment.duration_seconds > 3.0
+                    })
+                    .map(|segment| (index, offset_seconds + segment.start_seconds))
+            })
+            .unwrap();
+        for step in 0..120 {
+            let time = start + f64::from(step) / 60.0;
+            sample(&mut runtime, time, &colliders);
+            if runtime.rocks[index].abs() > 0.000_01 {
+                return (runtime, colliders, time, index);
+            }
+        }
+        panic!("authored walking must produce visual rock");
+    }
+
+    #[test]
+    fn occupancy_and_render_queries_never_advance_visual_motion() {
+        let (mut runtime, _, time, _) = walking_runtime();
+        let poses = runtime.poses;
+        let rocks = runtime.rocks;
+        let textures = textures();
+        for _ in 0..20 {
+            runtime.sample_poses(time);
+            runtime.set_player_occupied_seats(runtime.player_occupied);
+            let mut scene = SceneSnapshot::default();
+            runtime.append_sprites(&mut scene, &textures, 1.0, 1.0);
+            assert_eq!(runtime.nameplates().count(), runtime.visible_count());
+            assert_eq!(runtime.poses, poses);
+            assert_eq!(runtime.rocks, rocks);
+        }
+    }
+
+    #[test]
+    fn clock_resync_and_seat_reconciliation_suppress_visual_rock() {
+        for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+            let (mut runtime, colliders, time, _) = walking_runtime();
+            let poses = runtime.poses;
+            sample(&mut runtime, invalid, &colliders);
+            assert_eq!(runtime.poses, poses);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+            sample(&mut runtime, time + 1.0 / 60.0, &colliders);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+        }
+        for delta in [-1.0, 0.0, 600.0, 60_000.0] {
+            let (mut runtime, colliders, time, _) = walking_runtime();
+            sample(&mut runtime, time + delta, &colliders);
+            assert_eq!(runtime.rocks, [0.0; NPC_COUNT]);
+        }
+        let (mut runtime, colliders) = runtime();
+        let sit_time = match &runtime.slots[3] {
+            Slot::DoorVisit {
+                offset_seconds,
+                timeline,
+                ..
+            } => {
+                offset_seconds
+                    + timeline
+                        .iter()
+                        .find(|segment| segment.seat.is_some())
+                        .unwrap()
+                        .start_seconds
+                    + 1.0
+            }
+            _ => unreachable!(),
+        };
+        sample(&mut runtime, sit_time, &colliders);
+        // Seed stale visual state to prove reconciliation clears it immediately,
+        // without relying on another accepted clock update.
+        runtime.rocks[3] = 0.02;
+        runtime.set_player_occupied_seats([true; theater::SEAT_COUNT]);
+        assert_eq!(runtime.rocks[3], 0.0);
+        assert_eq!(runtime.poses[3].unwrap().forward, Vec3::NEG_Z);
+        assert!(!runtime.poses[3].unwrap().walking);
+        runtime.rocks[3] = 0.02;
+        runtime.set_player_occupied_seats([false; theater::SEAT_COUNT]);
+        assert_eq!(runtime.rocks[3], 0.0);
+        assert_eq!(runtime.last_accepted_unix_seconds, Some(sit_time));
+    }
+
+    #[test]
+    fn authored_sits_yield_retry_render_and_release_without_rephasing() {
+        let (runtime, colliders) = runtime();
+        let textures = textures();
+        for visitor in [3, 4] {
+            let Slot::DoorVisit {
+                offset_seconds,
+                timeline,
+                ..
+            } = &runtime.slots[visitor]
+            else {
+                panic!("visitor")
+            };
+            let sits: Vec<_> = timeline
+                .iter()
+                .filter(|segment| segment.seat.is_some())
+                .collect();
+            assert_eq!(sits.len(), 1);
+            let sit = sits[0];
+            assert_eq!(sit.seat, Some(23));
+            assert!(sit.duration_seconds >= 20.0);
+            let start = offset_seconds + sit.start_seconds;
+            let end = start + sit.duration_seconds;
+            let mut sampled = NpcRuntime::new(&colliders);
+            sample(&mut sampled, start - 0.001, &colliders);
+            assert!(!sampled.occupied_seats()[23]);
+            for step in 0..100 {
+                let time = start + sit.duration_seconds * (f64::from(step) + 0.5) / 100.0;
+                sample(&mut sampled, time, &colliders);
+                assert_eq!(sampled.poses[1].unwrap().seat, Some(18));
+                assert_eq!(sampled.poses[2].unwrap().seat, Some(5));
+                assert_eq!(sampled.poses[0].unwrap().seat, None);
+                assert_eq!(
+                    sampled.poses[visitor].unwrap().eye,
+                    theater::SEATS[23].seated_eye()
+                );
+                assert_eq!(sampled.occupied_seats().iter().filter(|v| **v).count(), 3);
+                let mut scene = SceneSnapshot::default();
+                sampled.append_sprites(&mut scene, &textures, 1.0, 1.0);
+                let sprite = scene
+                    .sprites
+                    .iter()
+                    .find(|sprite| textures[visitor].seated.contains(&sprite.sprite))
+                    .unwrap();
+                assert!(
+                    sprite.uv_rect == [0.0, 0.0, 1.0, 1.0]
+                        || sprite.uv_rect == [1.0, 0.0, -1.0, 1.0]
+                );
+                assert_eq!(
+                    sampled
+                        .nameplates()
+                        .find(|(name, _)| *name == config().definitions[visitor].display_name)
+                        .unwrap()
+                        .1,
+                    theater::SEATS[23].seated_eye()
+                );
+                let mut occupied = [false; theater::SEAT_COUNT];
+                occupied[23] = true;
+                occupied[18] = true;
+                sampled.set_player_occupied_seats(occupied);
+                assert_eq!(
+                    sampled.poses[visitor].unwrap().eye,
+                    theater::SEATS[23].approach()
+                );
+                assert_eq!(sampled.poses[1].unwrap().eye, theater::SEATS[18].approach());
+                assert!(!sampled.occupied_seats()[23]);
+                let frozen = sampled.poses;
+                for invalid in [f64::NAN, f64::INFINITY, -1.0, time - 1.0] {
+                    sample(&mut sampled, invalid, &colliders);
+                    assert_eq!(sampled.poses, frozen);
+                }
+                sampled.set_player_occupied_seats([false; theater::SEAT_COUNT]);
+                assert!(sampled.occupied_seats()[23]);
+                assert!(sampled.occupied_seats()[18]);
+                assert_eq!(sampled.last_accepted_unix_seconds, Some(time));
+            }
+            sample(&mut sampled, end + 0.000_001, &colliders);
+            assert!(!sampled.occupied_seats()[23]);
+            assert!(
+                sampled.poses[visitor]
+                    .unwrap()
+                    .eye
+                    .distance(theater::SEATS[23].approach())
+                    < 0.001
+            );
+            sample(&mut sampled, 599.0, &colliders);
+            assert!(!sampled.occupied_seats()[23]);
+            assert!(sampled.poses[visitor].is_none());
+        }
+    }
+
+    #[test]
+    fn strict_sit_schema_seat_allocation_and_approach_access() {
+        let (_, colliders) = runtime();
+        for json in [
+            r#"{"type":"sit","seconds":24}"#,
+            r#"{"type":"sit","seat":"seat_b12"}"#,
+            r#"{"type":"sit","seat":"seat_b12","seconds":24,"point":"row_b"}"#,
+            r#"{"type":"sit","seat":23,"seconds":24}"#,
+        ] {
+            assert!(serde_json::from_str::<Action>(json).is_err());
+        }
+        for (seat, seconds) in [
+            ("unknown", 24.0),
+            ("seat_b12", 0.0),
+            ("seat_b12", -1.0),
+            ("seat_b12", 61.0),
+            ("seat_b12", f64::NAN),
+        ] {
+            let mut bad = config().clone();
+            let Schedule::DoorVisit { actions, .. } = &mut bad.definitions[3].schedule else {
+                panic!("visitor")
+            };
+            actions[0] = Action::Sit {
+                seat: seat.into(),
+                seconds,
+            };
+            assert!(compile_slots(&bad, &colliders).is_err());
+        }
+        let mut bad = config().clone();
+        let Schedule::DoorVisit { actions, .. } = &mut bad.definitions[3].schedule else {
+            panic!("visitor")
+        };
+        actions[0] = Action::Sit {
+            seat: "seat_b12".into(),
+            seconds: 24.0,
+        };
+        assert_eq!(
+            compile_slots(&bad, &colliders).unwrap_err(),
+            "sit must be adjacent to its authored approach"
+        );
+        let mut bad = config().clone();
+        bad.definitions[2].schedule = Schedule::ResidentSeat {
+            seat: "seat_b7".into(),
+        };
+        assert!(compile_slots(&bad, &colliders).is_err());
+        bad.definitions[2].schedule = Schedule::ResidentSeat {
+            seat: "seat_b12".into(),
+        };
+        assert!(compile_slots(&bad, &colliders).is_err());
+        bad.definitions[2].schedule = Schedule::ResidentSeat {
+            seat: "unknown".into(),
+        };
+        assert!(compile_slots(&bad, &colliders).is_err());
+        let from = waypoint("row_b");
+        let approach = theater::SEATS[23].approach();
+        assert!(!theater::npc_path_clear(from, approach, &colliders));
+        let aisle = waypoint("row_b_approach_aisle");
+        for (from, to) in [
+            (from, aisle),
+            (aisle, approach),
+            (approach, aisle),
+            (aisle, from),
+        ] {
+            assert!(theater::npc_path_clear(from, to, &colliders));
+        }
+        assert!(!theater::npc_path_clear(
+            approach,
+            grounded_eye(theater::SEATS[23].position),
+            &colliders
+        ));
     }
 
     #[test]
@@ -752,7 +1285,7 @@ mod tests {
         let mut auditorium_extremes = (usize::MAX, 0);
         let mut saw_corridor = false;
         let mut saw_hidden = [false; 2];
-        let textures = [SpriteHandle::new(); avatars::AVATAR_COUNT];
+        let textures = textures();
         for step in 0..=30_000 {
             let time = runtime.period_seconds * f64::from(step) / 30_000.0;
             sample(&mut runtime, time, &colliders);
@@ -765,12 +1298,12 @@ mod tests {
             );
             for (index, pose) in runtime.poses[3..].iter().enumerate() {
                 saw_hidden[index] |= pose.is_none();
-                if let Some(pose) = pose {
-                    if zone(pose.eye) == Zone::Corridor {
-                        saw_corridor = true;
-                        // Neither minimum relies on the traveler being en route.
-                        assert_eq!(runtime.room_counts(), (1, 2));
-                    }
+                if let Some(pose) = pose
+                    && zone(pose.eye) == Zone::Corridor
+                {
+                    saw_corridor = true;
+                    // Neither minimum relies on the traveler being en route.
+                    assert_eq!(runtime.room_counts(), (1, 2));
                 }
             }
             if step % 100 == 0 {
@@ -880,9 +1413,13 @@ mod tests {
             for pair in timeline.windows(2) {
                 assert_eq!(pair[0].to, pair[1].from);
                 let time = offset_seconds + pair[1].start_seconds;
-                let before = pose_at(slot, time - 0.000_01, 0.0).unwrap();
-                let after = pose_at(slot, time + 0.000_01, 0.0).unwrap();
-                assert!(before.eye.distance(after.eye) < 0.000_1);
+                let before = pose_at(slot, time - 0.000_01).unwrap();
+                let after = pose_at(slot, time + 0.000_01).unwrap();
+                if pair[0].seat.is_none() && pair[1].seat.is_none() {
+                    assert!(before.eye.distance(after.eye) < 0.000_1);
+                } else {
+                    assert_eq!(pair[0].to, theater::SEATS[23].approach());
+                }
             }
         }
     }
@@ -893,11 +1430,18 @@ mod tests {
         let passage = waypoint("passage_lobby");
         let turn = waypoint("corridor_turn");
         let entry = waypoint("auditorium_entry");
+        let rear_aisle = waypoint("auditorium_back_aisle");
+        let back = waypoint("auditorium_back");
         for slot in &runtime.slots[3..] {
             let Slot::DoorVisit { timeline, .. } = slot else {
                 panic!("visitor slot");
             };
-            for (from, corner, to) in [(passage, turn, entry), (entry, turn, passage)] {
+            for (from, corner, to) in [
+                (passage, turn, entry),
+                (entry, turn, passage),
+                (entry, rear_aisle, back),
+                (back, rear_aisle, entry),
+            ] {
                 assert!(timeline.windows(2).any(|pair| {
                     pair[0].from == from
                         && pair[0].to == corner
@@ -919,6 +1463,13 @@ mod tests {
         let mut maximum_floor_height = 0.0_f32;
         for slot in &runtime.slots {
             match slot {
+                Slot::ResidentSeat(index) => {
+                    validate_docking(*index, &colliders).unwrap();
+                    assert_eq!(
+                        pose_at(slot, 0.0).unwrap().eye,
+                        theater::SEATS[usize::from(*index)].seated_eye()
+                    );
+                }
                 Slot::Resident(eye) => {
                     assert!(theater::npc_path_clear(*eye, *eye, &colliders));
                     assert_eq!(eye.y, theater::floor_height(*eye) + crate::EYE_HEIGHT);
@@ -939,7 +1490,14 @@ mod tests {
                             let time = offset_seconds
                                 + segment.start_seconds
                                 + segment.duration_seconds * blend;
-                            let pose = pose_at(slot, time, 0.0).unwrap();
+                            let pose = pose_at(slot, time).unwrap();
+                            if let Some(index) = pose.seat {
+                                assert_eq!(
+                                    pose.eye,
+                                    theater::SEATS[usize::from(index)].seated_eye()
+                                );
+                                continue;
+                            }
                             assert!(theater::npc_path_clear(pose.eye, pose.eye, &colliders));
                             let floor = theater::floor_height(pose.eye);
                             assert_eq!(pose.eye.y, floor + crate::EYE_HEIGHT);
@@ -963,11 +1521,10 @@ mod tests {
     }
 
     #[test]
-    fn all_five_portraits_share_obvious_bob_and_room_lighting_without_talk_overlays() {
+    fn all_five_portraits_stay_grounded_with_room_lighting_without_talk_overlays() {
         let (mut runtime, colliders) = runtime();
-        let textures = std::array::from_fn(|_| SpriteHandle::new());
-        let mut minimum_lifts = [f32::INFINITY; NPC_COUNT];
-        let mut maximum_lifts = [0.0_f32; NPC_COUNT];
+        let textures = textures();
+        let mut seen = [false; NPC_COUNT];
         for step in 0..7200 {
             let time = f64::from(step) / 12.0;
             sample(&mut runtime, time, &colliders);
@@ -980,16 +1537,31 @@ mod tests {
             for (index, pose) in runtime.poses.iter().enumerate() {
                 let Some(pose) = pose else { continue };
                 let sprite = sprites.next().unwrap();
-                let base = crate::avatar_instance(textures[index], pose.eye, scene.camera.eye);
-                let lift = sprite.transform.translation.y - base.transform.translation.y;
-                minimum_lifts[index] = minimum_lifts[index].min(lift);
-                maximum_lifts[index] = maximum_lifts[index].max(lift);
-                assert!((-0.000_001..=AMBIENT_BOB_HEIGHT + 0.000_001).contains(&lift));
-                assert_eq!(sprite.sprite, textures[index]);
+                let base = avatars::sprite(
+                    textures[index],
+                    pose.eye,
+                    scene.camera.eye,
+                    pose.forward,
+                    pose.seat.is_some(),
+                    runtime.rocks[index],
+                );
+                seen[index] = true;
+                assert_eq!(sprite.transform.translation, base.transform.translation);
+                let views = if pose.seat.is_some() {
+                    textures[index].seated
+                } else {
+                    textures[index].standing
+                };
+                assert!(views.contains(&sprite.sprite));
                 assert_eq!(sprite.transform.rotation, base.transform.rotation);
                 assert_eq!(sprite.transform.scale, base.transform.scale);
-                let bottom = sprite.transform.translation.y - sprite.transform.scale * 0.5;
-                assert!(bottom >= theater::floor_height(pose.eye) - 0.000_001);
+                // Texture calibration and the foot pivot belong to avatars::sprite;
+                // canonical eyes and nameplates remain on the physical surface.
+                let expected_eye = pose.seat.map_or_else(
+                    || grounded_eye(pose.eye),
+                    |index| theater::SEATS[usize::from(index)].seated_eye(),
+                );
+                assert_eq!(pose.eye, expected_eye);
                 let light = if zone(pose.eye) == Zone::Auditorium {
                     0.12
                 } else {
@@ -998,8 +1570,78 @@ mod tests {
                 assert_eq!(sprite.tint, [light, light, light, 1.0]);
             }
         }
-        assert!(minimum_lifts.iter().all(|lift| *lift < 0.01));
-        assert!(maximum_lifts.iter().all(|lift| *lift > 0.17));
+        assert!(seen.iter().all(|seen| *seen));
+    }
+
+    #[test]
+    fn nameplates_follow_live_grounded_portraits_and_exact_departure_boundaries() {
+        let (mut runtime, colliders) = runtime();
+        let textures = textures();
+        for (visitor, start, duration) in visit_windows(&runtime) {
+            for time in [
+                start,
+                start + 0.125,
+                start + duration - 0.001,
+                start + duration,
+            ] {
+                sample(&mut runtime, time, &colliders);
+                let mut scene = SceneSnapshot::default();
+                runtime.append_sprites(&mut scene, &textures, 1.0, 1.0);
+                let labels: Vec<_> = runtime.nameplates().collect();
+                assert_eq!(labels.len(), scene.sprites.len());
+                for ((name, eye), sprite) in labels.iter().zip(&scene.sprites) {
+                    let index = textures
+                        .iter()
+                        .position(|texture| {
+                            texture.standing.contains(&sprite.sprite)
+                                || texture.seated.contains(&sprite.sprite)
+                        })
+                        .unwrap();
+                    let pose = runtime.poses[index].unwrap();
+                    assert_eq!(*name, config().definitions[index].display_name);
+                    assert_eq!(*eye, pose.eye);
+                    let expected_eye = pose.seat.map_or_else(
+                        || grounded_eye(*eye),
+                        |index| theater::SEATS[usize::from(index)].seated_eye(),
+                    );
+                    assert_eq!(*eye, expected_eye);
+                    let expected_center = avatars::sprite(
+                        textures[index],
+                        *eye,
+                        scene.camera.eye,
+                        pose.forward,
+                        pose.seat.is_some(),
+                        runtime.rocks[index],
+                    )
+                    .transform
+                    .translation;
+                    assert!(
+                        sprite
+                            .transform
+                            .translation
+                            .abs_diff_eq(expected_center, 0.000_001)
+                    );
+                }
+                assert_eq!(
+                    labels
+                        .iter()
+                        .any(|(name, _)| *name == config().definitions[visitor].display_name),
+                    time < start + duration,
+                );
+                let frozen: Vec<_> = labels
+                    .iter()
+                    .map(|(name, eye)| ((*name).to_owned(), *eye))
+                    .collect();
+                sample(&mut runtime, f64::NAN, &colliders);
+                assert_eq!(
+                    runtime
+                        .nameplates()
+                        .map(|(name, eye)| (name.to_owned(), eye))
+                        .collect::<Vec<_>>(),
+                    frozen
+                );
+            }
+        }
     }
 
     #[test]
@@ -1234,7 +1876,7 @@ mod tests {
                         assert!(timeline.len() <= MAX_ACTIONS);
                         Some((timeline.as_ptr(), timeline.len(), timeline.capacity()))
                     }
-                    Slot::Resident(_) => None,
+                    Slot::Resident(_) | Slot::ResidentSeat(_) => None,
                 })
                 .collect::<Vec<_>>()
         };

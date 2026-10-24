@@ -43,6 +43,16 @@ impl TextAnchor {
     }
 }
 
+/// Font weights supported by the bundled sans-serif faces.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextWeight {
+    /// Regular (400).
+    #[default]
+    Regular,
+    /// Bold (700).
+    Bold,
+}
+
 /// A text run to be rendered.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRun {
@@ -53,6 +63,8 @@ pub struct TextRun {
     pub position: Vec2,
     /// Font size in pixels.
     pub size: f32,
+    /// Font weight; regular unless explicitly requested.
+    pub weight: TextWeight,
     /// Text color.
     pub color: [f32; 4],
     /// Anchor point.
@@ -71,6 +83,7 @@ impl Default for TextRun {
             text: String::new(),
             position: Vec2::ZERO,
             size: 16.0,
+            weight: TextWeight::Regular,
             color: [1.0, 1.0, 1.0, 1.0],
             anchor: TextAnchor::TopLeft,
             bounds: None,

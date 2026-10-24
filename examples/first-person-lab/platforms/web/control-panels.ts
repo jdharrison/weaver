@@ -1,5 +1,6 @@
 import type { TheaterVideoState } from "./theater-video-player.js";
 
+
 export interface FullscreenState { available: boolean; active: boolean; pending: boolean; error: boolean }
 declare global {
   interface Window {
@@ -12,7 +13,8 @@ export function fullscreenState(value: unknown): value is FullscreenState {
     ["available", "active", "pending", "error"].every((key) => typeof (value as Record<string, unknown>)[key] === "boolean");
 }
 export function soundPanelState(state: TheaterVideoState): number {
-  return !state.ready ? 0 : state.soundPending ? 2 : state.soundError ? 4 : state.audible ? 3 : 1;
+  return state.disposed ? 0 : state.failed ? 4 : !state.ready ? 5 :
+    state.soundPending || state.buffering ? 2 : state.soundError ? 4 : state.audible ? 3 : 1;
 }
 export function fullscreenPanelState(state: FullscreenState): number {
   return !state.available ? 0 : state.pending ? 2 : state.error ? 4 : state.active ? 3 : 1;
@@ -83,64 +85,123 @@ export class FullscreenControl {
   }
 }
 
-export interface CanvasPanelOptions {
+export interface CanvasInteractionOptions {
   window: Window;
   document: Document;
   canvas: HTMLCanvasElement;
   enabled: () => boolean;
+  /** Rust resolves wall controls before seats; zero means no actionable target. */
   pick: (x: number, y: number) => number;
-  activate: (panel: number) => void;
+  activate: (target: number) => void;
+  /** Clear Rust's pending intent and snapshot without permanently retiring the scene. */
+  invalidate: () => void;
 }
-/** Capture before Winit. Only hits own an input sequence; misses pass untouched. */
-export function installCanvasPanels(options: CanvasPanelOptions): () => void {
+
+// Matches the authored catalog in theater.rs; seat codes are one-based in poses.
+export const SEAT_COUNT = 24;
+
+export function isSeatInteraction(target: number): boolean {
+  return target === 200 || (Number.isInteger(target) && target >= 100 && target < 100 + SEAT_COUNT);
+}
+
+/** Mouse hits capture before Winit; touch taps observe without stealing move/look. */
+export function installCanvasInteractions(options: CanvasInteractionOptions): { reset(): void; dispose(): void } {
   const { window: child, document: doc, canvas } = options;
-  const pointers = new Map<number, { panel: number; x: number; y: number; moved: boolean; touch: boolean }>();
+  const pointers = new Map<number, { target: number; x: number; y: number; started: number; moved: boolean; touch: boolean }>();
+  const touches = new Set<number>();
+  let disposed = false;
   let suppressCompatibility = false;
   const consume = (event: Event): void => { event.preventDefault(); event.stopImmediatePropagation(); };
-  const pick = (x: number, y: number): number => {
-    if (!options.enabled()) return 0;
-    if (doc.pointerLockElement === canvas) return options.pick(0, 0);
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0 || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return 0;
-    return options.pick(2 * (x - rect.left) / rect.width - 1, 1 - 2 * (y - rect.top) / rect.height);
+  const pick = (event: PointerEvent): number => {
+    if (disposed || !options.enabled() || doc.hidden || canvas.inert) return 0;
+    const locked = doc.pointerLockElement === canvas;
+    let target: number;
+    if (locked) target = options.pick(0, 0);
+    else {
+      const { clientX: x, clientY: y } = event;
+      const rect = canvas.getBoundingClientRect();
+      if (![x, y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0 ||
+          x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return 0;
+      target = options.pick(2 * (x - rect.left) / rect.width - 1, 1 - 2 * (y - rect.top) / rect.height);
+    }
+    // An unlocked mouse click must still be able to resume look without standing up.
+    if (target === 200 && !locked && event.pointerType !== "touch") return 0;
+    return target === 1 || target === 2 || target === 3 || target === 4 || target === 5 || isSeatInteraction(target) ? target : 0;
   };
   const down = (event: PointerEvent): void => {
-    if (event.target !== canvas || !event.isTrusted || event.button !== 0) return;
-    if (event.pointerType === "touch" && event.isPrimary === false) {
-      for (const pointer of pointers.values()) if (pointer.touch) pointer.moved = true;
-      return;
-    }
-    suppressCompatibility = false;
-    const panel = pick(event.clientX, event.clientY);
-    if (panel !== 1 && panel !== 2) return;
-    consume(event);
-    suppressCompatibility = true;
+    if (disposed || !event.isTrusted || event.button !== 0) return;
     const touch = event.pointerType === "touch";
-    pointers.set(event.pointerId, { panel, x: event.clientX, y: event.clientY, moved: false, touch });
-    if (!touch) options.activate(panel);
+    if (touch) {
+      touches.add(event.pointerId);
+      if (event.isPrimary === false || touches.size > 1) {
+        for (const pointer of pointers.values()) if (pointer.touch) pointer.moved = true;
+        return;
+      }
+    }
+    if (event.target !== canvas) return;
+    suppressCompatibility = false;
+    const target = pick(event);
+    if (target === 0) return;
+    suppressCompatibility = true;
+    pointers.set(event.pointerId, { target, x: event.clientX, y: event.clientY, started: event.timeStamp, moved: false, touch });
+    // Winit needs the original touch down to assign the left/right thumb. Once
+    // consumed, releasing a drag after its threshold cannot restore that origin.
+    if (!touch) { consume(event); options.activate(target); }
   };
   const move = (event: PointerEvent): void => {
     const pointer = pointers.get(event.pointerId);
     if (!pointer) return;
     if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 8) pointer.moved = true;
-    consume(event);
+    if (!pointer.touch) consume(event);
   };
   const up = (event: PointerEvent): void => {
+    touches.delete(event.pointerId);
     const pointer = pointers.get(event.pointerId);
     if (!pointer) return;
     move(event);
     pointers.delete(event.pointerId);
-    if (pointer.touch && !pointer.moved && event.isTrusted && pick(event.clientX, event.clientY) === pointer.panel) options.activate(pointer.panel);
+    const duration = event.timeStamp - pointer.started;
+    if (pointer.touch && event.pointerType === "touch" && !pointer.moved && duration >= 0 && duration <= 500 &&
+        event.isTrusted && pick(event) === pointer.target) options.activate(pointer.target);
   };
-  const cancel = (event: PointerEvent): void => { if (pointers.delete(event.pointerId)) consume(event); };
+  const cancel = (event: PointerEvent): void => {
+    touches.delete(event.pointerId);
+    const pointer = pointers.get(event.pointerId);
+    pointers.delete(event.pointerId);
+    if (pointer) {
+      options.invalidate();
+      if (!pointer.touch) consume(event);
+    }
+  };
+  const reset = (): void => {
+    if (disposed) return;
+    pointers.clear();
+    touches.clear();
+    // A synchronous panel action can change focus before its compatibility click.
+    // Keep suppressing that click until the next primary down starts a new gesture.
+    options.invalidate();
+  };
+  const blur = (event: Event): void => { if (event.target === child || event.target === canvas) reset(); };
+  const focus = (event: Event): void => { if (event.target !== canvas) reset(); };
+  const visibility = (): void => { if (doc.hidden || doc.visibilityState === "hidden") reset(); };
   const compatibility = (event: Event): void => {
-    if (event.target === canvas && suppressCompatibility) consume(event);
+    if (event.target === canvas && (event as MouseEvent).button === 0 && suppressCompatibility) consume(event);
   };
-  const registrations: [string, EventListener][] = [
-    ["pointerdown", down as EventListener], ["pointermove", move as EventListener],
-    ["pointerup", up as EventListener], ["pointercancel", cancel as EventListener],
-    ...["mousedown", "mouseup", "click", "dblclick", "touchstart", "touchmove", "touchend", "touchcancel"].map((type): [string, EventListener] => [type, compatibility]),
+  const registrations: [EventTarget, string, EventListener][] = [
+    [child, "pointerdown", down as EventListener], [child, "pointermove", move as EventListener],
+    [child, "pointerup", up as EventListener], [child, "pointercancel", cancel as EventListener],
+    [child, "lostpointercapture", cancel as EventListener], [child, "touchcancel", reset],
+    [child, "blur", blur], [child, "focusin", focus], [child, "pagehide", reset],
+    [child, "resize", reset], [child, "orientationchange", reset],
+    [doc, "visibilitychange", visibility], [doc, "pointerlockchange", reset],
+    // Suppress primary mouse compatibility clicks only, never native touch sequences.
+    ...["mousedown", "mouseup", "click", "dblclick"].map((type): [EventTarget, string, EventListener] => [child, type, compatibility]),
   ];
-  for (const [type, listener] of registrations) child.addEventListener(type, listener, { capture: true, passive: false });
-  return () => { pointers.clear(); for (const [type, listener] of registrations) child.removeEventListener(type, listener, true); };
+  for (const [owner, type, listener] of registrations) owner.addEventListener(type, listener, { capture: true, passive: false });
+  return { reset, dispose: () => {
+    if (disposed) return;
+    reset();
+    disposed = true;
+    for (const [owner, type, listener] of registrations) owner.removeEventListener(type, listener, true);
+  } };
 }

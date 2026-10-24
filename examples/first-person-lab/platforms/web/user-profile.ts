@@ -22,7 +22,7 @@ function validDisplayName(value: unknown): value is string {
 /** Keep a local guest profile stable without treating it as authenticated identity. */
 export function loadUserProfile(
   storage: ProfileStorage | null,
-  generators: { generateUserName: () => string; generateUserId: () => string },
+  generators: { generateGuestName: () => string; generateUserId: () => string; isLegacyUserName: (name: string) => boolean },
 ): UserProfile {
   let stored: Record<string, unknown> = {};
   try {
@@ -41,9 +41,10 @@ export function loadUserProfile(
       typeof stored.userId === "string" && UUID_V4.test(stored.userId)
         ? stored.userId
         : generators.generateUserId(),
-    displayName: validDisplayName(stored.displayName)
+    displayName: validDisplayName(stored.displayName) &&
+      (stored.nameFormatVersion === 2 || !generators.isLegacyUserName(stored.displayName))
       ? stored.displayName
-      : generators.generateUserName(),
+      : generators.generateGuestName(),
   };
   saveUserProfile(storage, profile);
   return profile;
@@ -55,7 +56,9 @@ export function saveUserProfile(storage: ProfileStorage | null, profile: UserPro
     return false;
   }
   try {
-    storage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
+    // Mark both generated and explicitly chosen names as reviewed. Legacy-shaped
+    // custom names saved from now on must not be migrated on the next reload.
+    storage.setItem(USER_PROFILE_KEY, JSON.stringify({ ...profile, nameFormatVersion: 2 }));
     return true;
   } catch {
     return false;

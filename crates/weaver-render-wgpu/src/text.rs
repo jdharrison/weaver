@@ -6,11 +6,22 @@ use glyphon::{
     TextAtlas, TextBounds, TextRenderer, Viewport, fontdb,
 };
 
+use weaver_render::TextWeight;
+
 const DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
+const BOLD_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
+
+fn text_attrs(weight: TextWeight) -> Attrs<'static> {
+    Attrs::new().family(Family::SansSerif).weight(match weight {
+        TextWeight::Regular => glyphon::Weight::NORMAL,
+        TextWeight::Bold => glyphon::Weight::BOLD,
+    })
+}
 
 fn configure_default_font(db: &mut fontdb::Database) {
     // Browsers have no system font database; measurement and rendering need the same face.
     db.load_font_data(DEFAULT_FONT.to_vec());
+    db.load_font_data(BOLD_FONT.to_vec());
     db.set_sans_serif_family("Noto Sans");
 }
 
@@ -34,7 +45,14 @@ pub struct TextPipeline {
 struct CachedBuffer {
     text: String,
     size_bits: u32,
+    weight: TextWeight,
     buffer: Buffer,
+}
+
+impl CachedBuffer {
+    fn matches(&self, run: &weaver_render::TextRun) -> bool {
+        self.text == run.text && self.size_bits == run.size.to_bits() && self.weight == run.weight
+    }
 }
 
 impl TextPipeline {
@@ -93,12 +111,18 @@ impl TextPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         runs: &[weaver_render::TextRun],
+        layout_size: (u32, u32),
     ) -> Result<(), WgpuRenderError> {
+        let resolution = self.viewport.resolution();
+        // Rasterize at the final drawing-buffer size instead of shrinking glyph bitmaps
+        // laid out for a larger HiDPI window into the capped browser surface.
+        let runs = surface_text_runs(runs, layout_size, (resolution.width, resolution.height));
         self.buffers.truncate(runs.len());
         for (index, run) in runs.iter().enumerate() {
-            let changed = self.buffers.get(index).is_none_or(|cached| {
-                cached.text != run.text || cached.size_bits != run.size.to_bits()
-            });
+            let changed = self
+                .buffers
+                .get(index)
+                .is_none_or(|cached| !cached.matches(run));
             if !changed {
                 continue;
             }
@@ -108,7 +132,7 @@ impl TextPipeline {
                 Some(self.viewport.resolution().width as f32),
                 Some(self.viewport.resolution().height as f32),
             );
-            let attrs = Attrs::new().family(Family::SansSerif);
+            let attrs = text_attrs(run.weight);
             buffer.set_text(
                 &mut self.font_system,
                 &run.text,
@@ -118,6 +142,7 @@ impl TextPipeline {
             let cached = CachedBuffer {
                 text: run.text.clone(),
                 size_bits: run.size.to_bits(),
+                weight: run.weight,
                 buffer,
             };
             if index == self.buffers.len() {
@@ -188,6 +213,26 @@ impl TextPipeline {
     }
 }
 
+fn surface_text_runs(
+    runs: &[weaver_render::TextRun],
+    layout_size: (u32, u32),
+    surface_size: (u32, u32),
+) -> Vec<weaver_render::TextRun> {
+    let scale = glam::Vec2::new(
+        surface_size.0.max(1) as f32 / layout_size.0.max(1) as f32,
+        surface_size.1.max(1) as f32 / layout_size.1.max(1) as f32,
+    );
+    runs.iter()
+        .map(|run| {
+            let mut run = run.clone();
+            run.position *= scale;
+            run.size *= scale.min_element();
+            run.bounds = run.bounds.map(|bounds| bounds * scale);
+            run
+        })
+        .collect()
+}
+
 fn measure(buffer: &Buffer) -> (f32, f32) {
     let mut width = 0.0f32;
     let mut height = 0.0f32;
@@ -207,7 +252,7 @@ pub fn measure_text(text: &str, size: f32) -> (f32, f32) {
     let mut font_system = create_font_system();
     let mut buffer = Buffer::new(&mut font_system, Metrics::new(size, size));
     buffer.set_size(&mut font_system, Some(size * 4096.0), Some(size * 4096.0));
-    let attrs = Attrs::new().family(Family::SansSerif);
+    let attrs = text_attrs(TextWeight::Regular);
     buffer.set_text(&mut font_system, text, &attrs, glyphon::Shaping::Advanced);
     measure(&buffer)
 }
@@ -217,38 +262,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_default_font_shapes_without_system_fonts() {
-        let mut db = fontdb::Database::new();
-        assert!(db.is_empty());
-        configure_default_font(&mut db);
-        let font_id = db
-            .query(&fontdb::Query {
-                families: &[fontdb::Family::SansSerif],
-                ..fontdb::Query::default()
-            })
-            .expect("bundled sans-serif font must resolve without installed fonts");
-        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
-        let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 16.0));
-        buffer.set_size(&mut font_system, Some(800.0), Some(600.0));
-        buffer.set_text(
-            &mut font_system,
-            "Guest-0007 · café Ω",
-            &Attrs::new().family(Family::SansSerif),
-            glyphon::Shaping::Advanced,
-        );
-        let glyphs: Vec<_> = buffer
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter())
-            .collect();
-        assert!(!glyphs.is_empty());
-        assert!(
-            glyphs
-                .iter()
-                .all(|glyph| glyph.font_id == font_id && glyph.glyph_id != 0)
-        );
-        let (width, height) = measure(&buffer);
-        assert!(width.is_finite() && width > 0.0);
-        assert!(height.is_finite() && height > 0.0);
+    fn text_rasterizes_at_surface_resolution_with_layout_anchors_preserved() {
+        let run = weaver_render::TextRun {
+            text: "Click / tap to sit".into(),
+            position: glam::Vec2::new(1920.0, 1200.0),
+            size: 52.0,
+            anchor: weaver_render::TextAnchor::TopCenter,
+            bounds: Some(glam::Vec2::new(540.0, 104.0)),
+            ..Default::default()
+        };
+        let scaled = surface_text_runs(std::slice::from_ref(&run), (3840, 2160), (1920, 1080));
+        assert_eq!(scaled[0].position, glam::Vec2::new(960.0, 600.0));
+        assert_eq!(scaled[0].size, 26.0);
+        assert_eq!(scaled[0].bounds, Some(glam::Vec2::new(270.0, 52.0)));
+        assert_eq!(scaled[0].anchor, run.anchor);
+        let native = surface_text_runs(std::slice::from_ref(&run), (1920, 1080), (1920, 1080));
+        assert_eq!(native[0].size, run.size);
+        assert_eq!(native[0].position, run.position);
+    }
+
+    #[test]
+    fn bundled_fonts_shape_with_real_weights_without_system_fonts() {
+        for weight in [TextWeight::Regular, TextWeight::Bold] {
+            let attrs = text_attrs(weight);
+            let mut db = fontdb::Database::new();
+            assert!(db.is_empty());
+            configure_default_font(&mut db);
+            let font_id = db
+                .query(&fontdb::Query {
+                    families: &[fontdb::Family::SansSerif],
+                    weight: attrs.weight,
+                    ..fontdb::Query::default()
+                })
+                .expect("bundled sans-serif font must resolve without installed fonts");
+            assert_eq!(db.face(font_id).unwrap().weight, attrs.weight);
+            let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+            let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 16.0));
+            buffer.set_size(&mut font_system, Some(800.0), Some(600.0));
+            buffer.set_text(
+                &mut font_system,
+                "Guest-0007 · café Ω",
+                &attrs,
+                glyphon::Shaping::Advanced,
+            );
+            let glyphs: Vec<_> = buffer
+                .layout_runs()
+                .flat_map(|run| run.glyphs.iter())
+                .collect();
+            assert!(!glyphs.is_empty());
+            assert!(
+                glyphs
+                    .iter()
+                    .all(|glyph| glyph.font_id == font_id && glyph.glyph_id != 0)
+            );
+            let (width, height) = measure(&buffer);
+            assert!(width.is_finite() && width > 0.0);
+            assert!(height.is_finite() && height > 0.0);
+        }
+    }
+
+    #[test]
+    fn cached_layout_invalidates_when_only_weight_changes() {
+        let mut font_system = create_font_system();
+        let mut run = weaver_render::TextRun::default();
+        assert_eq!(run.weight, TextWeight::Regular);
+        let cached = CachedBuffer {
+            text: run.text.clone(),
+            size_bits: run.size.to_bits(),
+            weight: run.weight,
+            buffer: Buffer::new(&mut font_system, Metrics::new(run.size, run.size)),
+        };
+        assert!(cached.matches(&run));
+        run.weight = TextWeight::Bold;
+        assert!(!cached.matches(&run));
+        run.weight = TextWeight::Regular;
+        assert!(cached.matches(&run));
     }
 
     #[test]

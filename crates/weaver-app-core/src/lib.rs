@@ -373,6 +373,7 @@ pub trait WeaverApp {
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
     }
+
     /// Opt into gameplay buttons (default: disabled).
     /// Currently only the desktop adapter maps these, while focused, captured,
     /// in `LockedLook`, and outside text entry. Other adapters leave them neutral.
@@ -388,6 +389,11 @@ pub trait WeaverApp {
     /// Request a graceful native event-loop exit after the next application update.
     /// Platform shutdown drops the application and its resources normally.
     fn exit_requested(&self) -> bool {
+        false
+    }
+    /// Activate the primary interaction at normalized device coordinates.
+    /// Returns whether the application handled the activation.
+    fn primary_activation(&mut self, _ndc: Vec2) -> bool {
         false
     }
     /// Current text editing focus requested from the platform shell.

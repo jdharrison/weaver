@@ -29,4 +29,6 @@ pub use revision::{Revision, Versioned};
 pub use runtime::{RuntimeConfig, RuntimePhase, WeaverRuntime};
 pub use snapshot::{ExtractSnapshot, RenderSnapshot};
 pub use tick::{Tick, TickRate};
-pub use user::{UserNameError, generate_user_id, generate_user_name};
+pub use user::{
+    UserNameError, generate_guest_name, generate_user_id, generate_user_name, is_legacy_user_name,
+};

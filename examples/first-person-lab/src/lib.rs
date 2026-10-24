@@ -2,19 +2,25 @@
 
 mod avatars;
 mod control_panels;
+mod motion;
 mod npcs;
+mod seating;
+
 mod theater;
 mod view;
 
 #[cfg(target_arch = "wasm32")]
-pub use control_panels::{invalidate_control_panels, pick_control_panel, set_control_panel_state};
+pub use control_panels::{
+    activate_seat_interaction, invalidate_control_panels, invalidate_scene_interactions,
+    pick_control_panel, pick_scene_interaction, set_control_panel_state,
+};
 #[cfg(target_arch = "wasm32")]
 pub use npcs::{
     clear_npc_dialogue, get_npc_definitions, get_npc_interaction_context, present_npc_response,
     set_npc_interaction_active, set_npc_show_cycle, submit_npc_question,
 };
 
-use glam::{Quat, UVec2, Vec2, Vec3};
+use glam::{UVec2, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -24,15 +30,27 @@ use weaver_app_core::{
     RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp,
 };
 use weaver_render::{
-    Camera, Projection, RenderTransform, SceneSnapshot, SpriteHandle, SpriteInstance, SpriteSpace,
-    TextAnchor, TextRun, UiElement, UiRect,
+    Camera, Projection, SceneSnapshot, TextAnchor, TextRun, TextWeight, UiElement, UiRect,
 };
 
 const EYE_HEIGHT: f32 = 1.7;
 const PLAYER_BILLBOARD_HEIGHT: f32 = EYE_HEIGHT * 1.3;
+const NAMEPLATE_FONT_SIZE: f32 = 18.0;
+
+fn overlay_pixel_scale() -> f32 {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(window) = web_sys::window() {
+        let scale = window.device_pixel_ratio() as f32;
+        if scale.is_finite() && scale > 0.0 {
+            return scale;
+        }
+    }
+    1.0
+}
 const CHAT_HOLD_SECONDS: f64 = 4.0;
 const CHAT_FADE_SECONDS: f64 = 2.0;
-const CHAT_FONT_SIZE: f32 = 25.5;
+const CHAT_FONT_SIZE: f32 = 36.0;
+const CHAT_RANGE_METERS: f32 = 10.0;
 const MESSAGE_VERSION: u8 = 1;
 const POSE_VERSION: u8 = 1;
 const POSE_PAYLOAD_BYTES: usize = 25;
@@ -246,10 +264,17 @@ enum FirstPersonMessage {
 
 #[derive(Clone, Debug)]
 struct RemotePlayer {
+    seat: Option<u8>,
     displayed_position: Vec3,
     target_position: Vec3,
     forward: Vec3,
     display_name: String,
+    pose_sample: Option<(Vec3, f64)>,
+    pose_pending: bool,
+    pose_advancing: bool,
+    moving_until: f64,
+    wobble: motion::WalkWobble,
+    rock: f32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -275,14 +300,24 @@ impl AvatarChat {
 }
 
 /// Enclosed room, local camera, and server-backed remote-player state.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent input, admission, publish, and presentation gates are not mutually exclusive."
+)]
 pub struct FirstPersonLab {
     scene: SceneSnapshot,
     assets: AppAssets,
     controller: FirstPersonController,
     view: view::ViewRig,
+    seating: seating::Seating,
+    seat_wait_for_neutral: bool,
+    interaction_hint: u32,
     colliders: Vec<theater::Collider>,
-    avatar_textures: [SpriteHandle; avatars::AVATAR_COUNT],
+    avatar_textures: [avatars::AvatarTextures; avatars::AVATAR_COUNT],
+    local_wobble: motion::WalkWobble,
+    local_rock: f32,
     npcs: npcs::NpcRuntime,
+    decor: theater::decor::Decor,
     base_mesh_count: usize,
     control_panels: control_panels::ControlPanels,
     lobby_light_level: f32,
@@ -315,7 +350,7 @@ pub struct FirstPersonLab {
 }
 
 impl FirstPersonLab {
-    /// Create the enclosed room and local first-person camera.
+    /// Create the enclosed room with a modest third-person camera offset.
     #[must_use]
     pub fn new() -> Self {
         Self::with_display_name("")
@@ -324,22 +359,36 @@ impl FirstPersonLab {
     /// Create the room with a validated temporary display name.
     #[must_use]
     pub fn with_display_name(display_name: &str) -> Self {
-        let display_name = validate_display_name(display_name).unwrap_or_else(|| {
-            weaver_core::generate_user_name(2, "", "")
-                .expect("default user-name generation options are valid")
-        });
+        Self::with_world_control_panels(display_name, true)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn with_browser_presentation(minimal_ui: bool) -> Self {
+        let mut app = Self::with_world_control_panels("", !minimal_ui);
+        app.set_minimal_ui(minimal_ui);
+        app
+    }
+
+    /// Select world-control presentation before allocating scene assets.
+    /// Disabling panels leaves the shared seating interaction bridge active.
+    #[must_use]
+    pub fn with_world_control_panels(display_name: &str, enabled: bool) -> Self {
+        let display_name =
+            validate_display_name(display_name).unwrap_or_else(weaver_core::generate_guest_name);
         let theater::Theater {
             mut assets,
             instances: mut meshes,
             colliders,
         } = theater::Theater::new();
         let textures = avatars::texture_assets();
-        let avatar_textures = std::array::from_fn(|index| textures[index].handle);
+        let avatar_textures = avatars::handles(&textures);
         assets.textures.extend(textures);
         let npcs = npcs::NpcRuntime::new(&colliders);
-        let control_panels = control_panels::ControlPanels::new(&mut assets, &mut meshes);
+        let control_panels = control_panels::ControlPanels::new(&mut assets, &mut meshes, enabled);
+        let decor = theater::decor::Decor::new(&mut assets);
+        decor.append_meshes(&mut meshes);
         let base_mesh_count = meshes.len();
-        let scene = SceneSnapshot {
+        let mut scene = SceneSnapshot {
             background_color: [0.01, 0.01, 0.015, 1.0],
             camera: Camera {
                 eye: theater::SPAWN,
@@ -355,20 +404,33 @@ impl FirstPersonLab {
             status_lines: vec!["offline · 0 remote".to_owned()],
             ..SceneSnapshot::default()
         };
+        decor.append(
+            &mut scene.sprites,
+            theater::LOBBY_LIGHT_LEVEL,
+            theater::AUDITORIUM_LIGHT_LEVEL,
+        );
         let mut controller = FirstPersonController::from_camera(&scene.camera);
         controller.move_speed = 4.0;
         controller.sprint_multiplier = 2.0;
         controller.look_sensitivity = 0.0025;
         controller.bounds = Some(theater::Theater::camera_bounds());
+        let mut view = view::ViewRig::new(scene.camera.clone());
+        scene.camera = view.camera(0.0, &colliders);
 
         Self {
-            view: view::ViewRig::new(scene.camera.clone()),
+            seating: seating::Seating::Standing,
+            seat_wait_for_neutral: false,
+            interaction_hint: 0,
+            view,
             scene,
             assets,
             controller,
             colliders,
             avatar_textures,
+            local_wobble: motion::WalkWobble::default(),
+            local_rock: 0.0,
             npcs,
+            decor,
             base_mesh_count,
             control_panels,
             lobby_light_level: theater::LOBBY_LIGHT_LEVEL,
@@ -434,7 +496,7 @@ impl FirstPersonLab {
         changed
     }
 
-    /// Suppress engine chrome and text entry, retaining transient avatar chat.
+    /// Suppress engine chrome and text entry, retaining avatar names and transient chat.
     pub fn set_minimal_ui(&mut self, minimal_ui: bool) {
         if self.minimal_ui == minimal_ui {
             return;
@@ -508,7 +570,12 @@ impl FirstPersonLab {
         } else {
             &self.scene.camera
         };
-        let Some(payload) = encode_pose(camera.eye, camera.target - camera.eye) else {
+        let payload = match self.seating.index() {
+            Some(index) => encode_seated_pose(camera.eye, camera.target - camera.eye, Some(index))
+                .map(|bytes| bytes.to_vec()),
+            None => encode_pose(camera.eye, camera.target - camera.eye).map(|bytes| bytes.to_vec()),
+        };
+        let Some(payload) = payload else {
             "online · local pose is invalid".clone_into(&mut self.network_status);
             return;
         };
@@ -528,7 +595,7 @@ impl FirstPersonLab {
             .push_back(RealtimeCommand::PublishPositionedUnreliable {
                 sequence,
                 position: camera.eye.as_dvec3().to_array(),
-                payload: payload.to_vec(),
+                payload,
             });
     }
 
@@ -618,21 +685,43 @@ impl FirstPersonLab {
             return false;
         };
         if let Some(player) = self.remote_players.get_mut(&entity_id) {
+            if player.seat != pose.seat || pose.seat.is_some() {
+                player.displayed_position = pose.position;
+                player.pose_sample = None;
+                player.moving_until = self.elapsed_seconds;
+                player.wobble = motion::WalkWobble::default();
+                player.rock = 0.0;
+            }
+            player.pose_advancing = player.seat.is_none()
+                && pose.seat.is_none()
+                && ((pose.position - player.target_position) * Vec3::new(1.0, 0.0, 1.0))
+                    .length_squared()
+                    > 0.0;
+            player.seat = pose.seat;
             player.target_position = pose.position;
             player.forward = pose.forward;
+            player.pose_pending = true;
         } else if self.remote_players.len() < MAX_REMOTE_PLAYERS {
             self.remote_players.insert(
                 entity_id,
                 RemotePlayer {
+                    seat: pose.seat,
                     displayed_position: pose.position,
                     target_position: pose.position,
                     forward: pose.forward,
                     display_name: display_name.clone(),
+                    pose_sample: None,
+                    pose_pending: true,
+                    pose_advancing: false,
+                    moving_until: self.elapsed_seconds,
+                    wobble: motion::WalkWobble::default(),
+                    rock: 0.0,
                 },
             );
         } else {
             return false;
         }
+        self.resolve_seat_conflict();
         true
     }
 
@@ -837,19 +926,54 @@ impl FirstPersonLab {
     fn update_remote_players(&mut self, delta_seconds: f32) {
         let blend = 1.0 - (-12.0 * delta_seconds.max(0.0)).exp();
         for player in self.remote_players.values_mut() {
+            if player.pose_pending {
+                // Shells drain packets before advancing the frame clock. Coalesce
+                // each batch here so its later packets cannot look like zero-time
+                // stops. Net travel checks plausibility, while the terminal
+                // packet can still signal an actual stationary/look-only pose.
+                let walking = player.seat.is_none()
+                    && player.pose_advancing
+                    && player.pose_sample.is_some_and(|(position, at)| {
+                        let age = self.elapsed_seconds - at;
+                        let travel = ((player.target_position - position)
+                            * Vec3::new(1.0, 0.0, 1.0))
+                        .length();
+                        age > 0.0 && age <= 0.25 && travel > 0.008 && travel <= 12.0 * age as f32
+                    });
+                player.pose_pending = false;
+                player.pose_sample = Some((player.target_position, self.elapsed_seconds));
+                player.moving_until = self.elapsed_seconds + if walking { 0.2 } else { 0.0 };
+                if !walking {
+                    player.wobble = motion::WalkWobble::default();
+                    player.rock = 0.0;
+                }
+            }
             player.displayed_position = player
                 .displayed_position
                 .lerp(player.target_position, blend);
+            player.rock = player.wobble.sample(
+                player.displayed_position,
+                self.elapsed_seconds,
+                player.seat.is_none() && self.elapsed_seconds < player.moving_until,
+            );
         }
         self.scene.meshes.truncate(self.base_mesh_count);
         self.scene.sprites.clear();
+        self.decor.append(
+            &mut self.scene.sprites,
+            self.lobby_light_level,
+            self.auditorium_light_level,
+        );
         self.scene
             .sprites
             .extend(self.remote_players.iter().map(|(entity_id, player)| {
-                let mut avatar = avatar_instance(
+                let mut avatar = avatars::sprite(
                     self.avatar_textures[avatars::avatar_index(*entity_id)],
                     player.displayed_position,
                     self.scene.camera.eye,
+                    player.forward,
+                    player.seat.is_some(),
+                    player.rock,
                 );
                 let level = if theater::in_auditorium(player.displayed_position) {
                     self.auditorium_light_level
@@ -862,10 +986,13 @@ impl FirstPersonLab {
         if self.view.third_person() {
             // Entity zero is a deterministic offline preview, not a network identity.
             let entity_id = self.local_entity_id.unwrap_or(0);
-            let mut avatar = avatar_instance(
+            let mut avatar = avatars::sprite(
                 self.avatar_textures[avatars::avatar_index(entity_id)],
                 self.view.player.eye,
                 self.scene.camera.eye,
+                self.view.player.target - self.view.player.eye,
+                false,
+                self.local_rock,
             );
             let level = if theater::in_auditorium(self.view.player.eye) {
                 self.auditorium_light_level
@@ -890,30 +1017,40 @@ impl FirstPersonLab {
                 continue;
             }
             let (position, anchor) = if is_local && !self.view.third_person() {
-                (Vec2::new(width * 0.5, 52.0), TextAnchor::TopCenter)
+                (
+                    Vec2::new(width * 0.5, 52.0 * overlay_pixel_scale()),
+                    TextAnchor::TopCenter,
+                )
             } else {
                 let eye = if is_local {
                     self.view.player.eye
                 } else if let Some(player) = self.remote_players.get(entity_id) {
+                    // Presentation-only proximity uses the physical player, never the zoomed camera.
+                    if !remote_chat_in_range(self.view.player.eye, player.displayed_position) {
+                        continue;
+                    }
                     player.displayed_position
                 } else {
                     continue;
                 };
-                let head = eye + Vec3::Y * (PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT + 0.15);
-                if !theater::has_line_of_sight(self.scene.camera.eye, head, &self.colliders) {
-                    continue;
-                }
-                let Some(position) =
-                    project_to_screen(&self.scene.camera, width / height, self.viewport_size, head)
-                else {
+                let Some(position) = avatar_label_position(
+                    &self.scene.camera,
+                    self.viewport_size,
+                    &self.colliders,
+                    eye,
+                ) else {
                     continue;
                 };
-                (position, TextAnchor::BottomCenter)
+                // A screen-space gap keeps speech above the name at every distance.
+                (
+                    position - Vec2::Y * (NAMEPLATE_FONT_SIZE + 6.0) * overlay_pixel_scale(),
+                    TextAnchor::BottomCenter,
+                )
             };
             let text = wrap_avatar_chat(&message.text);
             self.scene.text.push(screen_text(
                 text.clone(),
-                position + Vec2::new(1.0, 1.0),
+                position + Vec2::splat(2.0 * overlay_pixel_scale()),
                 CHAT_FONT_SIZE,
                 [0.0, 0.0, 0.0, opacity],
                 anchor,
@@ -928,10 +1065,63 @@ impl FirstPersonLab {
         }
     }
 
+    fn rebuild_nameplates(&mut self) {
+        let mut append = |display_name: &str, eye: Vec3| {
+            if let Some(position) =
+                avatar_label_position(&self.scene.camera, self.viewport_size, &self.colliders, eye)
+            {
+                let mut nameplate = screen_text(
+                    display_name.to_owned(),
+                    position,
+                    NAMEPLATE_FONT_SIZE,
+                    [1.0; 4],
+                    TextAnchor::BottomCenter,
+                );
+                nameplate.weight = TextWeight::Bold;
+                self.scene.text.push(nameplate);
+            }
+        };
+        for player in self.remote_players.values() {
+            append(&player.display_name, player.displayed_position);
+        }
+        if self.view.third_person() {
+            append(&self.display_name, self.view.player.eye);
+        }
+        for (display_name, eye) in self.npcs.nameplates() {
+            append(display_name, eye);
+        }
+    }
+
     fn rebuild_overlay(&mut self) {
         self.scene.text.clear();
         self.scene.ui.clear();
         self.rebuild_avatar_chat();
+        self.rebuild_nameplates();
+        let hint = match self.interaction_hint {
+            target if (100..100 + theater::SEAT_COUNT as u32).contains(&target) => {
+                Some("Click / tap to sit")
+            }
+
+            _ => None,
+        };
+        if let Some(hint) = hint.filter(|_| self.viewport_size.x > 1 && self.viewport_size.y > 1) {
+            // Scene coordinates are physical pixels; keep the prompt readable in CSS pixels.
+            let scale = overlay_pixel_scale();
+            let position = Vec2::new(
+                self.viewport_size.x as f32 * 0.5,
+                self.viewport_size.y as f32 * 0.5 + 32.0 * scale,
+            );
+
+            let mut prompt = screen_text(
+                hint.to_owned(),
+                position,
+                22.1,
+                [1.0; 4],
+                TextAnchor::TopCenter,
+            );
+            prompt.weight = TextWeight::Bold;
+            self.scene.text.push(prompt);
+        }
         if self.minimal_ui {
             return;
         }
@@ -941,42 +1131,25 @@ impl FirstPersonLab {
             return;
         }
 
+        let scale = overlay_pixel_scale();
         self.scene.text.push(screen_text(
             format!("{} · Enter: chat · /name: rename", self.network_status),
-            Vec2::new(16.0, 16.0),
-            14.0,
+            Vec2::splat(16.0 * scale),
+            22.0,
             [0.78, 0.86, 1.0, 1.0],
             TextAnchor::TopLeft,
         ));
-        let aspect = width / height;
-        for (entity_id, player) in &self.remote_players {
-            let head =
-                player.displayed_position + Vec3::Y * (PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT + 0.05);
-            if !theater::has_line_of_sight(self.scene.camera.eye, head, &self.colliders) {
-                continue;
-            }
-            if let Some(position) =
-                project_to_screen(&self.scene.camera, aspect, self.viewport_size, head)
-            {
-                self.scene.text.push(screen_text(
-                    player.display_name.clone(),
-                    position,
-                    15.0,
-                    player_color(*entity_id),
-                    TextAnchor::BottomCenter,
-                ));
-            }
-        }
 
         if !self.chat_open && self.chat_feedback.is_none() {
             return;
         }
         let line_count = usize::from(self.chat_open) + usize::from(self.chat_feedback.is_some());
-        let panel_width = 540.0_f32.min((width - 32.0).max(240.0));
-        let panel_height = 24.0 + line_count.max(1) as f32 * 21.0;
-        let panel_top = (height - panel_height - 16.0).max(52.0);
+        let panel_width = (720.0 * scale).min((width - 32.0 * scale).max(1.0));
+        let line_height = 34.0 * scale;
+        let panel_height = 24.0 * scale + line_count.max(1) as f32 * line_height;
+        let panel_top = (height - panel_height - 16.0 * scale).max(52.0 * scale);
         self.scene.ui.push(UiElement::Rect(UiRect {
-            position: Vec2::new(16.0, panel_top),
+            position: Vec2::new(16.0 * scale, panel_top),
             size: Vec2::new(panel_width, panel_height),
             background: [0.02, 0.03, 0.05, 0.82],
             border_color: [0.34, 0.48, 0.72, 0.8],
@@ -991,8 +1164,11 @@ impl FirstPersonLab {
         if let Some(feedback) = &self.chat_feedback {
             self.scene.text.push(screen_text(
                 feedback.clone(),
-                Vec2::new(28.0, panel_top + 12.0 + line as f32 * 21.0),
-                14.0,
+                Vec2::new(
+                    28.0 * scale,
+                    panel_top + 12.0 * scale + line as f32 * line_height,
+                ),
+                22.0,
                 [1.0, 0.55, 0.48, 1.0],
                 TextAnchor::TopLeft,
             ));
@@ -1001,11 +1177,18 @@ impl FirstPersonLab {
         if self.chat_open {
             self.scene.text.push(TextRun {
                 text: format!("> {}_", self.chat_draft),
-                position: Vec2::new(28.0, panel_top + 12.0 + line as f32 * 21.0),
-                size: 15.0,
+                position: Vec2::new(
+                    28.0 * scale,
+                    panel_top + 12.0 * scale + line as f32 * line_height,
+                ),
+                size: 24.0 * scale,
+                weight: TextWeight::Regular,
                 color: [0.92, 0.96, 1.0, 1.0],
                 anchor: TextAnchor::TopLeft,
-                bounds: Some(Vec2::new(panel_width - 24.0, 20.0)),
+                bounds: Some(Vec2::new(
+                    (panel_width - 24.0 * scale).max(1.0),
+                    line_height,
+                )),
                 world_space: false,
                 world_height: 1.0,
             });
@@ -1062,6 +1245,35 @@ impl WeaverApp for FirstPersonLab {
             PointerMode::None
         } else {
             PointerMode::LockedLook
+        }
+    }
+
+    fn primary_activation(&mut self, ndc: Vec2) -> bool {
+        let host = self.host_chat.borrow();
+        if self.pointer_mode() != PointerMode::LockedLook
+            || self.chat_open
+            || host.focused
+            || host.reset_native_input
+            || host.wait_for_neutral_input
+            || self.seat_wait_for_neutral
+        {
+            return false;
+        }
+        drop(host);
+        #[cfg(not(target_arch = "wasm32"))]
+        let now = self.elapsed_seconds * 1000.0;
+        #[cfg(target_arch = "wasm32")]
+        let now = web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or(f64::NAN, |performance| performance.now());
+        match control_panels::pick_current_interaction(ndc, now) {
+            target
+                if target == 200 || (100..100 + theater::SEAT_COUNT as u32).contains(&target) =>
+            {
+                control_panels::queue_seat_request(target, now)
+            }
+            1..=3 => true,
+            _ => false,
         }
     }
 
@@ -1169,6 +1381,9 @@ impl WeaverApp for FirstPersonLab {
         if let Some(aspect) = PENDING_VIDEO_ASPECT.with(std::cell::Cell::take) {
             self.apply_video_aspect(aspect);
         }
+        let interaction_context_fresh = frame.elapsed_seconds.is_finite()
+            && frame.elapsed_seconds >= self.elapsed_seconds
+            && frame.elapsed_seconds - self.elapsed_seconds <= 0.25;
         self.elapsed_seconds = self.elapsed_seconds.max(frame.elapsed_seconds);
         for message in self.avatar_chat.values_mut() {
             // Events arrive before update; start fresh messages on this frame's
@@ -1220,23 +1435,55 @@ impl WeaverApp for FirstPersonLab {
         if !self.view.third_person() {
             self.view.player = self.scene.camera.clone();
         }
-        if !was_chat_open
+        let input_allowed = !was_chat_open
             && !self.chat_open
             && !host_focused
             && !wait_for_neutral
-            && !reset_native_input
-        {
-            let previous_eye = self.view.player.eye;
-            self.controller
-                .update(&mut self.view.player, input, frame.delta_seconds);
-            let resolved =
-                theater::resolve_movement(previous_eye, self.view.player.eye, &self.colliders);
-            // Translate both points, preserving the controller's new look direction.
-            let correction = resolved - self.view.player.eye;
-            self.view.player.eye = resolved;
-            self.view.player.target += correction;
-            self.view.apply_input(input);
+            && !reset_native_input;
+        if input.movement == Vec2::ZERO && !input.sprint {
+            self.seat_wait_for_neutral = false;
         }
+        let npc_utc = npcs::unix_seconds(frame.elapsed_seconds);
+        self.npcs
+            .set_player_occupied_seats(self.player_occupied_seats());
+        self.npcs
+            .update(npc_utc, self.view.player.eye, 0.0, &self.colliders);
+        // Always drain intent: focus changes must discard, never defer, an old click.
+        let request = control_panels::take_seat_request();
+        let transitioned = input_allowed
+            && interaction_context_fresh
+            && request.is_some_and(|target| self.apply_seat_request(target));
+        if input_allowed && !transitioned {
+            let previous_eye = self.view.player.eye;
+            let mut filtered = input.clone();
+            if self.seating.index().is_some() || self.seat_wait_for_neutral {
+                filtered.movement = Vec2::ZERO;
+                filtered.sprint = false;
+            }
+            if self.seating.index().is_some() {
+                filtered.toggle_perspective = false;
+                filtered.zoom_delta = 0.0;
+            }
+            self.controller
+                .update(&mut self.view.player, &filtered, frame.delta_seconds);
+            if self.seating.index().is_none() {
+                let resolved =
+                    theater::resolve_movement(previous_eye, self.view.player.eye, &self.colliders);
+                let correction = resolved - self.view.player.eye;
+                self.view.player.eye = resolved;
+                self.view.player.target += correction;
+            }
+            self.view.apply_input(&filtered);
+        }
+        self.local_rock = self.local_wobble.sample(
+            self.view.player.eye,
+            frame.elapsed_seconds,
+            input_allowed
+                && !transitioned
+                && interaction_context_fresh
+                && self.seating.index().is_none()
+                && input.movement != Vec2::ZERO,
+        );
         self.scene.camera = self.view.camera(frame.delta_seconds, &self.colliders);
         self.control_panels.refresh_meshes(&mut self.scene.meshes);
         #[cfg(target_arch = "wasm32")]
@@ -1245,7 +1492,13 @@ impl WeaverApp for FirstPersonLab {
             .map_or(f64::NAN, |performance| performance.now());
         #[cfg(not(target_arch = "wasm32"))]
         let panel_now = frame.elapsed_seconds * 1000.0;
-        #[cfg(any(target_arch = "wasm32", test))]
+        self.npcs
+            .set_player_occupied_seats(self.player_occupied_seats());
+        control_panels::set_seating_context(
+            self.view.player.eye,
+            self.seating.index(),
+            self.occupied_seats(),
+        );
         self.control_panels.publish(
             &self.scene.camera,
             frame.viewport_size,
@@ -1253,18 +1506,17 @@ impl WeaverApp for FirstPersonLab {
             panel_now,
             !self.chat_open && !host_focused && !wait_for_neutral && !reset_native_input,
         );
+        self.interaction_hint = if input_allowed {
+            control_panels::pick_current_interaction(Vec2::ZERO, panel_now)
+        } else {
+            0
+        };
         #[cfg(target_arch = "wasm32")]
         self.process_host_chat(browser_chat_send_capacity());
         #[cfg(not(target_arch = "wasm32"))]
         self.process_host_chat(MAX_PENDING_PUBLISHES);
         self.viewport_size = frame.viewport_size;
         self.update_remote_players(frame.delta_seconds);
-        self.npcs.update(
-            npcs::unix_seconds(frame.elapsed_seconds),
-            self.view.player.eye,
-            panel_now,
-            &self.colliders,
-        );
         self.npcs.append_sprites(
             &mut self.scene,
             &self.avatar_textures,
@@ -1295,18 +1547,17 @@ pub fn start() -> Result<(), wasm_bindgen::JsValue> {
         web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&message));
         let _ = scene_fatal(&message);
     }));
-    let mut app = FirstPersonLab::new();
-    app.set_minimal_ui(
-        PENDING_MINIMAL_UI
-            .with(std::cell::Cell::take)
-            .unwrap_or(false),
-    );
+    let minimal_ui = PENDING_MINIMAL_UI
+        .with(std::cell::Cell::take)
+        .unwrap_or(false);
+    let app = FirstPersonLab::with_browser_presentation(minimal_ui);
     weaver_platform_web::run(Box::new(app), weaver_platform_web::WebConfig::default())
         .map_err(|error| wasm_bindgen::JsValue::from_str(&error.to_string()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PlayerPose {
+    seat: Option<u8>,
     position: Vec3,
     forward: Vec3,
 }
@@ -1347,6 +1598,7 @@ fn validate_pose(position: Vec3, forward: Vec3) -> Option<PlayerPose> {
         return None;
     }
     Some(PlayerPose {
+        seat: None,
         position,
         forward: forward / length_squared.sqrt(),
     })
@@ -1369,17 +1621,61 @@ fn encode_pose(position: Vec3, forward: Vec3) -> Option<[u8; POSE_PAYLOAD_BYTES]
     Some(payload)
 }
 
-fn decode_pose(payload: &[u8]) -> Option<PlayerPose> {
-    if payload.len() != POSE_PAYLOAD_BYTES || payload[0] != POSE_VERSION {
+fn validate_seated_pose(position: Vec3, forward: Vec3, seat: Option<u8>) -> Option<PlayerPose> {
+    let Some(index) = seat else {
+        return validate_pose(position, forward);
+    };
+    let anchor = theater::SEATS.get(usize::from(index))?.seated_eye();
+    let norm = forward.length_squared();
+    if !position.is_finite()
+        || position.distance(anchor) > 0.01
+        || !forward.is_finite()
+        || !norm.is_finite()
+        || norm < 0.001
+    {
         return None;
     }
+    Some(PlayerPose {
+        seat,
+        position: anchor,
+        forward: forward / norm.sqrt(),
+    })
+}
+
+fn encode_seated_pose(position: Vec3, forward: Vec3, seat: Option<u8>) -> Option<[u8; 26]> {
+    let pose = validate_seated_pose(position, forward, seat)?;
+    let mut payload = [0; 26];
+    payload[0] = 2;
+    payload[1] = seat.map_or(0, |index| index + 1);
+    for (index, value) in pose
+        .position
+        .to_array()
+        .into_iter()
+        .chain(pose.forward.to_array())
+        .enumerate()
+    {
+        let offset = 2 + index * 4;
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    Some(payload)
+}
+
+fn decode_pose(payload: &[u8]) -> Option<PlayerPose> {
+    let (offset, seat) = match (payload.first(), payload.len()) {
+        (Some(&POSE_VERSION), POSE_PAYLOAD_BYTES) => (1, None),
+        (Some(&2), 26) if usize::from(payload[1]) <= theater::SEAT_COUNT => {
+            (2, payload[1].checked_sub(1))
+        }
+        _ => return None,
+    };
     let mut values = [0.0; 6];
-    for (value, bytes) in values.iter_mut().zip(payload[1..].as_chunks::<4>().0) {
+    for (value, bytes) in values.iter_mut().zip(payload[offset..].as_chunks::<4>().0) {
         *value = f32::from_le_bytes(*bytes);
     }
-    validate_pose(
+    validate_seated_pose(
         Vec3::new(values[0], values[1], values[2]),
         Vec3::new(values[3], values[4], values[5]),
+        seat,
     )
 }
 
@@ -1462,13 +1758,40 @@ fn screen_text(
     TextRun {
         text,
         position,
-        size,
+        size: size * overlay_pixel_scale(),
+        weight: TextWeight::Regular,
         color,
         anchor,
         bounds: None,
         world_space: false,
         world_height: 1.0,
     }
+}
+
+fn remote_chat_in_range(local_eye: Vec3, remote_eye: Vec3) -> bool {
+    let distance_squared = local_eye.distance_squared(remote_eye);
+    distance_squared.is_finite() && distance_squared <= CHAT_RANGE_METERS * CHAT_RANGE_METERS
+}
+
+fn avatar_label_position(
+    camera: &Camera,
+    viewport_size: UVec2,
+    colliders: &[theater::Collider],
+    eye: Vec3,
+) -> Option<Vec2> {
+    if viewport_size.x <= 1 || viewport_size.y <= 1 {
+        return None;
+    }
+    let head = eye + Vec3::Y * (PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT + 0.05);
+    if !theater::has_line_of_sight(camera.eye, head, colliders) {
+        return None;
+    }
+    project_to_screen(
+        camera,
+        viewport_size.x as f32 / viewport_size.y as f32,
+        viewport_size,
+        head,
+    )
 }
 
 fn project_to_screen(
@@ -1494,39 +1817,721 @@ fn project_to_screen(
     ))
 }
 
-fn avatar_instance(
-    sprite: SpriteHandle,
-    eye_position: Vec3,
-    viewer_position: Vec3,
-) -> SpriteInstance {
-    let to_viewer = viewer_position - eye_position;
-    let yaw = to_viewer.x.atan2(to_viewer.z);
-    SpriteInstance {
-        sprite,
-        transform: RenderTransform {
-            translation: eye_position - Vec3::Y * (EYE_HEIGHT - PLAYER_BILLBOARD_HEIGHT * 0.5),
-            rotation: Quat::from_rotation_y(yaw),
-            scale: PLAYER_BILLBOARD_HEIGHT,
-        },
-        space: SpriteSpace::World,
-        ..SpriteInstance::default()
-    }
-}
-
-fn player_color(entity_id: u64) -> [f32; 4] {
-    let hue = (entity_id.wrapping_mul(2_654_435_761) % 360) as f32;
-    let radians = hue.to_radians();
-    [
-        0.55 + 0.35 * radians.sin(),
-        0.55 + 0.35 * (radians + 2.1).sin(),
-        0.55 + 0.35 * (radians + 4.2).sin(),
-        1.0,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use weaver_render::{SpriteInstance, SpriteSpace};
+
+    fn visible_sprite_y_bounds(app: &FirstPersonLab, sprite: &SpriteInstance) -> (f32, f32) {
+        let texture = app
+            .assets
+            .textures
+            .iter()
+            .find(|texture| texture.handle == sprite.sprite)
+            .unwrap();
+        let mut rows = texture.rgba.chunks_exact(texture.width as usize * 4);
+        let first = rows
+            .position(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[3] >= 16))
+            .unwrap();
+        let last = texture
+            .rgba
+            .chunks_exact(texture.width as usize * 4)
+            .rposition(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[3] >= 16))
+            .unwrap()
+            + 1;
+        let y = |row: usize| {
+            sprite.transform.translation.y
+                + (0.5 - row as f32 / texture.height as f32) * sprite.transform.scale
+        };
+        (y(last), y(first))
+    }
+
+    fn decoration_sprites(app: &FirstPersonLab) -> Vec<&SpriteInstance> {
+        app.scene
+            .sprites
+            .iter()
+            .filter(|sprite| app.decor.owns_texture(sprite.sprite))
+            .collect()
+    }
+
+    fn character_sprites(app: &FirstPersonLab) -> Vec<&SpriteInstance> {
+        // Filter by the exact avatar resource pool, not position/order or sprite
+        // space (decorations deliberately share the globally sorted World path).
+        let characters: Vec<_> = app
+            .scene
+            .sprites
+            .iter()
+            .filter(|sprite| {
+                app.avatar_textures.iter().any(|textures| {
+                    textures.standing.contains(&sprite.sprite)
+                        || textures.seated.contains(&sprite.sprite)
+                })
+            })
+            .collect();
+        assert_eq!(
+            app.scene.sprites.len(),
+            characters.len() + decoration_sprites(app).len(),
+            "every submitted sprite must belong to a known resource pool"
+        );
+        characters
+    }
+
+    #[test]
+    fn fixed_decor_survives_frames_camera_changes_and_remote_lifecycles() {
+        let mut app = FirstPersonLab::new();
+        let original: Vec<_> = decoration_sprites(&app).into_iter().cloned().collect();
+        assert_eq!(original.len(), 59);
+        let meshes = app.scene.meshes.clone();
+        let rug = meshes.last().unwrap();
+        assert_eq!(rug.render_mode, weaver_render::MeshRenderMode::Surface);
+        let rug_asset = app
+            .assets
+            .meshes
+            .iter()
+            .find(|asset| asset.handle == rug.mesh)
+            .unwrap()
+            .clone();
+        assert_eq!(rug_asset.vertices.len(), 4);
+        assert!(
+            !app.scene
+                .sprites
+                .iter()
+                .any(|sprite| Some(sprite.sprite) == rug.texture)
+        );
+        let mesh_handles: Vec<_> = app.assets.meshes.iter().map(|asset| asset.handle).collect();
+        let texture_handles: Vec<_> = app
+            .assets
+            .textures
+            .iter()
+            .map(|asset| asset.handle)
+            .collect();
+        let collider_count = app.colliders.len();
+        for step in 0..6 {
+            match step {
+                0 => {
+                    app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 7 });
+                    enter_peer(&mut app, 42);
+                    app.receive_unreliable_pose(42, 1, &pose_payload());
+                }
+                1 => app.receive_unreliable_pose(
+                    42,
+                    2,
+                    &pose_payload_at(grounded_eye(Vec3::new(3.0, 0.0, -3.0))),
+                ),
+                2 => app.handle_realtime_event(RealtimeEvent::EntityLeft { entity_id: 42 }),
+                3 => app.handle_realtime_event(RealtimeEvent::Disconnected {
+                    reason: "decor test".to_owned(),
+                }),
+                4 => {
+                    app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 8 });
+                    enter_peer(&mut app, 43);
+                    app.receive_unreliable_pose(43, 1, &pose_payload());
+                }
+                5 => app.handle_realtime_event(RealtimeEvent::EntityLeft { entity_id: 43 }),
+                _ => unreachable!(),
+            }
+            app.update(
+                frame(f64::from(step) * 0.1),
+                &InputFrame {
+                    look_delta: Vec2::new(13.0, -2.0),
+                    toggle_perspective: true,
+                    ..InputFrame::default()
+                },
+            );
+            assert_eq!(
+                decoration_sprites(&app),
+                original.iter().collect::<Vec<_>>()
+            );
+            let expected_remote = usize::from(matches!(step, 0 | 1 | 4));
+            assert_eq!(app.remote_players.len(), expected_remote);
+            assert_eq!(
+                character_sprites(&app).len(),
+                expected_remote + app.npcs.visible_count() + usize::from(app.view.third_person())
+            );
+            assert_eq!(app.scene.meshes, meshes);
+            assert_eq!(
+                app.scene
+                    .meshes
+                    .iter()
+                    .filter(|mesh| mesh.mesh == rug.mesh)
+                    .count(),
+                1
+            );
+            let current_rug = app
+                .assets
+                .meshes
+                .iter()
+                .find(|asset| asset.handle == rug.mesh)
+                .unwrap();
+            assert_eq!(current_rug.indices, rug_asset.indices);
+            for (before, after) in rug_asset.vertices.iter().zip(&current_rug.vertices) {
+                assert_eq!(
+                    (before.position, before.normal, before.color, before.uv),
+                    (after.position, after.normal, after.color, after.uv)
+                );
+            }
+            assert_eq!(current_rug.vertices.len(), rug_asset.vertices.len());
+            assert_eq!(app.colliders.len(), collider_count);
+            assert_eq!(
+                app.assets
+                    .meshes
+                    .iter()
+                    .map(|asset| asset.handle)
+                    .collect::<Vec<_>>(),
+                mesh_handles
+            );
+            assert_eq!(
+                app.assets
+                    .textures
+                    .iter()
+                    .map(|asset| asset.handle)
+                    .collect::<Vec<_>>(),
+                texture_handles
+            );
+        }
+        for (step, (lobby, auditorium)) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.4, 0.7)]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(app.set_room_lighting(lobby, auditorium));
+            app.update(frame(1.0 + step as f64 * 0.1), &InputFrame::default());
+            assert_eq!(app.scene.meshes.len(), meshes.len());
+            let current_rug = app.scene.meshes.last().unwrap();
+            assert_eq!(current_rug.mesh, rug.mesh);
+            assert_eq!(
+                current_rug.render_mode,
+                weaver_render::MeshRenderMode::Surface
+            );
+            assert_eq!(current_rug.lighting, app.scene.meshes[0].lighting);
+            let mut expected = Vec::new();
+            app.decor.append(&mut expected, lobby, auditorium);
+            assert_eq!(
+                decoration_sprites(&app),
+                expected.iter().collect::<Vec<_>>()
+            );
+            for (sprite, original) in decoration_sprites(&app).iter().zip(&original) {
+                assert_eq!(sprite.transform, original.transform);
+                assert_eq!(sprite.space, SpriteSpace::World);
+            }
+        }
+    }
+
+    #[test]
+    fn seating_keeps_sit_hint_but_stands_without_an_exit_overlay() {
+        let mut app = FirstPersonLab::new();
+        app.set_minimal_ui(true);
+        app.viewport_size = UVec2::new(960, 540);
+        app.interaction_hint = 100;
+        app.rebuild_overlay();
+        assert!(
+            app.scene
+                .text
+                .iter()
+                .any(|run| run.text == "Click / tap to sit")
+        );
+        let prompt = app
+            .scene
+            .text
+            .iter()
+            .find(|run| run.text == "Click / tap to sit")
+            .unwrap();
+        assert_eq!(prompt.size, 22.1 * overlay_pixel_scale());
+        assert_eq!(prompt.weight, TextWeight::Bold);
+        assert_eq!(prompt.color, [1.0; 4]);
+        assert!(app.scene.ui.is_empty(), "sit hint must remain text-only");
+        assert_eq!(prompt.anchor, TextAnchor::TopCenter);
+        assert_eq!(prompt.position.x, app.viewport_size.x as f32 * 0.5);
+
+        app.view.player.eye = theater::SEATS[0].approach();
+        assert!(app.apply_seat_request(100));
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.update(frame(0.01), &InputFrame::default());
+        assert_eq!(app.interaction_hint, 200);
+        assert!(
+            !app.scene
+                .text
+                .iter()
+                .any(|run| run.text.starts_with("Click / tap"))
+        );
+        assert!(app.primary_activation(Vec2::ZERO));
+        app.update(frame(0.02), &InputFrame::default());
+        assert_eq!(app.seating.index(), None);
+    }
+
+    #[test]
+    fn seated_codec_is_strict_and_legacy_standing_still_round_trips() {
+        for (index, seat) in theater::SEATS.iter().enumerate() {
+            let eye = seat.seated_eye();
+            let bytes = encode_seated_pose(eye, Vec3::NEG_Z, Some(index as u8)).unwrap();
+            assert_eq!(&bytes[..2], &[2, index as u8 + 1]);
+            let pose = decode_pose(&bytes).unwrap();
+            assert_eq!(pose.seat, Some(index as u8));
+            assert_eq!(pose.position, eye);
+            assert!(encode_pose(eye, Vec3::NEG_Z).is_none());
+            assert!(
+                encode_seated_pose(eye + Vec3::X * 0.02, Vec3::NEG_Z, Some(index as u8)).is_none()
+            );
+            for direction in [Vec3::ZERO, Vec3::splat(f32::NAN), Vec3::splat(f32::MAX)] {
+                assert!(encode_seated_pose(eye, direction, Some(index as u8)).is_none());
+            }
+            let mut malformed = bytes;
+            malformed[1] = (theater::SEAT_COUNT + 1) as u8;
+            assert!(decode_pose(&malformed).is_none());
+            malformed[1] = 0;
+            assert!(decode_pose(&malformed).is_none());
+            assert!(decode_pose(&bytes[..25]).is_none());
+            malformed = bytes;
+            malformed[2..6].copy_from_slice(&f32::NAN.to_le_bytes());
+            assert!(decode_pose(&malformed).is_none());
+        }
+        let standing = encode_seated_pose(theater::SPAWN, Vec3::NEG_Z, None).unwrap();
+        assert_eq!(
+            decode_pose(&standing),
+            decode_pose(&encode_pose(theater::SPAWN, Vec3::NEG_Z).unwrap())
+        );
+    }
+
+    #[test]
+    fn seat_intents_use_current_npc_sample_on_arrival_and_departure() {
+        let geometry = theater::Theater::new();
+        let mut runtime = npcs::NpcRuntime::new(&geometry.colliders);
+        let mut arrival = None;
+        let mut departure = None;
+        for step in 1..6000 {
+            let time = f64::from(step) * 0.05;
+            runtime.update(time, theater::SPAWN, 0.0, &geometry.colliders);
+            if runtime.occupied_seats()[23] {
+                arrival.get_or_insert(time);
+            } else if arrival.is_some() {
+                departure = Some(time);
+                break;
+            }
+        }
+        for (time, should_enter) in [(arrival.unwrap(), false), (departure.unwrap(), true)] {
+            let mut app = FirstPersonLab::new();
+            let seat = theater::SEATS[23];
+            app.view.force_first_person();
+            app.view.player.eye = seat.approach();
+            app.view.player.target = seat.position + Vec3::Y * 0.5;
+            app.scene.camera = app.view.camera(0.0, &app.colliders);
+            app.controller = FirstPersonController::from_camera(&app.view.player);
+            app.update(frame(time - 0.05), &InputFrame::default());
+            if !should_enter {
+                assert!(control_panels::queue_seat_request(
+                    123,
+                    (time - 0.05) * 1000.0
+                ));
+            }
+            app.update(frame(time), &InputFrame::default());
+            if should_enter {
+                // Departure must refresh the published picker in this frame too.
+                assert!(app.primary_activation(Vec2::ZERO));
+                app.update(frame(time + 0.01), &InputFrame::default());
+            }
+            assert_eq!(app.seating.index(), should_enter.then_some(23));
+            assert_eq!(app.npcs.occupied_seats()[23], !should_enter);
+        }
+    }
+
+    #[test]
+    fn npc_seat_claims_refuse_entry_yield_to_players_and_retry_after_exit() {
+        let mut app = FirstPersonLab::new();
+        app.update(frame(0.0), &InputFrame::default());
+        for index in [5, 18] {
+            app.view.player.eye = theater::SEATS[index].approach();
+            assert!(app.occupied_seats()[index]);
+            assert!(!app.player_occupied_seats()[index]);
+            assert!(!app.apply_seat_request(100 + index as u32));
+        }
+        // Actual remote occupancy, not NPC claims, drives the yield input.
+        enter_peer(&mut app, 42);
+        let bytes =
+            encode_seated_pose(theater::SEATS[18].seated_eye(), Vec3::NEG_Z, Some(18)).unwrap();
+        app.receive_unreliable_pose(42, 1, &bytes);
+        app.update(frame(0.01), &InputFrame::default());
+        assert!(!app.npcs.occupied_seats()[18]);
+        assert!(app.occupied_seats()[18]);
+        app.handle_realtime_event(RealtimeEvent::EntityLeft { entity_id: 42 });
+        app.update(frame(0.02), &InputFrame::default());
+        assert!(app.npcs.occupied_seats()[18]);
+
+        let mut app = FirstPersonLab::new();
+        app.view.player.eye = theater::SEATS[18].approach();
+        assert!(app.apply_seat_request(118));
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.update(frame(0.0), &InputFrame::default());
+        assert_eq!(app.seating.index(), Some(18));
+        assert!(!app.npcs.occupied_seats()[18]);
+        assert!(app.exit_seat());
+        app.update(frame(0.01), &InputFrame::default());
+        assert!(app.npcs.occupied_seats()[18]);
+        assert!(!app.apply_seat_request(118));
+    }
+
+    #[test]
+    fn seating_forces_first_person_restores_view_and_prevents_held_exit_lurch() {
+        let mut app = FirstPersonLab::new();
+        app.view.player.eye = theater::SEATS[0].approach();
+        app.view.player.target = app.view.player.eye + Vec3::X;
+        app.view.apply_input(&InputFrame {
+            zoom_delta: -4.0,
+            ..InputFrame::default()
+        });
+        let saved = app.view.preferences();
+        app.controller.move_speed = 3.3;
+        app.controller.look_sensitivity = 0.004;
+        assert!(app.apply_seat_request(100));
+        let expected = (theater::SCREEN_TARGET - app.view.player.eye).normalize();
+        app.controller
+            .update(&mut app.view.player, &InputFrame::default(), 0.0);
+        assert!((app.view.player.target - app.view.player.eye).abs_diff_eq(expected, 0.00001));
+        assert_eq!(app.controller.move_speed, 3.3);
+        assert_eq!(app.controller.look_sensitivity, 0.004);
+        assert!(app.controller.bounds.is_some());
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        assert_eq!(app.scene.camera.eye, theater::SEATS[0].seated_eye());
+        app.update(
+            frame(1.0),
+            &InputFrame {
+                movement: Vec2::Y,
+                sprint: true,
+                toggle_perspective: true,
+                zoom_delta: -3.0,
+                look_delta: Vec2::new(20.0, 0.0),
+                ..InputFrame::default()
+            },
+        );
+        assert_eq!(app.view.player.eye, theater::SEATS[0].seated_eye());
+        assert!(!app.view.third_person());
+        assert!(!(app.view.player.target - app.view.player.eye).abs_diff_eq(expected, 0.001));
+        let seated_direction = (app.view.player.target - app.view.player.eye).normalize();
+        assert!(app.exit_seat());
+        assert_eq!(app.view.player.eye, theater::SEATS[0].approach());
+        assert_eq!(app.view.preferences(), saved);
+        assert!(
+            (app.view.player.target - app.view.player.eye).abs_diff_eq(seated_direction, 0.00001)
+        );
+        let exit = app.view.player.eye;
+        app.update(
+            frame(2.0),
+            &InputFrame {
+                movement: Vec2::Y,
+                sprint: true,
+                ..InputFrame::default()
+            },
+        );
+        assert_eq!(app.view.player.eye, exit);
+        app.update(frame(3.0), &InputFrame::default());
+        assert!(!app.seat_wait_for_neutral);
+    }
+
+    #[test]
+    fn native_activation_all_seats_preserves_height_view_and_pose_roundtrip() {
+        for (index, seat) in theater::SEATS.iter().enumerate() {
+            for first_person in [true, false] {
+                let mut app = FirstPersonLab::new();
+                app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 20 });
+                app.view.player.eye = seat.approach();
+                app.view.player.target = seat.position + Vec3::Y * 0.5;
+                if first_person {
+                    app.view.force_first_person();
+                }
+                app.controller = FirstPersonController::from_camera(&app.view.player);
+                // Resident chairs use a player-first entry before the first NPC
+                // occupancy sample. Production refusal remains enabled throughout.
+                let preferences = app.view.preferences();
+                let player_first = matches!(index, 5 | 18);
+                if player_first {
+                    assert!(app.apply_seat_request(100 + index as u32));
+                }
+                app.scene.camera = app.view.camera(0.0, &app.colliders);
+                app.update(frame(0.99), &InputFrame::default());
+                app.update(frame(1.0), &InputFrame::default());
+                if !player_first {
+                    assert!(
+                        app.primary_activation(Vec2::ZERO),
+                        "seat {index}, first person {first_person}"
+                    );
+                    assert_eq!(app.seating.index(), None);
+                }
+                app.update(frame(1.01), &InputFrame::default());
+                assert_eq!(app.seating.index(), Some(index as u8));
+                for time in [1.02, 1.13, 1.24] {
+                    app.update(
+                        frame(time),
+                        &InputFrame {
+                            movement: Vec2::Y,
+                            sprint: true,
+                            toggle_perspective: true,
+                            zoom_delta: -1.0,
+                            look_delta: Vec2::new(4.0, 2.0),
+                            ..InputFrame::default()
+                        },
+                    );
+                    assert_eq!(app.scene.camera.eye, seat.seated_eye());
+                    assert_eq!(app.view.player.eye, seat.seated_eye());
+                }
+                let (position, payload) = app
+                    .pending_publishes
+                    .iter()
+                    .find_map(|command| {
+                        if let RealtimeCommand::PublishPositionedUnreliable {
+                            position,
+                            payload,
+                            ..
+                        } = command
+                        {
+                            Some((*position, payload.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(position, seat.seated_eye().as_dvec3().to_array());
+                assert_eq!(decode_pose(&payload).unwrap().seat, Some(index as u8));
+                let direction = (app.view.player.target - app.view.player.eye).normalize();
+                assert!(app.primary_activation(Vec2::ZERO));
+                app.update(
+                    FrameContext {
+                        delta_seconds: 0.0,
+                        ..frame(1.25)
+                    },
+                    &InputFrame::default(),
+                );
+                assert_eq!(app.seating.index(), None);
+                assert_eq!(app.view.player.eye, seat.approach());
+                assert_eq!(app.view.preferences(), preferences);
+                assert!(
+                    (app.view.player.target - app.view.player.eye).abs_diff_eq(direction, 0.00001)
+                );
+                app.update(frame(1.26), &InputFrame::default());
+                assert!(
+                    (app.view.player.target - app.view.player.eye).abs_diff_eq(direction, 0.00001)
+                );
+
+                let mut receiver = FirstPersonLab::new();
+                enter_peer(&mut receiver, 20);
+                receiver.receive_unreliable_pose(20, 1, &payload);
+                assert_eq!(receiver.remote_players[&20].seat, Some(index as u8));
+                assert_eq!(
+                    receiver.remote_players[&20].displayed_position,
+                    seat.seated_eye()
+                );
+                receiver.update_remote_players(0.1);
+                let avatar = character_sprites(&receiver)[0];
+                let textures = receiver.avatar_textures[avatars::avatar_index(20)];
+                assert!(textures.seated.contains(&avatar.sprite));
+                assert_eq!(avatar.uv_rect[3], 1.0);
+                let (bottom, top) = visible_sprite_y_bounds(&receiver, avatar);
+                let slot = receiver
+                    .avatar_textures
+                    .iter()
+                    .flat_map(|views| views.standing.into_iter().chain(views.seated))
+                    .position(|handle| handle == avatar.sprite)
+                    .unwrap();
+                let calibration: serde_json::Value =
+                    serde_json::from_str(include_str!("../assets/avatars/metadata/views.json"))
+                        .unwrap();
+                let calibration = &calibration[slot];
+                let height = calibration["dimensions"][1].as_f64().unwrap() as f32;
+                let world_y = |pixel: f32| {
+                    avatar.transform.translation.y + (0.5 - pixel / height) * avatar.transform.scale
+                };
+                let boot_y = world_y(calibration["floor_anchor_px"][1].as_f64().unwrap() as f32);
+                let cushion_y = world_y(calibration["seat_anchor_px"][1].as_f64().unwrap() as f32);
+                assert!((boot_y - seat.position.y).abs() <= 0.069);
+                assert!((cushion_y - (seat.position.y + 0.48)).abs() < 0.00001);
+                assert!((1.2..=1.85).contains(&(top - bottom)));
+                assert!(top < seat.seated_eye().y + PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT);
+                assert_eq!(receiver.remote_players[&20].rock, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn browser_startup_allocates_world_controls_only_for_non_minimal_ui() {
+        let native = FirstPersonLab::new();
+        for minimal_ui in [false, true] {
+            let app = FirstPersonLab::with_browser_presentation(minimal_ui);
+            let omitted_panels = if minimal_ui { 3 } else { 0 };
+            assert_eq!(app.minimal_ui, minimal_ui);
+            assert_eq!(
+                app.assets.meshes.len() + omitted_panels,
+                native.assets.meshes.len()
+            );
+            assert_eq!(
+                app.assets.textures.len() + omitted_panels * 7,
+                native.assets.textures.len()
+            );
+            assert_eq!(app.base_mesh_count + omitted_panels, native.base_mesh_count);
+            assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
+        }
+    }
+
+    #[test]
+    fn no_world_panels_preserve_base_meshes_lighting_and_seat_activation() {
+        let native = FirstPersonLab::new();
+        let mut app = FirstPersonLab::with_world_control_panels("HUD guest", false);
+        assert_eq!(native.assets.meshes.len(), app.assets.meshes.len() + 3);
+        assert_eq!(native.assets.textures.len(), app.assets.textures.len() + 21);
+        assert_eq!(native.base_mesh_count, app.base_mesh_count + 3);
+        assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
+        assert_eq!(native.colliders.len(), app.colliders.len());
+        let base_handles: Vec<_> = app.scene.meshes.iter().map(|mesh| mesh.mesh).collect();
+        let asset_counts = (app.assets.meshes.len(), app.assets.textures.len());
+        app.set_room_lighting(0.25, 0.75);
+        assert_eq!(app.lobby_light_level, 0.25);
+        assert_eq!(app.auditorium_light_level, 0.75);
+        let seat = theater::SEATS[0];
+        app.view.player.eye = seat.approach();
+        app.view.player.target = seat.position + Vec3::Y * 0.5;
+        app.view.force_first_person();
+        app.controller = FirstPersonController::from_camera(&app.view.player);
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.update(frame(0.1), &InputFrame::default());
+        assert_eq!(
+            control_panels::pick_current_interaction(Vec2::ZERO, 100.0),
+            100
+        );
+        assert!(app.primary_activation(Vec2::ZERO));
+        app.update(frame(0.11), &InputFrame::default());
+        assert_eq!(app.seating.index(), Some(0));
+        assert_eq!(app.view.player.eye, seat.seated_eye());
+        assert!(app.primary_activation(Vec2::ZERO));
+        app.update(frame(0.12), &InputFrame::default());
+        assert_eq!(app.seating.index(), None);
+        assert_eq!(app.view.player.eye, seat.approach());
+        assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
+        assert_eq!(
+            base_handles,
+            app.scene
+                .meshes
+                .iter()
+                .map(|mesh| mesh.mesh)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            asset_counts,
+            (app.assets.meshes.len(), app.assets.textures.len())
+        );
+    }
+
+    #[test]
+    fn native_panel_activation_is_consumed_without_queueing_a_seat_action() {
+        let mut app = first_person_app();
+        app.scene.camera.eye = Vec3::new(-1.5, EYE_HEIGHT, 3.0);
+        app.scene.camera.target = app.scene.camera.eye + Vec3::NEG_Z;
+        app.controller = FirstPersonController::from_camera(&app.scene.camera);
+        app.update(frame(1.0), &InputFrame::default());
+        assert_eq!(
+            control_panels::pick_current_interaction(Vec2::ZERO, 1000.0),
+            1
+        );
+        assert!(app.primary_activation(Vec2::ZERO));
+        assert!(control_panels::take_seat_request().is_none());
+        assert_eq!(app.seating.index(), None);
+    }
+
+    #[test]
+    fn seat_entry_revalidates_physical_line_of_sight() {
+        let mut app = FirstPersonLab::new();
+        let seat = theater::SEATS[0];
+        // A stale/external camera placed inside the chair is in range but occluded.
+        app.view.player.eye = seat.position + Vec3::Y * 0.5;
+        assert!(app.view.player.eye.distance(seat.seated_eye()) < 2.5);
+        assert!(!theater::has_line_of_sight(
+            app.view.player.eye,
+            seat.seated_eye(),
+            &app.colliders
+        ));
+        assert!(!app.apply_seat_request(100));
+        app.view.player.eye = seat.approach();
+        assert!(app.apply_seat_request(100));
+    }
+
+    #[test]
+    fn native_activation_rejects_focus_reset_and_held_input_gates() {
+        let mut app = FirstPersonLab::new();
+        app.view.player.eye = theater::SEATS[0].approach();
+        app.view.player.target = theater::SEATS[0].position + Vec3::Y * 0.5;
+        app.view.force_first_person();
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.controller = FirstPersonController::from_camera(&app.view.player);
+        app.update(frame(1.0), &InputFrame::default());
+        app.chat_open = true;
+        assert!(!app.primary_activation(Vec2::ZERO));
+        app.chat_open = false;
+        app.host_chat.borrow_mut().focused = true;
+        assert!(!app.primary_activation(Vec2::ZERO));
+        app.host_chat.borrow_mut().focused = false;
+        app.host_chat.borrow_mut().reset_native_input = true;
+        assert!(!app.primary_activation(Vec2::ZERO));
+        app.host_chat.borrow_mut().reset_native_input = false;
+        app.host_chat.borrow_mut().wait_for_neutral_input = true;
+        assert!(!app.primary_activation(Vec2::ZERO));
+        app.host_chat.borrow_mut().wait_for_neutral_input = false;
+        app.seat_wait_for_neutral = true;
+        assert!(!app.primary_activation(Vec2::ZERO));
+        app.seat_wait_for_neutral = false;
+        assert!(control_panels::take_seat_request().is_none());
+        assert!(!app.primary_activation(Vec2::splat(f32::NAN)));
+        assert!(app.primary_activation(Vec2::ZERO));
+    }
+
+    #[test]
+    fn seat_intents_are_discarded_during_chat_and_revalidated_at_consumption() {
+        let mut app = FirstPersonLab::new();
+        app.view.player.eye = theater::SEATS[0].approach();
+        app.view.player.target = theater::SEATS[0].position + Vec3::Y * 0.5;
+        app.view.force_first_person();
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.controller = FirstPersonController::from_camera(&app.view.player);
+        app.update(frame(1.0), &InputFrame::default());
+        assert!(control_panels::queue_seat_request(100, 1000.0));
+        app.chat_open = true;
+        app.update(frame(1.01), &InputFrame::default());
+        assert_eq!(app.seating.index(), None);
+        app.chat_open = false;
+        app.update(frame(1.02), &InputFrame::default());
+        assert_eq!(app.seating.index(), None);
+        assert!(control_panels::queue_seat_request(100, 1020.0));
+        app.scene.camera.eye = theater::SPAWN;
+        app.scene.camera.target = theater::SPAWN + Vec3::NEG_Z;
+        app.update(frame(1.03), &InputFrame::default());
+        assert_eq!(app.seating.index(), None);
+        assert!(!control_panels::queue_seat_request(100, 1030.0));
+    }
+
+    #[test]
+    fn occupancy_conflicts_choose_lowest_entity_and_disconnect_clears_occupancy() {
+        let mut app = FirstPersonLab::new();
+        app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 20 });
+        app.view.player.eye = theater::SEATS[0].approach();
+        assert!(app.apply_seat_request(100));
+        enter_peer(&mut app, 30);
+        let bytes =
+            encode_seated_pose(theater::SEATS[0].seated_eye(), Vec3::NEG_Z, Some(0)).unwrap();
+        app.receive_unreliable_pose(30, 1, &bytes);
+        assert_eq!(app.seating.index(), Some(0));
+        enter_peer(&mut app, 10);
+        app.receive_unreliable_pose(10, 1, &bytes);
+        assert_eq!(app.seating.index(), None);
+        assert_eq!(app.view.player.eye, theater::SEATS[0].approach());
+        assert!(!app.apply_seat_request(100));
+        app.handle_realtime_event(RealtimeEvent::EntityLeft { entity_id: 10 });
+        assert!(app.occupied_seats()[0]);
+        app.handle_realtime_event(RealtimeEvent::Disconnected {
+            reason: "test".to_owned(),
+        });
+        assert_eq!(app.occupied_seats(), [false; theater::SEAT_COUNT]);
+        assert!(app.apply_seat_request(100));
+        app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 40 });
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.queue_local_pose(5.0);
+        assert!(app.pending_publishes.iter().any(|command| matches!(command,
+            RealtimeCommand::PublishPositionedUnreliable { payload, .. }
+            if decode_pose(payload).unwrap().seat == Some(0))));
+    }
 
     fn grounded_eye(mut position: Vec3) -> Vec3 {
         position.y = EYE_HEIGHT + theater::floor_height(position);
@@ -1541,8 +2546,45 @@ mod tests {
         Vec2::new(to.x - from.x, to.z - from.z).length()
     }
 
+    fn first_person_app() -> FirstPersonLab {
+        let mut app = FirstPersonLab::new();
+        app.view.apply_input(&InputFrame {
+            toggle_perspective: true,
+            ..InputFrame::default()
+        });
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app
+    }
+
+    fn chat_runs(app: &FirstPersonLab) -> Vec<&TextRun> {
+        app.scene
+            .text
+            .iter()
+            .filter(|run| run.size == CHAT_FONT_SIZE)
+            .collect()
+    }
+
+    fn assert_identity_only_overlay(app: &FirstPersonLab) {
+        let mut names: Vec<_> = app
+            .remote_players
+            .values()
+            .map(|player| player.display_name.as_str())
+            .collect();
+        names.extend(app.npcs.nameplates().map(|(name, _)| name));
+        if app.view.third_person() {
+            names.push(&app.display_name);
+        }
+        assert!(app.scene.text.iter().all(|run| {
+            run.size == NAMEPLATE_FONT_SIZE
+                && run.anchor == TextAnchor::BottomCenter
+                && names.contains(&run.text.as_str())
+        }));
+        assert!(app.scene.ui.is_empty());
+        assert!(app.scene.status_lines.is_empty());
+    }
+
     #[test]
-    fn ambient_npcs_are_local_noninteractive_room_population_without_network_or_overlay() {
+    fn ambient_npcs_are_local_noninteractive_room_population_with_only_identity_labels() {
         let definitions: serde_json::Value =
             serde_json::from_str(&npcs::get_npc_definitions()).unwrap();
         let definitions = definitions.as_array().unwrap();
@@ -1566,7 +2608,7 @@ mod tests {
                     ..frame(0.0)
                 },
                 &InputFrame {
-                    toggle_perspective: third_person,
+                    toggle_perspective: !third_person,
                     ..InputFrame::default()
                 },
             );
@@ -1578,12 +2620,19 @@ mod tests {
                 assert!((1..=2).contains(&lobby));
                 assert!((2..=3).contains(&auditorium));
                 assert_eq!(
-                    app.scene.sprites.len(),
+                    character_sprites(&app).len(),
                     app.npcs.visible_count() + usize::from(third_person)
                 );
                 assert!(npcs::get_npc_interaction_context().is_none());
-                assert!(app.scene.text.is_empty());
-                assert!(app.scene.ui.is_empty());
+                assert_identity_only_overlay(&app);
+                assert!(app.scene.text.iter().any(|run| run.text == "Curious Otter"));
+                assert_eq!(
+                    app.scene
+                        .text
+                        .iter()
+                        .any(|run| run.text == app.display_name),
+                    third_person
+                );
                 assert!(app.local_entity_id.is_none());
                 assert!(app.remote_players.is_empty());
                 assert!(app.remote_profiles.is_empty());
@@ -1642,20 +2691,14 @@ mod tests {
         let mut app = FirstPersonLab::new();
         app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
         app.pending_publishes.clear();
-        app.update(
-            frame(0.0),
-            &InputFrame {
-                toggle_perspective: true,
-                ..InputFrame::default()
-            },
-        );
+        app.update(frame(0.0), &InputFrame::default());
         assert!(app.view.third_person());
         assert_eq!(app.view.player.eye, theater::SPAWN);
         assert!(app.scene.camera.eye.distance(app.view.player.eye) > 0.0);
-        assert_eq!(app.scene.sprites.len(), 1 + app.npcs.visible_count());
+        assert_eq!(character_sprites(&app).len(), 1 + app.npcs.visible_count());
         assert_eq!(
-            app.scene.sprites[0].sprite,
-            app.avatar_textures[avatars::avatar_index(42)]
+            character_sprites(&app)[0].sprite,
+            app.avatar_textures[avatars::avatar_index(42)].standing[1]
         );
         for command in &app.pending_publishes {
             if let RealtimeCommand::PublishPositionedUnreliable {
@@ -1687,34 +2730,22 @@ mod tests {
         );
         assert!(!app.view.third_person());
         assert_eq!(app.scene.camera.eye, first_pose.eye);
-        assert_eq!(app.scene.sprites.len(), app.npcs.visible_count());
+        assert_eq!(character_sprites(&app).len(), app.npcs.visible_count());
         let mut offline = FirstPersonLab::new();
-        offline.update(
-            frame(0.0),
-            &InputFrame {
-                toggle_perspective: true,
-                ..InputFrame::default()
-            },
-        );
+        offline.update(frame(0.0), &InputFrame::default());
         assert_eq!(
-            offline.scene.sprites[0].sprite,
-            offline.avatar_textures[avatars::avatar_index(0)]
+            character_sprites(&offline)[0].sprite,
+            offline.avatar_textures[avatars::avatar_index(0)].standing[1]
         );
     }
 
     #[test]
     fn third_person_sprint_and_look_keep_the_same_collided_player_pose_as_first_person() {
-        let mut first = FirstPersonLab::new();
+        let mut first = first_person_app();
         let mut third = FirstPersonLab::new();
         first.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
         third.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
-        third.update(
-            frame(0.0),
-            &InputFrame {
-                toggle_perspective: true,
-                ..InputFrame::default()
-            },
-        );
+        third.update(frame(0.0), &InputFrame::default());
         for elapsed in [0.1, 0.25, 0.4] {
             let input = InputFrame {
                 movement: Vec2::new(1.0, -1.0),
@@ -1771,7 +2802,7 @@ mod tests {
             ..InputFrame::default()
         };
         for host in [false, true] {
-            let mut app = FirstPersonLab::new();
+            let mut app = first_person_app();
             if host {
                 app.host_chat.borrow_mut().set_focus(true);
             } else {
@@ -1812,7 +2843,7 @@ mod tests {
 
     #[test]
     fn own_chat_switches_between_top_center_and_overhead_with_one_expiry_clock() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         app.set_minimal_ui(true);
         app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
         let entry = |text: &str| ChatEntry {
@@ -1822,7 +2853,18 @@ mod tests {
         };
         app.push_chat(entry("first"));
         app.update(frame(1.0), &InputFrame::default());
-        assert_eq!(app.scene.text.len(), 2);
+        assert_eq!(chat_runs(&app).len(), 2);
+        assert!(
+            chat_runs(&app)
+                .iter()
+                .all(|run| run.weight == TextWeight::Regular)
+        );
+        assert!(
+            !app.scene
+                .text
+                .iter()
+                .any(|run| run.text == app.display_name)
+        );
         assert_eq!(app.scene.text[1].anchor, TextAnchor::TopCenter);
         assert_eq!(
             app.scene.text[1].position,
@@ -1831,8 +2873,12 @@ mod tests {
         app.push_chat(entry("replacement"));
         app.update(frame(2.0), &InputFrame::default());
         assert_eq!(app.avatar_chat.len(), 1);
-        assert!(app.scene.text.iter().all(|text| text.text == "replacement"));
-        // The spawn wall limits the camera to 1.8m; step forward to see the overhead label.
+        assert!(
+            chat_runs(&app)
+                .iter()
+                .all(|text| text.text == "replacement")
+        );
+        // Move before switching without restarting the local echo's expiry.
         app.update(
             frame(2.1),
             &InputFrame {
@@ -1847,9 +2893,31 @@ mod tests {
                 ..InputFrame::default()
             },
         );
-        app.update(frame(3.0), &InputFrame::default());
-        assert_eq!(app.scene.text.len(), 2);
+        app.update(
+            FrameContext {
+                delta_seconds: 0.8,
+                ..frame(3.0)
+            },
+            &InputFrame::default(),
+        );
+        assert_eq!(chat_runs(&app).len(), 2);
+        assert!(
+            chat_runs(&app)
+                .iter()
+                .all(|run| run.weight == TextWeight::Regular)
+        );
         assert_eq!(app.scene.text[1].anchor, TextAnchor::BottomCenter);
+        let name = app
+            .scene
+            .text
+            .iter()
+            .find(|run| run.text == app.display_name)
+            .unwrap();
+        assert_eq!(name.position.x, app.scene.text[1].position.x);
+        assert!(
+            (name.position.y - app.scene.text[1].position.y - NAMEPLATE_FONT_SIZE - 6.0).abs()
+                < 0.0001
+        );
         assert_eq!(app.avatar_chat[&42].received_at, Some(2.0));
         app.update(
             frame(7.0),
@@ -1862,7 +2930,7 @@ mod tests {
         assert_eq!(app.scene.text[1].color[3], 0.5);
         app.update(frame(8.0), &InputFrame::default());
         assert!(app.avatar_chat.is_empty());
-        assert!(app.scene.text.is_empty());
+        assert_identity_only_overlay(&app);
         app.push_chat(entry("disconnect"));
         app.handle_realtime_event(RealtimeEvent::Disconnected {
             reason: "test".to_owned(),
@@ -1875,20 +2943,38 @@ mod tests {
     }
 
     #[test]
-    fn scene_starts_with_the_theater_and_retains_avatar_assets() {
-        let app = FirstPersonLab::new();
-        assert_eq!(app.scene.meshes.len(), 44);
-        assert_eq!(app.colliders.len(), 10);
+    fn scene_starts_with_the_theater_clipped_third_person_camera_and_avatar_assets() {
+        let mut app = FirstPersonLab::new();
+        assert_eq!(
+            app.scene.meshes.len(),
+            47 + theater::CHAIR_MESH_COUNT + theater::PROJECTOR_MESH_COUNT + 1
+        );
+        assert_eq!(app.colliders.len(), 10 + theater::SEAT_COUNT);
         assert_eq!(app.base_mesh_count, app.scene.meshes.len());
         assert_eq!(app.assets.meshes.len(), app.base_mesh_count);
         assert_eq!(
             app.assets.textures.len(),
-            5 + theater::POSTER_COUNT + avatars::AVATAR_COUNT + 10
+            5 + theater::POSTER_COUNT
+                + theater::MATERIAL_TEXTURE_COUNT
+                + avatars::TEXTURE_COUNT
+                + 3 * 7
+                + theater::decor::TEXTURE_COUNT
         );
-        assert!(app.scene.sprites.is_empty());
-        assert_eq!(app.scene.camera.eye, theater::SPAWN);
-        assert_eq!(app.scene.camera.target - app.scene.camera.eye, Vec3::NEG_Z);
-        for texture in app.avatar_textures {
+        assert!(character_sprites(&app).is_empty());
+        assert_eq!(decoration_sprites(&app).len(), 59);
+        assert!(app.view.third_person());
+        assert_eq!(app.view.player.eye, theater::SPAWN);
+        assert_eq!(app.view.player.target - app.view.player.eye, Vec3::NEG_Z);
+        let clipped_eye = theater::SPAWN + Vec3::Z * 1.8;
+        assert!(app.scene.camera.eye.abs_diff_eq(clipped_eye, 0.0001));
+        assert_eq!(app.scene.camera.target, app.view.player.target);
+        app.update(frame(0.0), &InputFrame::default());
+        assert!(app.scene.camera.eye.abs_diff_eq(clipped_eye, 0.0001));
+        for texture in app
+            .avatar_textures
+            .into_iter()
+            .flat_map(|textures| textures.standing.into_iter().chain(textures.seated))
+        {
             assert!(
                 app.assets
                     .textures
@@ -1900,7 +2986,7 @@ mod tests {
 
     #[test]
     fn theater_collision_preserves_controller_look_and_stops_large_frame_motion() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         app.scene.camera.eye.x = 0.5;
         app.scene.camera.target.x = 0.5;
         let input = InputFrame {
@@ -1938,7 +3024,7 @@ mod tests {
 
     #[test]
     fn theater_passage_is_walkable_through_the_app_in_both_directions() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         let start = waypoint("lobby_aisle");
         let end = waypoint("corridor_turn");
         app.scene.camera.eye = start;
@@ -1967,7 +3053,7 @@ mod tests {
 
     #[test]
     fn theater_hallway_left_turn_and_standing_paths_work_through_the_app() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         let route = [
             waypoint("lobby_aisle"),
             waypoint("passage_lobby"),
@@ -1976,9 +3062,10 @@ mod tests {
             waypoint("row_a"),
             waypoint("row_b"),
             waypoint("auditorium_left"),
+            waypoint("auditorium_center"),
+            grounded_eye(Vec3::new(-6.75, 0.0, -10.6)),
             theater::SEATS[0].approach(),
-            theater::SEATS[0].position,
-            theater::SEATS[7].position,
+            theater::SEATS[3].approach(),
         ];
         app.scene.camera.eye = route[0];
         for destination in route[1..]
@@ -2039,7 +3126,7 @@ mod tests {
         ];
         let mut first_person_positions = Vec::new();
         for third_person in [false, true] {
-            let mut app = FirstPersonLab::new();
+            let mut app = first_person_app();
             app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
             app.pending_publishes.clear();
             app.scene.camera.eye = route[0];
@@ -2153,6 +3240,241 @@ mod tests {
     }
 
     #[test]
+    fn remote_chat_range_requires_finite_three_dimensional_distance() {
+        assert_eq!(CHAT_RANGE_METERS, 10.0);
+        let local = Vec3::new(1.0, 2.0, 3.0);
+        for offset in [
+            Vec3::ZERO,
+            Vec3::X * 10.0,
+            Vec3::Y * 10.0,
+            Vec3::NEG_Z * 10.0,
+            Vec3::new(6.0, 0.0, 8.0),
+            Vec3::new(0.0, 6.0, 8.0),
+        ] {
+            assert!(remote_chat_in_range(local, local + offset), "{offset:?}");
+        }
+        for offset in [
+            Vec3::X * 10.001,
+            Vec3::Y * 10.001,
+            Vec3::NEG_Z * 10.001,
+            Vec3::new(0.0, 6.001, 8.0),
+            Vec3::new(0.0, 0.1, 10.0),
+            Vec3::splat(f32::NAN),
+            Vec3::splat(f32::INFINITY),
+            Vec3::splat(f32::NEG_INFINITY),
+            Vec3::splat(f32::MAX),
+        ] {
+            let remote = local + offset;
+            assert!(!remote_chat_in_range(local, remote), "{offset:?}");
+            assert!(!remote_chat_in_range(remote, local), "{offset:?}");
+        }
+    }
+
+    #[test]
+    fn remote_chat_uses_displayed_eye_at_the_boundary_and_keeps_distant_names() {
+        for minimal_ui in [false, true] {
+            let mut app = first_person_app();
+            app.set_minimal_ui(minimal_ui);
+            app.scene.camera.eye = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+            app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+            app.controller = FirstPersonController::from_camera(&app.scene.camera);
+            let peer = Vec3::new(5.0, EYE_HEIGHT, 5.0);
+            enter_peer(&mut app, 9);
+            app.receive_unreliable_pose(9, 1, &pose_payload_at(peer));
+            app.receive_message(9, 1, &chat_payload("Visitor", "at the boundary"));
+            app.update(frame(1.0), &InputFrame::default());
+            assert_eq!(app.view.player.eye.distance(peer), CHAT_RANGE_METERS);
+            assert_eq!(chat_runs(&app).len(), 2);
+
+            // A new target does not move the displayed speaker until interpolation runs.
+            app.receive_unreliable_pose(9, 2, &pose_payload_at(peer + Vec3::X * 0.01));
+            app.rebuild_overlay();
+            assert_eq!(app.remote_players[&9].displayed_position, peer);
+            assert_eq!(chat_runs(&app).len(), 2);
+            app.update(frame(1.1), &InputFrame::default());
+            assert!(chat_runs(&app).is_empty());
+            let name = app
+                .scene
+                .text
+                .iter()
+                .find(|run| run.text == "Visitor")
+                .unwrap();
+            assert_eq!(name.size, NAMEPLATE_FONT_SIZE);
+            assert_eq!(name.anchor, TextAnchor::BottomCenter);
+            if minimal_ui {
+                assert_identity_only_overlay(&app);
+            }
+
+            app.receive_unreliable_pose(9, 3, &pose_payload_at(peer - Vec3::X * 0.1));
+            app.rebuild_overlay();
+            assert!(chat_runs(&app).is_empty());
+            app.update(frame(1.2), &InputFrame::default());
+            assert_eq!(chat_runs(&app).len(), 2);
+            assert!(
+                chat_runs(&app)
+                    .iter()
+                    .all(|run| run.text == "at the boundary")
+            );
+            assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+        }
+    }
+
+    #[test]
+    fn remote_chat_range_is_independent_of_zoom_and_perspective() {
+        for distance in [9.5, 10.5] {
+            let mut app = first_person_app();
+            app.set_minimal_ui(true);
+            let local = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+            let peer = local + Vec3::X * distance;
+            app.scene.camera.eye = local;
+            app.scene.camera.target = local + Vec3::X;
+            app.controller = FirstPersonController::from_camera(&app.scene.camera);
+            enter_peer(&mut app, 9);
+            app.receive_unreliable_pose(9, 1, &pose_payload_at(peer));
+            app.receive_message(9, 1, &chat_payload("Visitor", "physical proximity"));
+            for (step, (toggle_perspective, zoom_delta, camera_distance)) in [
+                (false, 0.0, 0.0),
+                (true, 0.0, 2.0),
+                (false, -100.0, 6.0),
+                (false, 100.0, 0.0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                app.update(
+                    FrameContext {
+                        delta_seconds: 1.0,
+                        ..frame(1.0 + step as f64 * 0.1)
+                    },
+                    &InputFrame {
+                        toggle_perspective,
+                        zoom_delta,
+                        ..InputFrame::default()
+                    },
+                );
+                assert_eq!(app.view.player.eye, local);
+                assert_eq!(app.view.third_person(), camera_distance > 0.0);
+                assert!((app.scene.camera.eye.distance(local) - camera_distance).abs() < 0.001);
+                if app.view.third_person() {
+                    assert!(app.scene.camera.eye.distance(peer) > CHAT_RANGE_METERS);
+                }
+                assert_eq!(
+                    chat_runs(&app).len(),
+                    if distance < CHAT_RANGE_METERS { 2 } else { 0 }
+                );
+                assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+                assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn out_of_range_chat_replaces_fades_and_expires_without_restarting_on_return() {
+        let mut app = first_person_app();
+        app.set_minimal_ui(true);
+        app.scene.camera.eye = Vec3::new(-5.0, EYE_HEIGHT, 5.0);
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.controller = FirstPersonController::from_camera(&app.scene.camera);
+        enter_peer(&mut app, 9);
+        app.receive_unreliable_pose(9, 1, &pose_payload_at(Vec3::new(4.0, EYE_HEIGHT, 5.0)));
+        app.receive_message(9, 1, &chat_payload("Visitor", "first"));
+        app.update(frame(1.0), &InputFrame::default());
+        assert_eq!(chat_runs(&app).len(), 2);
+
+        app.scene.camera.eye.x = -7.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(2.0), &InputFrame::default());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+        assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
+
+        app.receive_message(9, 2, &chat_payload("Visitor", "replacement while distant"));
+        app.update(frame(3.0), &InputFrame::default());
+        assert!(chat_runs(&app).is_empty());
+        assert_eq!(app.avatar_chat.len(), 1);
+        assert_eq!(app.avatar_chat[&9].text, "replacement while distant");
+        assert_eq!(app.avatar_chat[&9].received_at, Some(3.0));
+        assert_eq!(app.chat_history.len(), 2);
+        assert_eq!(app.chat_notifications.len(), 2);
+        assert_eq!(app.last_remote_reliable_sequences[&9], 2);
+        app.update(frame(8.0), &InputFrame::default());
+        assert!(chat_runs(&app).is_empty());
+        assert_eq!(app.avatar_chat[&9].opacity(8.0), 0.5);
+
+        app.scene.camera.eye.x = -5.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(8.0), &InputFrame::default());
+        let runs = chat_runs(&app);
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs.iter()
+                .all(|run| run.text == "replacement while distant" && run.color[3] == 0.5)
+        );
+        assert_eq!(app.avatar_chat[&9].received_at, Some(3.0));
+
+        app.scene.camera.eye.x = -7.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(9.0), &InputFrame::default());
+        assert!(app.avatar_chat.is_empty());
+        app.scene.camera.eye.x = -5.0;
+        app.scene.camera.target = app.scene.camera.eye + Vec3::X;
+        app.update(frame(10.0), &InputFrame::default());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+    }
+
+    #[test]
+    fn own_chat_has_no_range_limit_but_overhead_still_requires_visibility() {
+        for third_person in [false, true] {
+            let mut app = if third_person {
+                FirstPersonLab::new()
+            } else {
+                first_person_app()
+            };
+            app.set_minimal_ui(true);
+            app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
+            assert!(app.queue_validated_chat("own echo".to_owned()));
+            app.update(frame(1.0), &InputFrame::default());
+            let local = Vec3::new(5.0, EYE_HEIGHT, 5.0);
+            app.view.player.eye = local;
+            let distant_camera = Vec3::new(-6.0, EYE_HEIGHT, 5.0);
+            assert!(distant_camera.distance(local) > CHAT_RANGE_METERS);
+            // Isolate presentation: distant clear view, a wall, then off-screen.
+            for (eye, target, visible) in [
+                (distant_camera, local, true),
+                (Vec3::new(0.0, EYE_HEIGHT, -2.0), local, false),
+                (distant_camera, distant_camera - Vec3::X, false),
+            ] {
+                app.scene.camera.eye = eye;
+                app.scene.camera.target = target;
+                app.rebuild_overlay();
+                let runs = chat_runs(&app);
+                assert_eq!(runs.len(), if third_person && !visible { 0 } else { 2 });
+                if !runs.is_empty() {
+                    assert!(runs.iter().all(|run| run.text == "own echo"));
+                    if third_person {
+                        let name = app
+                            .scene
+                            .text
+                            .iter()
+                            .find(|run| run.text == app.display_name)
+                            .unwrap();
+                        assert_eq!(runs[1].anchor, TextAnchor::BottomCenter);
+                        assert_eq!(
+                            runs[1].position,
+                            name.position - Vec2::Y * (NAMEPLATE_FONT_SIZE + 6.0)
+                        );
+                    } else {
+                        assert_eq!(runs[1].anchor, TextAnchor::TopCenter);
+                        assert_eq!(runs[1].position, Vec2::new(640.0, 52.0));
+                    }
+                }
+                assert_eq!(app.avatar_chat[&42].received_at, Some(1.0));
+            }
+        }
+    }
+
+    #[test]
     fn avatar_overlays_follow_physical_line_of_sight() {
         for (viewer, peer, visible) in [
             (
@@ -2174,7 +3496,7 @@ mod tests {
             (waypoint("lobby_west"), waypoint("lobby_center"), true),
         ] {
             for minimal_ui in [false, true] {
-                let mut app = FirstPersonLab::new();
+                let mut app = first_person_app();
                 app.set_minimal_ui(minimal_ui);
                 app.scene.camera.eye = viewer;
                 app.scene.camera.target = peer;
@@ -2193,17 +3515,159 @@ mod tests {
                 );
                 assert_eq!(
                     app.scene.text.iter().any(|run| run.text == "Visitor"),
-                    visible && !minimal_ui
+                    visible
                 );
-                assert_eq!(app.scene.sprites.len(), 1 + app.npcs.visible_count());
+                assert_eq!(character_sprites(&app).len(), 1 + app.npcs.visible_count());
                 assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
             }
         }
     }
 
     #[test]
+    fn npc_nameplates_track_visible_grounded_sprites_without_look_at_activation() {
+        for minimal_ui in [false, true] {
+            let mut app = first_person_app();
+            app.set_minimal_ui(minimal_ui);
+            app.scene.camera.eye.x = 2.0;
+            app.scene.camera.target.x = 2.0;
+            let mut previous_position = None;
+            for time in [0.0, 0.125] {
+                app.update(frame(time), &InputFrame::default());
+                let labels: Vec<_> = app.npcs.nameplates().collect();
+                let sprites = character_sprites(&app);
+                assert_eq!(labels.len(), sprites.len());
+                for ((name, eye), _sprite) in labels.iter().zip(sprites) {
+                    // Labels follow logical eyes, not transparent canvas margins
+                    // or the cosmetic walking rotation.
+                    let top = *eye + Vec3::Y * (PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT + 0.05);
+                    let expected =
+                        if theater::has_line_of_sight(app.scene.camera.eye, top, &app.colliders) {
+                            project_to_screen(
+                                &app.scene.camera,
+                                1280.0 / 720.0,
+                                app.viewport_size,
+                                top,
+                            )
+                        } else {
+                            None
+                        };
+                    let actual = app.scene.text.iter().find(|run| run.text == *name);
+                    assert_eq!(actual.is_some(), expected.is_some(), "{name}");
+                    if let (Some(run), Some(position)) = (actual, expected) {
+                        assert!(run.position.abs_diff_eq(position, 0.0001));
+                    }
+                }
+                let name = app
+                    .scene
+                    .text
+                    .iter()
+                    .find(|run| run.text == "Curious Otter")
+                    .unwrap();
+                assert!(name.position.x < app.viewport_size.x as f32 * 0.5);
+                if let Some(previous) = previous_position {
+                    assert_eq!(name.position, previous);
+                }
+                previous_position = Some(name.position);
+                assert!(npcs::get_npc_interaction_context().is_none());
+                if minimal_ui {
+                    assert_identity_only_overlay(&app);
+                }
+            }
+            // Aimed at an authored NPC, but the lobby divider still hides its label.
+            app.scene.camera.target = waypoint("auditorium_left");
+            app.controller = FirstPersonController::from_camera(&app.scene.camera);
+            app.update(frame(1.0), &InputFrame::default());
+            assert!(!app.scene.text.iter().any(|run| run.text == "Gentle Falcon"));
+            assert!(npcs::get_npc_interaction_context().is_none());
+        }
+    }
+
+    #[test]
+    fn player_and_npc_nameplates_are_white_and_bold() {
+        for local_entity_id in [None, Some(7), Some(42)] {
+            let mut app = FirstPersonLab::with_display_name("Local");
+            app.set_minimal_ui(true);
+            if let Some(entity_id) = local_entity_id {
+                app.handle_realtime_event(RealtimeEvent::Connected { entity_id });
+            }
+            enter_peer(&mut app, 9);
+            assert!(app.receive_profile(9, MESSAGE_VERSION, "Visitor"));
+            app.receive_unreliable_pose(9, 1, &pose_payload_at(Vec3::new(1.0, EYE_HEIGHT, 1.0)));
+            app.update(frame(1.0), &InputFrame::default());
+
+            let local = app
+                .scene
+                .text
+                .iter()
+                .find(|run| run.text == "Local")
+                .unwrap();
+            assert_eq!(local.color, [1.0; 4]);
+            assert_eq!(local.weight, TextWeight::Bold);
+            assert_eq!(local.size, 18.0 * overlay_pixel_scale());
+            let remote = app
+                .scene
+                .text
+                .iter()
+                .find(|run| run.text == "Visitor")
+                .unwrap();
+            assert_eq!(remote.color, [1.0; 4]);
+            assert_eq!(remote.weight, TextWeight::Bold);
+            assert_eq!(remote.size, local.size);
+            let mut visible_npc_names = 0;
+            for (name, _) in app.npcs.nameplates() {
+                if let Some(run) = app.scene.text.iter().find(|run| run.text == name) {
+                    assert_eq!(run.color, [1.0; 4]);
+                    assert_eq!(run.weight, TextWeight::Bold);
+                    assert_eq!(run.size, local.size);
+                    assert_eq!(run.anchor, local.anchor);
+                    assert_eq!(run.bounds, local.bounds);
+                    assert_eq!(run.world_space, local.world_space);
+                    visible_npc_names += 1;
+                }
+            }
+            assert!(visible_npc_names > 0);
+        }
+    }
+
+    #[test]
+    fn avatar_label_projection_respects_walls_floor_ceiling_and_screen_bounds() {
+        let app = first_person_app();
+        let viewport = UVec2::new(1280, 720);
+        for (viewer, peer) in [
+            (waypoint("lobby_center"), waypoint("auditorium_back")),
+            (
+                Vec3::new(0.0, 1.0, -5.0),
+                grounded_eye(Vec3::new(0.0, 0.0, -7.0)),
+            ),
+            (Vec3::new(0.0, 5.0, 8.0), waypoint("lobby_center")),
+            (Vec3::new(8.0, 8.0, -10.5), Vec3::new(11.0, 7.44, -10.5)),
+        ] {
+            let head = peer + Vec3::Y * (PLAYER_BILLBOARD_HEIGHT - EYE_HEIGHT + 0.05);
+            let camera = Camera {
+                eye: viewer,
+                target: head,
+                ..app.scene.camera.clone()
+            };
+            assert!(project_to_screen(&camera, 1280.0 / 720.0, viewport, head).is_some());
+            assert!(avatar_label_position(&camera, viewport, &app.colliders, peer).is_none());
+        }
+        let peer = waypoint("lobby_center");
+        assert!(avatar_label_position(&app.scene.camera, viewport, &app.colliders, peer).is_some());
+        for peer in [theater::SPAWN + Vec3::Z, Vec3::new(11.0, EYE_HEIGHT, 7.0)] {
+            assert!(
+                avatar_label_position(&app.scene.camera, viewport, &app.colliders, peer).is_none()
+            );
+        }
+        for viewport in [UVec2::ZERO, UVec2::new(1, 720), UVec2::new(1280, 1)] {
+            assert!(
+                avatar_label_position(&app.scene.camera, viewport, &app.colliders, peer).is_none()
+            );
+        }
+    }
+
+    #[test]
     fn hidden_avatar_chat_keeps_its_original_fade_and_expiry_clock() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         app.set_minimal_ui(true);
         app.scene.camera.eye.x = 9.5;
         app.scene.camera.target.x = 9.5;
@@ -2215,21 +3679,32 @@ mod tests {
         );
         app.receive_message(9, 1, &chat_payload("Visitor", "do not reset"));
         app.update(frame(1.0), &InputFrame::default());
-        assert_eq!(app.scene.text.len(), 2);
+        // The corridor ramp puts this peer just beyond 10 m in 3D despite a clear view.
+        assert!(
+            app.view
+                .player
+                .eye
+                .distance(app.remote_players[&9].displayed_position)
+                > CHAT_RANGE_METERS
+        );
+        assert!(chat_runs(&app).is_empty());
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
 
         // Moving left puts the divider between the viewer and the head anchor.
         app.scene.camera.eye.x = 0.0;
         app.scene.camera.target.x = 0.0;
         app.update(frame(6.0), &InputFrame::default());
-        assert!(app.scene.text.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(!app.scene.text.iter().any(|run| run.text == "Visitor"));
         assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
         assert_eq!(app.avatar_chat[&9].opacity(6.0), 0.5);
 
         app.scene.camera.eye.x = 9.5;
         app.scene.camera.target.x = 9.5;
         app.update(frame(6.0), &InputFrame::default());
-        assert_eq!(app.scene.text.len(), 2);
-        assert_eq!(app.scene.text[1].color[3], 0.5);
+        assert!(chat_runs(&app).is_empty());
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
+        assert_eq!(app.avatar_chat[&9].opacity(6.0), 0.5);
         assert_eq!(app.avatar_chat[&9].received_at, Some(1.0));
 
         app.scene.camera.eye.x = 0.0;
@@ -2239,7 +3714,8 @@ mod tests {
         app.scene.camera.eye.x = 9.5;
         app.scene.camera.target.x = 9.5;
         app.update(frame(8.0), &InputFrame::default());
-        assert!(app.scene.text.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
     }
 
     #[test]
@@ -2253,15 +3729,14 @@ mod tests {
         app.receive_message(9, 1, &chat_payload("Visitor", "first"));
         app.update(frame(1.0), &InputFrame::default());
         app.update(frame(5.0), &InputFrame::default());
-        assert_eq!(app.scene.text.len(), 2);
+        assert_eq!(chat_runs(&app).len(), 2);
         assert_eq!(app.scene.text[1].color[3], 1.0);
-        assert!(app.scene.text.iter().all(|run| run.size == 25.5));
         app.update(frame(6.0), &InputFrame::default());
         assert_eq!(app.scene.text[1].color[3], 0.5);
         app.receive_message(9, 2, &chat_payload("Visitor", "replacement"));
         app.update(frame(6.1), &InputFrame::default());
         assert_eq!(app.avatar_chat.len(), 1);
-        assert!(app.scene.text.iter().all(|run| run.text == "replacement"));
+        assert!(chat_runs(&app).iter().all(|run| run.text == "replacement"));
         assert_eq!(app.scene.text[1].color[3], 1.0);
         // Replayed/invalid messages cannot restart the timer.
         app.receive_message(9, 2, &chat_payload("Visitor", "replayed"));
@@ -2270,8 +3745,8 @@ mod tests {
         assert_eq!(app.scene.text[1].color[3], 0.5);
         app.update(frame(12.1), &InputFrame::default());
         assert!(app.avatar_chat.is_empty());
-        assert!(app.scene.text.is_empty());
-        assert!(app.scene.ui.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(app.scene.text.iter().any(|run| run.text == "Visitor"));
     }
 
     #[test]
@@ -2282,7 +3757,8 @@ mod tests {
         enter_peer(&mut app, 9);
         app.receive_message(9, 1, &chat_payload("Visitor", "before pose"));
         app.update(frame(1.0), &InputFrame::default());
-        assert!(app.scene.text.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(!app.scene.text.iter().any(|run| run.text == "Visitor"));
         app.receive_unreliable_pose(9, 1, &pose_payload_at(Vec3::new(1.0, EYE_HEIGHT, 1.0)));
         app.update(frame(1.1), &InputFrame::default());
         let position = app.scene.text[1].position;
@@ -2338,22 +3814,26 @@ mod tests {
             .meshes
             .iter()
             .enumerate()
-            .filter_map(|(index, mesh)| (mesh.texture == Some(screen)).then_some(index))
+            .filter_map(|(index, mesh)| {
+                (mesh.texture == Some(screen) && mesh.texture_fit.is_some()).then_some(index)
+            })
             .collect();
-        assert_eq!(matching.len(), 1);
-        let index = matching[0];
+        assert_eq!(matching.len(), 2); // Screen and fitted projection beam; not the lens.
         assert!(!app.apply_video_aspect(theater::DEFAULT_VIDEO_ASPECT));
         for aspect in [4.0 / 3.0, 9.0 / 16.0, 2.39, theater::DEFAULT_VIDEO_ASPECT] {
             let before = app.scene.clone();
             assert!(app.apply_video_aspect(aspect));
             let mut expected = before;
-            expected.meshes[index].texture_fit = app.scene.meshes[index].texture_fit;
+            for &index in &matching {
+                expected.meshes[index].texture_fit = app.scene.meshes[index].texture_fit;
+                assert_eq!(
+                    app.scene.meshes[index].texture_fit.unwrap().content_aspect,
+                    aspect
+                );
+            }
             expected.revision = expected.revision.next();
             assert_eq!(app.scene, expected);
-            assert_eq!(
-                app.scene.meshes[index].texture_fit.unwrap().content_aspect,
-                aspect
-            );
+
             assert!(!app.apply_video_aspect(aspect));
             assert_eq!(app.scene, expected);
         }
@@ -2380,8 +3860,9 @@ mod tests {
             &pose_payload_at(grounded_eye(Vec3::new(1.0, 0.0, -2.0))),
         );
         app.update_remote_players(0.0);
-        assert_eq!(app.scene.sprites[0].tint, [1.0; 4]);
-        assert_eq!(app.scene.sprites[1].tint, [0.18, 0.18, 0.18, 1.0]);
+        assert_eq!(character_sprites(&app)[0].tint, [1.0; 4]);
+        let level = theater::AUDITORIUM_LIGHT_LEVEL;
+        assert_eq!(character_sprites(&app)[1].tint, [level, level, level, 1.0]);
         let lobby_light = app.scene.meshes[0].lighting;
         assert!(app.set_room_lighting(1.0, 0.0));
         assert_eq!(app.scene.meshes[0].lighting, lobby_light);
@@ -2389,7 +3870,7 @@ mod tests {
         assert_eq!(dark.ambient, 0.0);
         assert_eq!(dark.intensity, 0.0);
         app.update_remote_players(0.0);
-        assert_eq!(app.scene.sprites[1].tint, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(character_sprites(&app)[1].tint, [0.0, 0.0, 0.0, 1.0]);
         assert!(!app.set_room_lighting(f32::NAN, 1.0));
         assert_eq!(app.scene.meshes[0].lighting, lobby_light);
         assert!(app.set_room_lighting(2.0, -1.0));
@@ -2399,7 +3880,8 @@ mod tests {
 
     #[test]
     fn billboard_is_upright_grounded_and_faces_each_viewer() {
-        let sprite = SpriteHandle::new();
+        let app = FirstPersonLab::new();
+        let textures = app.avatar_textures[0];
         for eye in [
             waypoint("lobby_center"),
             waypoint("row_b"),
@@ -2413,18 +3895,13 @@ mod tests {
                 eye - Vec3::Z,
                 eye,
             ] {
-                let instance = avatar_instance(sprite, eye, viewer);
-                assert_eq!(instance.sprite, sprite);
+                let instance = avatars::sprite(textures, eye, viewer, Vec3::NEG_Z, false, 0.0);
+                assert!(textures.standing.contains(&instance.sprite));
                 assert_eq!(instance.space, SpriteSpace::World);
                 assert_eq!(instance.tint, [1.0; 4]);
-                assert!((instance.transform.scale - 2.21).abs() < 1e-5);
-                assert!(
-                    (instance.transform.translation.y
-                        - instance.transform.scale * 0.5
-                        - theater::floor_height(eye))
-                    .abs()
-                        < 1e-5
-                );
+                let (bottom, top) = visible_sprite_y_bounds(&app, &instance);
+                assert!((top - bottom - 2.21).abs() < 1e-5);
+                assert!((bottom - theater::floor_height(eye)).abs() < 1e-5);
                 assert!((instance.transform.rotation * Vec3::Y - Vec3::Y).length() < 1e-5);
                 let direction = (viewer - eye).normalize_or_zero();
                 if direction != Vec3::ZERO {
@@ -2435,9 +3912,154 @@ mod tests {
     }
 
     #[test]
+    fn local_walking_rock_stops_for_idle_look_seating_and_resume_gaps() {
+        let mut app = FirstPersonLab::new();
+        app.update(frame(0.0), &InputFrame::default());
+        let moving = InputFrame {
+            movement: Vec2::Y,
+            ..InputFrame::default()
+        };
+        for step in 1..=8 {
+            app.update(frame(f64::from(step) / 60.0), &moving);
+            assert!(app.local_rock.abs() <= motion::MAX_ROCK);
+        }
+        assert!(app.local_rock.abs() > 0.001);
+        let eye = app.view.player.eye;
+        app.update(frame(0.15), &InputFrame::default());
+        assert_eq!(app.local_rock, 0.0);
+        assert_eq!(app.view.player.eye, eye);
+        app.update(
+            frame(0.17),
+            &InputFrame {
+                look_delta: Vec2::X * 20.0,
+                ..InputFrame::default()
+            },
+        );
+        assert_eq!(app.local_rock, 0.0);
+        assert_eq!(app.view.player.eye, eye);
+        app.update(frame(10.0), &moving);
+        assert_eq!(app.local_rock, 0.0);
+        app.view.player.eye = theater::SEATS[0].approach();
+        assert!(app.apply_seat_request(100));
+        app.scene.camera = app.view.camera(0.0, &app.colliders);
+        app.update(frame(10.02), &moving);
+        assert_eq!(app.local_rock, 0.0);
+        assert_eq!(app.view.player.eye, theater::SEATS[0].seated_eye());
+    }
+
+    #[test]
+    fn remote_rock_needs_fresh_travel_not_smoothing_look_or_corrections() {
+        let mut app = first_person_app();
+        enter_peer(&mut app, 42);
+        let origin = grounded_eye(Vec3::new(2.0, 0.0, 2.0));
+        assert!(app.receive_pose(42, validate_pose(origin, Vec3::NEG_Z).unwrap()));
+        app.update_remote_players(0.1);
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+        for step in 1..=4 {
+            app.elapsed_seconds = f64::from(step) * 0.1;
+            let target = origin + Vec3::X * (step as f32 * 0.2);
+            assert!(app.receive_pose(42, validate_pose(target, Vec3::NEG_Z).unwrap()));
+            app.update_remote_players(0.1);
+        }
+        assert!(app.remote_players[&42].rock.abs() > 0.001);
+        let target = app.remote_players[&42].target_position;
+        app.elapsed_seconds = 0.5;
+        assert!(app.receive_pose(42, validate_pose(target, Vec3::X).unwrap()));
+        app.update_remote_players(0.1);
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+        assert_ne!(app.remote_players[&42].displayed_position, target);
+        app.elapsed_seconds = 0.6;
+        assert!(app.receive_pose(
+            42,
+            validate_pose(origin + Vec3::X * 8.0, Vec3::NEG_Z).unwrap()
+        ));
+        app.update_remote_players(0.1);
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+        app.elapsed_seconds = 1.0;
+        app.update_remote_players(0.1);
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+        assert!(app.receive_pose(
+            42,
+            PlayerPose {
+                position: theater::SEATS[0].seated_eye(),
+                forward: Vec3::X,
+                seat: Some(0)
+            }
+        ));
+        app.update_remote_players(0.1);
+        let player = &app.remote_players[&42];
+        assert_eq!(player.rock, 0.0);
+        let rendered = character_sprites(&app)[0];
+        assert!(
+            app.avatar_textures[avatars::avatar_index(42)]
+                .seated
+                .contains(&rendered.sprite)
+        );
+        assert_eq!(rendered.uv_rect[3], 1.0);
+    }
+
+    #[test]
+    fn batched_remote_poses_keep_walking_when_events_arrive_before_the_frame_clock() {
+        let mut app = first_person_app();
+        enter_peer(&mut app, 42);
+        let origin = grounded_eye(Vec3::new(2.0, 0.0, 2.0));
+        app.receive_unreliable_pose(42, 1, &encode_pose(origin, Vec3::NEG_Z).unwrap());
+        app.update(frame(0.1), &InputFrame::default());
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+
+        // Both platform shells drain all received events before update advances
+        // elapsed_seconds. Two advancing packets must be one frame's motion sample.
+        for (sequence, distance) in [(2, 0.08), (3, 0.16)] {
+            app.receive_unreliable_pose(
+                42,
+                sequence,
+                &encode_pose(origin + Vec3::X * distance, Vec3::NEG_Z).unwrap(),
+            );
+        }
+        app.update(frame(0.2), &InputFrame::default());
+        assert!(app.remote_players[&42].rock.abs() > 0.001);
+        assert!(app.remote_players[&42].rock.abs() <= motion::MAX_ROCK);
+
+        // A stationary batch still stops gait even while interpolation continues.
+        for sequence in [4, 5] {
+            app.receive_unreliable_pose(
+                42,
+                sequence,
+                &encode_pose(origin + Vec3::X * 0.16, Vec3::X).unwrap(),
+            );
+        }
+        app.update(frame(0.3), &InputFrame::default());
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+
+        // A move followed by an idle/look-only packet in the same frame must
+        // also stop gait, even though the batch has net displacement.
+        for sequence in [6, 7] {
+            app.receive_unreliable_pose(
+                42,
+                sequence,
+                &encode_pose(origin + Vec3::X * 0.24, Vec3::X).unwrap(),
+            );
+        }
+        app.update(frame(0.4), &InputFrame::default());
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+
+        // A small first packet must not authorize a correction hidden later in
+        // the same batch. Classification uses the net target displacement.
+        for (sequence, distance) in [(8, 0.32), (9, 8.0)] {
+            app.receive_unreliable_pose(
+                42,
+                sequence,
+                &encode_pose(origin + Vec3::X * distance, Vec3::NEG_Z).unwrap(),
+            );
+        }
+        app.update(frame(0.5), &InputFrame::default());
+        assert_eq!(app.remote_players[&42].rock, 0.0);
+    }
+
+    #[test]
     fn independent_viewers_select_the_same_avatar_and_remove_it_on_leave() {
-        let mut a = FirstPersonLab::new();
-        let mut b = FirstPersonLab::new();
+        let mut a = first_person_app();
+        let mut b = first_person_app();
         for app in [&mut a, &mut b] {
             enter_peer(app, 42);
             app.receive_pose(
@@ -2446,16 +4068,27 @@ mod tests {
             );
             app.update_remote_players(0.1);
             assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
-            assert_eq!(app.scene.sprites.len(), 1);
+            assert_eq!(character_sprites(app).len(), 1);
             assert_eq!(
-                app.scene.sprites[0].sprite,
-                app.avatar_textures[avatars::avatar_index(42)]
+                character_sprites(app)[0].sprite,
+                avatars::sprite(
+                    app.avatar_textures[avatars::avatar_index(42)],
+                    app.remote_players[&42].displayed_position,
+                    app.scene.camera.eye,
+                    Vec3::NEG_Z,
+                    false,
+                    0.0,
+                )
+                .sprite
             );
         }
-        assert_eq!(a.scene.sprites[0].sprite, b.scene.sprites[0].sprite);
+        assert_eq!(
+            character_sprites(&a)[0].sprite,
+            character_sprites(&b)[0].sprite
+        );
         a.handle_realtime_event(RealtimeEvent::EntityLeft { entity_id: 42 });
         a.update_remote_players(0.1);
-        assert!(a.scene.sprites.is_empty());
+        assert!(character_sprites(&a).is_empty());
     }
 
     fn frame(elapsed_seconds: f64) -> FrameContext {
@@ -2514,11 +4147,77 @@ mod tests {
         app.handle_realtime_event(RealtimeEvent::EntityEntered { entity_id });
     }
 
+    fn assert_guest_name_format(name: &str) {
+        let words: Vec<_> = name.split(' ').collect();
+        assert_eq!(words.len(), 2);
+        for word in words {
+            assert!(word.as_bytes()[0].is_ascii_uppercase());
+            assert!(word.as_bytes()[1..].iter().all(u8::is_ascii_lowercase));
+        }
+        assert!(validate_display_name(name).is_some());
+    }
+
     #[test]
-    fn default_name_uses_two_adjectives_and_survives_reconnection() {
+    fn scripted_npc_names_are_unique_and_stable_across_apps() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../assets/npcs.json")).unwrap();
+        let names: Vec<_> = catalog["definitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|definition| definition["displayName"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Curious Otter",
+                "Gentle Falcon",
+                "Sunny Panda",
+                "Brave Robin",
+                "Merry Fox"
+            ]
+        );
+        assert_eq!(
+            names.iter().collect::<std::collections::HashSet<_>>().len(),
+            5
+        );
+        for name in &names {
+            assert_guest_name_format(name);
+        }
+        let mut first = FirstPersonLab::new();
+        let mut second = FirstPersonLab::new();
+        let mut seen = std::collections::HashSet::new();
+        for seconds in 0..600 {
+            first
+                .npcs
+                .update(f64::from(seconds), Vec3::ZERO, 0.0, &first.colliders);
+            second
+                .npcs
+                .update(f64::from(seconds), Vec3::ZERO, 0.0, &second.colliders);
+            let a: Vec<_> = first
+                .npcs
+                .nameplates()
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            let b: Vec<_> = second
+                .npcs
+                .nameplates()
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            assert_eq!(a, b);
+            for name in a {
+                assert!(names.contains(&name.as_str()));
+                seen.insert(name);
+            }
+        }
+        assert_eq!(seen.len(), 5);
+    }
+
+    #[test]
+    fn default_name_uses_adjective_noun_and_survives_reconnection() {
         let mut app = FirstPersonLab::new();
         let name = app.display_name.clone();
-        assert_eq!(name.chars().filter(char::is_ascii_uppercase).count(), 2);
+        assert_guest_name_format(&name);
         assert!(validate_display_name(&name).is_some());
         assert_ne!(name, DEFAULT_DISPLAY_NAME);
         app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 7 });
@@ -2536,14 +4235,13 @@ mod tests {
         named.handle_realtime_event(RealtimeEvent::Connected { entity_id: 7 });
         assert_eq!(named.display_name, "Guest");
         let invalid = FirstPersonLab::with_display_name("bad\nname");
-        assert_eq!(
-            invalid
-                .display_name
-                .chars()
-                .filter(char::is_ascii_uppercase)
-                .count(),
-            2
-        );
+        assert_guest_name_format(&invalid.display_name);
+        for custom in ["BrightCalm", "SuperCoder", "Curious Otter"] {
+            assert_eq!(
+                FirstPersonLab::with_display_name(custom).display_name,
+                custom
+            );
+        }
         assert!(validate_display_name(&invalid.display_name).is_some());
     }
 
@@ -2557,6 +4255,13 @@ mod tests {
     fn host_chat_local_and_remote_notifications_are_validated_once_with_decimal_ids() {
         let mut app = FirstPersonLab::with_display_name("Ada");
         app.set_minimal_ui(true);
+        app.update(
+            frame(0.0),
+            &InputFrame {
+                toggle_perspective: true,
+                ..InputFrame::default()
+            },
+        );
         app.handle_realtime_event(RealtimeEvent::Connected {
             entity_id: u64::MAX,
         });
@@ -2616,8 +4321,8 @@ mod tests {
             ]
         );
         assert_eq!(app.last_remote_reliable_sequences[&remote_id], 1);
-        assert_eq!(app.scene.text.len(), 2);
-        assert!(app.scene.text.iter().all(|run| run.text == "hello 🌍"));
+        assert_eq!(chat_runs(&app).len(), 2);
+        assert!(chat_runs(&app).iter().all(|run| run.text == "hello 🌍"));
         assert_eq!(app.scene.text[1].anchor, TextAnchor::TopCenter);
         assert!(app.scene.ui.is_empty());
         assert!(app.scene.status_lines.is_empty());
@@ -2759,6 +4464,7 @@ mod tests {
             app.chat_feedback = Some("stale feedback".to_owned());
             let eye = app.scene.camera.eye;
             let target = app.scene.camera.target;
+            let player_eye = app.view.player.eye;
             app.host_chat.borrow_mut().set_focus(true);
             assert_eq!(app.pointer_mode(), PointerMode::None);
             assert_eq!(app.text_input_mode(), TextInputMode::Disabled);
@@ -2773,7 +4479,7 @@ mod tests {
                 ..InputFrame::default()
             };
             for i in 0..3 {
-                app.update(frame(i as f64 * 0.1), &held);
+                app.update(frame(f64::from(i) * 0.1), &held);
             }
             assert_eq!(app.scene.camera.eye, eye);
             assert_eq!(app.scene.camera.target, target);
@@ -2793,7 +4499,8 @@ mod tests {
                     ..InputFrame::default()
                 },
             );
-            assert_ne!(app.scene.camera.eye, eye);
+            // The rear wall can hold the third-person camera still as the player moves.
+            assert_ne!(app.view.player.eye, player_eye);
             assert_eq!(app.pointer_mode(), PointerMode::LockedLook);
             assert_eq!(
                 app.text_input_mode(),
@@ -2847,7 +4554,7 @@ mod tests {
 
     #[test]
     fn peer_payloads_are_validated_ordered_and_rendered() {
-        let mut app = FirstPersonLab::new();
+        let mut app = first_person_app();
         app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 7 });
         enter_peer(&mut app, 9);
         app.receive_message(9, 1, &profile_payload("Visitor"));
@@ -2874,7 +4581,7 @@ mod tests {
         assert_eq!(app.last_remote_reliable_sequences[&9], 1);
         app.update_remote_players(1.0 / 60.0);
         assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
-        assert_eq!(app.scene.sprites.len(), 1);
+        assert_eq!(character_sprites(&app).len(), 1);
     }
 
     #[test]
@@ -2916,8 +4623,9 @@ mod tests {
         };
         assert_eq!(payload.len(), POSE_PAYLOAD_BYTES);
         assert_eq!(*sequence, 2);
-        assert_eq!(*position, app.scene.camera.eye.as_dvec3().to_array());
-        assert_eq!(decode_pose(payload).unwrap().position, app.scene.camera.eye);
+        assert_eq!(*position, app.view.player.eye.as_dvec3().to_array());
+        assert_eq!(decode_pose(payload).unwrap().position, app.view.player.eye);
+        assert_ne!(app.view.player.eye, app.scene.camera.eye);
         assert_eq!(decode_pose(payload).unwrap().forward, -Vec3::Z);
     }
 
@@ -3018,6 +4726,89 @@ mod tests {
     }
 
     #[test]
+    fn enter_send_closes_compact_input_and_echoes_once_in_either_perspective() {
+        for third_person in [false, true] {
+            let mut app = if third_person {
+                FirstPersonLab::new()
+            } else {
+                first_person_app()
+            };
+            app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 42 });
+            app.update(
+                frame(1.0),
+                &InputFrame {
+                    text_events: vec![
+                        TextInputEvent::Open,
+                        TextInputEvent::Insert("hello room".to_owned()),
+                    ],
+                    ..InputFrame::default()
+                },
+            );
+            assert!(app.chat_open);
+            assert_eq!(app.text_input_mode(), TextInputMode::Focused);
+            assert_eq!(app.scene.ui.len(), 1);
+            let UiElement::Rect(panel) = &app.scene.ui[0] else {
+                panic!("expected compact input panel")
+            };
+            let scale = overlay_pixel_scale();
+            assert_eq!(panel.size, Vec2::new(720.0, 58.0) * scale);
+            assert!(panel.position.x >= 0.0 && panel.position.y >= 0.0);
+            assert!(panel.position.x + panel.size.x <= app.viewport_size.x as f32);
+            assert!(panel.position.y + panel.size.y <= app.viewport_size.y as f32);
+            assert!(app.chat_notifications.is_empty());
+            app.update(
+                frame(1.1),
+                &InputFrame {
+                    text_events: vec![TextInputEvent::Submit],
+                    ..InputFrame::default()
+                },
+            );
+            assert!(!app.chat_open);
+            assert!(app.chat_draft.is_empty());
+            assert!(app.scene.ui.is_empty());
+            assert_eq!(app.text_input_mode(), TextInputMode::Available);
+            assert_eq!(
+                app.chat_notifications,
+                vec![(
+                    "42".to_owned(),
+                    app.display_name.clone(),
+                    "hello room".to_owned(),
+                    true
+                )]
+            );
+            assert_eq!(app.pending_publishes.iter().filter(|command| matches!(command,
+                RealtimeCommand::PublishReliable { payload, .. }
+                    if matches!(serde_json::from_str::<FirstPersonMessage>(payload), Ok(FirstPersonMessage::Chat { .. }))
+            )).count(), 1);
+            let runs = chat_runs(&app);
+            assert_eq!(runs.len(), 2);
+            assert!(runs.iter().all(|run| run.text == "hello room"));
+            let name = app
+                .scene
+                .text
+                .iter()
+                .find(|run| run.text == app.display_name);
+            if third_person {
+                assert_eq!(runs[1].anchor, TextAnchor::BottomCenter);
+                assert!(runs[1].position.y <= name.unwrap().position.y - NAMEPLATE_FONT_SIZE - 5.0);
+            } else {
+                assert!(name.is_none());
+                assert_eq!(runs[1].anchor, TextAnchor::TopCenter);
+                assert_eq!(runs[1].position, Vec2::new(640.0, 52.0));
+            }
+            app.update(frame(1.2), &InputFrame::default());
+            let received_at = app.avatar_chat[&42].received_at.unwrap();
+            app.update(
+                frame(received_at + CHAT_HOLD_SECONDS + CHAT_FADE_SECONDS),
+                &InputFrame::default(),
+            );
+            assert!(chat_runs(&app).is_empty());
+            assert!(app.scene.ui.is_empty());
+            assert_eq!(app.chat_notifications.len(), 1);
+        }
+    }
+
+    #[test]
     fn full_ui_is_the_default_with_status_nameplates_and_chat() {
         let mut app = FirstPersonLab::with_display_name("Ada");
         app.handle_realtime_event(RealtimeEvent::Connected { entity_id: 7 });
@@ -3042,7 +4833,7 @@ mod tests {
     }
 
     #[test]
-    fn minimal_ui_has_no_native_overlay_but_keeps_players_profiles_chat_transport_and_poses() {
+    fn minimal_ui_keeps_identity_labels_chat_transport_and_poses_without_chrome() {
         let mut app = FirstPersonLab::with_display_name("Ada");
         app.set_minimal_ui(true);
         assert!(app.scene.text.is_empty());
@@ -3058,12 +4849,31 @@ mod tests {
         app.apply_display_name("Renamed".to_owned());
         app.update(frame(1.0), &InputFrame::default());
 
-        assert_eq!(app.scene.text.len(), 2); // Text plus a readability shadow.
-        assert!(app.scene.text.iter().all(|run| run.text == "hello"));
+        assert_eq!(chat_runs(&app).len(), 2); // Text plus a readability shadow.
+        assert!(chat_runs(&app).iter().all(|run| run.text == "hello"));
+        for name in ["Visitor", "Renamed", "Curious Otter"] {
+            assert!(app.scene.text.iter().any(|run| run.text == name));
+        }
+        let name = app
+            .scene
+            .text
+            .iter()
+            .find(|run| run.text == "Visitor")
+            .unwrap();
+        let speech = chat_runs(&app)[1];
+        assert_eq!(speech.position.x, name.position.x);
+        assert!((name.position.y - speech.position.y - NAMEPLATE_FONT_SIZE - 6.0).abs() < 0.0001);
         assert!(app.scene.ui.is_empty());
         assert!(app.scene.status_lines.is_empty());
+        assert!(
+            app.scene
+                .text
+                .iter()
+                .all(|run| run.size == NAMEPLATE_FONT_SIZE || run.text == "hello")
+        );
+        assert!(npcs::get_npc_interaction_context().is_none());
         assert_eq!(app.scene.meshes.len(), app.base_mesh_count);
-        assert_eq!(app.scene.sprites.len(), 1 + app.npcs.visible_count());
+        assert_eq!(character_sprites(&app).len(), 2 + app.npcs.visible_count());
         assert_eq!(app.remote_players[&9].display_name, "Visitor");
         assert_eq!(app.chat_history.len(), 1);
         let mut commands = Vec::new();
@@ -3086,8 +4896,9 @@ mod tests {
         });
         assert!(app.scene.status_lines.is_empty());
         app.update(frame(2.0), &InputFrame::default());
-        assert!(app.scene.text.is_empty());
-        assert!(app.scene.ui.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(!app.scene.text.iter().any(|run| run.text == "Visitor"));
+        assert!(app.scene.text.iter().any(|run| run.text == "Renamed"));
     }
 
     #[test]
@@ -3156,9 +4967,14 @@ mod tests {
         assert!(!app.chat_open);
         assert!(app.chat_draft.is_empty());
         assert!(app.chat_feedback.is_none());
-        assert!(app.scene.text.is_empty());
-        assert!(app.scene.ui.is_empty());
-        assert!(app.scene.status_lines.is_empty());
+        assert_identity_only_overlay(&app);
+        assert!(
+            app.scene
+                .text
+                .iter()
+                .any(|run| run.text == app.display_name)
+        );
+        assert!(app.scene.text.iter().any(|run| run.text == "Curious Otter"));
         assert_eq!(app.text_input_mode(), TextInputMode::Disabled);
         assert_eq!(app.pointer_mode(), PointerMode::LockedLook);
 
@@ -3230,6 +5046,7 @@ mod tests {
         assert_eq!(
             decode_pose(&golden),
             Some(PlayerPose {
+                seat: None,
                 position,
                 forward: Vec3::new(0.0, 0.0, -1.0),
             })
@@ -3382,8 +5199,8 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            app.scene.camera.eye = position;
-            app.scene.camera.target = position + Vec3::NEG_Z;
+            app.view.player.eye = position;
+            app.view.player.target = position + Vec3::NEG_Z;
             app.queue_local_pose(index as f64);
             let RealtimeCommand::PublishPositionedUnreliable {
                 position: routed,
@@ -3406,8 +5223,8 @@ mod tests {
         let first_sequence = app.next_sequence;
         app.queue_local_pose(0.099);
         assert_eq!(app.next_sequence, first_sequence);
-        app.scene.camera.eye.x = 2.0;
-        app.scene.camera.target.x = 2.0;
+        app.view.player.eye.x = 2.0;
+        app.view.player.target.x = 2.0;
         app.queue_local_pose(0.1);
         assert_eq!(app.pending_publishes.len(), 2);
         assert_eq!(app.pending_publishes.front().unwrap().sequence(), 1);

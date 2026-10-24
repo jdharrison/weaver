@@ -51,6 +51,8 @@ impl FrameTracker {
 ///
 /// Background and scene share optional 4x/8x color and matching depth attachments,
 /// resolved before optional camera motion blur, sharp foreground meshes, and UI/text.
+/// Browsers render into a reduced surface, with overlays retaining full-window
+/// layout coordinates.
 /// For 4-byte color and `Depth32Float`, 4x adds about 28 bytes per surface pixel
 /// over single-sample depth; 8x adds about 60 bytes (excluding the unchanged
 /// swapchain and GPU padding).
@@ -149,18 +151,20 @@ impl WgpuRenderer {
         let sprite_pipeline = SpritePipeline::new(&context.device, format, context.sample_count)?;
         let particle_pipeline =
             ParticlePipeline::new(&context.device, format, context.sample_count)?;
+        // UI layout stays in the physical viewport; text is rasterized directly
+        // at surface resolution with positions mapped from that same viewport.
         let text_pipeline = TextPipeline::new(
             &context.device,
             &context.queue,
             format,
-            context.surface_size.0,
-            context.surface_size.1,
+            context.surface_size.0.max(1),
+            context.surface_size.1.max(1),
         )?;
         let ui_pipeline = UiPipeline::new(
             &context.device,
             format,
-            context.surface_size.0,
-            context.surface_size.1,
+            context.size.0.max(1),
+            context.size.1.max(1),
         )?;
 
         let default_texture =
@@ -385,13 +389,13 @@ impl WgpuRenderer {
         self.msaa_color = create_msaa_color(&self.context);
         self.text_pipeline.resize(
             &self.context.queue,
-            self.context.surface_size.0,
-            self.context.surface_size.1,
+            self.context.surface_size.0.max(1),
+            self.context.surface_size.1.max(1),
         );
         self.ui_pipeline.resize(
             &self.context.queue,
-            self.context.surface_size.0,
-            self.context.surface_size.1,
+            self.context.size.0.max(1),
+            self.context.size.1.max(1),
         );
     }
 
@@ -574,7 +578,7 @@ impl WgpuRenderer {
 
             let mesh_groups = group_mesh_instances(&snapshot.meshes);
             let mut mesh_draws = Vec::new();
-            for ((handle, texture_handle, _sampling_mode), instances) in mesh_groups {
+            for ((handle, texture_handle, _sampling_mode, _render_mode), instances) in mesh_groups {
                 if let Some(mesh) = self.meshes.get(&handle) {
                     let texture = texture_handle
                         .and_then(|handle| {
@@ -586,6 +590,8 @@ impl WgpuRenderer {
                     mesh_draws.push((mesh.clone(), texture, instances));
                 }
             }
+            // The mesh pipeline draws surfaces, then additive meshes in this
+            // same pass before sprites, sharing the established scene depth.
             self.mesh_pipeline.render(
                 &mut pass,
                 &self.context.device,
@@ -649,7 +655,7 @@ impl WgpuRenderer {
                 .as_mut()
                 .expect("foreground pipeline");
             let mut draws = Vec::new();
-            for ((handle, texture_handle, _), instances) in
+            for ((handle, texture_handle, _, _), instances) in
                 group_mesh_instances(&snapshot.foreground_meshes)
             {
                 if let Some(mesh) = self.meshes.get(&handle) {
@@ -741,8 +747,12 @@ impl WgpuRenderer {
         }
 
         // UI and text stay single-sample on the resolved surface, without depth.
-        self.text_pipeline
-            .prepare(&self.context.device, &self.context.queue, &snapshot.text)?;
+        self.text_pipeline.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &snapshot.text,
+            self.context.size,
+        )?;
         let ui_rects: Vec<weaver_render::UiRect> = snapshot
             .ui
             .iter()

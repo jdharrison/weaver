@@ -41,6 +41,23 @@ and [the reviewed web dependency-notice inventory](docs/WEB-LICENSES.md). Web
 packaging now includes the reviewed Rust/WASM notices; native archives still
 require their own target-specific inventory.
 
+## Git LFS assets
+
+Install Git LFS before checking out or building this repository. PNG artwork,
+MP4 media, WASM binaries, and ZIP source packs use LFS from the conversion commit
+onward; older Git history is retained without rewriting published commits.
+After cloning an existing checkout with LFS smudging disabled, run:
+
+```sh
+git lfs install --local
+git lfs pull
+git lfs fsck
+```
+
+Builds require hydrated asset bytes, not LFS pointer files. Each CI checkout of
+Weaver enables `lfs: true`. Push with the installed LFS pre-push hook enabled so
+asset objects are uploaded before the branch revision becomes available.
+
 ## Workspace layout
 
 ```text
@@ -127,8 +144,8 @@ Lab and Space Lab remain offline until they opt into the same realtime seam.
 First-Person Lab captures the pointer on click, uses mouse look, and supports
 `WASD` or arrow-key movement bounded to the enclosed room. `Enter` opens room
 chat and releases pointer lock; typing owns movement keys, `Enter` sends, and
-`Escape` cancels. New visitors start with a shared two-adjective name such as
-`BrightCalm`. Use `/name Your Name` to change this untrusted display name; the
+`Escape` cancels. New visitors start with a random `Adjective Noun` name such as
+`Bright Otter`. Use `/name Your Name` to change this untrusted display name; the
 browser's expandable **WVR / FIRST-PERSON LAB** settings expose the same setting
 and advanced Woven connection controls. Connection/error/retry status remains
 visible while settings are closed. Browser guest names and UUIDv4 IDs are stored once in origin-local
@@ -159,17 +176,34 @@ Legacy JSON poses remain receive-only compatibility traffic.
 Shared identity helpers live in `weaver-core`:
 
 ```rust
-let name = weaver_core::generate_user_name(2, "", "")?;
+let name = weaver_core::generate_guest_name();
 let user_id = weaver_core::generate_user_id(); // Fresh UUIDv4; persist it once for stability.
 ```
 
-The browser platform exposes the same Rust implementation as
-`GenerateUserName(adjectives = 2, prefix = "", postfix = "")` and `GenerateUserID()`.
-Names contain distinct CamelCase adjectives (no noun), with configurable affixes;
-counts and affixes are bounded. Names can collide; UUIDv4 collision probability is
-negligible but not mathematically zero. Admission request IDs are separately generated
-for each attempt, never reused from the persisted guest ID. Native lab names default
-to the same two-adjective generator and retain `FIRST_PERSON_DISPLAY_NAME` overrides.
+The browser platform exposes the same Rust implementation as `GenerateGuestName()`
+and `GenerateUserID()`. Guest names use two secure UUID random selections from the
+friendly adjective and noun dictionaries, separated by one space (at most 17 ASCII
+bytes). The compatibility API `GenerateUserName(adjectives = 2, prefix = "", postfix = "")`
+(and Rust `generate_user_name`) retains its distinct CamelCase adjectives, bounded
+counts, and configurable affixes unchanged. Names can collide; UUIDv4 collision
+probability is negligible but not mathematically zero. Admission request IDs are
+separately generated for each attempt, never reused from the persisted guest ID.
+Native lab names use the same guest generator and retain `FIRST_PERSON_DISPLAY_NAME`
+and other explicit valid custom names unchanged.
+
+Existing `weaver.user-profile.v1` browser records retain their valid UUIDs. On first
+load, only names recognized by `IsLegacyUserName` / `is_legacy_user_name` as exact
+concatenations of two **distinct** old dictionary adjectives are regenerated.
+Arbitrary CamelCase handles are not migrated. Old records have no provenance: a
+custom name exactly matching that legacy pattern is indistinguishable and will
+also migrate. Saved profiles now include `nameFormatVersion: 2`, so this check runs
+only once with working storage; subsequent custom names, even `BrightCalm`, survive
+reloads. Blocked storage leaves the profile page-local, as before.
+
+The five scripted NPC names are authored once in `assets/npcs.json`: **Curious Otter**,
+**Gentle Falcon**, **Sunny Panda**, **Brave Robin**, and **Merry Fox**. All clients use
+these same names; avatar IDs and schedules are unchanged. Names are display labels,
+not reserved identities: generated players can collide with NPCs or other players.
 
 Three seconds after a successful room connection, both desktop and browser shells
 attempt one `logger.info` message:

@@ -23,6 +23,7 @@ pub struct WgpuContextConfig {
     /// adapter-specific format features when available.
     pub requested_sample_count: u32,
     /// Requested static-texture anisotropy, clamped to 1..=16 and capability-gated.
+    /// Defaults to 4 in browsers and 8 on native targets.
     pub requested_anisotropy: u16,
 }
 
@@ -35,7 +36,7 @@ impl Default for WgpuContextConfig {
             desired_format: None,
             present_mode: wgpu::PresentMode::AutoVsync,
             requested_sample_count: 4,
-            requested_anisotropy: 8,
+            requested_anisotropy: if cfg!(target_arch = "wasm32") { 4 } else { 8 },
         }
     }
 }
@@ -54,10 +55,10 @@ pub struct WgpuContext {
     pub surface_config: SurfaceConfiguration,
     /// Surface.
     pub surface: wgpu::Surface<'static>,
-    /// Logical window size in pixels.
+    /// Full window size in physical pixels, used for projection and overlay layout.
     pub size: (u32, u32),
-    /// Actual surface texture size in pixels, clamped to the device's maximum
-    /// supported 2D texture dimension.
+    /// Actual surface texture size in pixels. Browsers fit within 1920×1080
+    /// (or 1080×1920 in portrait), preserving aspect; native uses the device limit.
     pub surface_size: (u32, u32),
     /// Effective scene samples (1, 4, or 8); UI and text remain single-sample.
     pub sample_count: u32,
@@ -114,7 +115,7 @@ impl WgpuContext {
 
         let max_dim = device.limits().max_texture_dimension_2d;
         let size = (window.inner_size().width, window.inner_size().height);
-        let surface_size = (size.0.max(1).min(max_dim), size.1.max(1).min(max_dim));
+        let surface_size = select_surface_size(size, max_dim, cfg!(target_arch = "wasm32"));
         let surface_caps = surface.get_capabilities(&adapter);
         let format = match config
             .desired_format
@@ -217,7 +218,7 @@ impl WgpuContext {
         }
         let max_dim = self.device.limits().max_texture_dimension_2d;
         self.size = (width, height);
-        self.surface_size = (width.min(max_dim), height.min(max_dim));
+        self.surface_size = select_surface_size(self.size, max_dim, cfg!(target_arch = "wasm32"));
         self.surface_config.width = self.surface_size.0;
         self.surface_config.height = self.surface_size.1;
         self.surface.configure(&self.device, &self.surface_config);
@@ -273,6 +274,26 @@ fn scene_format_flags(
         advertised & format.guaranteed_format_features(enabled).flags
     }
 }
+
+fn select_surface_size(size: (u32, u32), device_limit: u32, browser: bool) -> (u32, u32) {
+    let (width, height) = (size.0.max(1), size.1.max(1));
+    let device_limit = device_limit.max(1);
+    if !browser {
+        return (width.min(device_limit), height.min(device_limit));
+    }
+    // Bound fill rate and MSAA storage independently of HiDPI/Retina scale.
+    let long_edge = f64::from(width.max(height));
+    let short_edge = f64::from(width.min(height));
+    let scale = (1920.0 / long_edge)
+        .min(1080.0 / short_edge)
+        .min(f64::from(device_limit) / long_edge)
+        .min(1.0);
+    (
+        (f64::from(width) * scale).round().max(1.0) as u32,
+        (f64::from(height) * scale).round().max(1.0) as u32,
+    )
+}
+
 fn select_sample_count(
     requested: u32,
     color: wgpu::TextureFormatFeatureFlags,
@@ -382,10 +403,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn modest_quality_defaults() {
+    fn quality_defaults_keep_msaa_with_moderate_browser_filtering() {
         let config = WgpuContextConfig::default();
         assert_eq!(config.requested_sample_count, 4);
-        assert_eq!(config.requested_anisotropy, 8);
+        assert_eq!(
+            config.requested_anisotropy,
+            if cfg!(target_arch = "wasm32") { 4 } else { 8 }
+        );
+    }
+
+    #[test]
+    fn browser_surface_is_bounded_in_both_orientations_without_upscaling() {
+        for (size, expected) in [
+            ((1920, 1080), (1920, 1080)),
+            ((2560, 1440), (1920, 1080)),
+            ((3840, 2160), (1920, 1080)),
+            ((7680, 4320), (1920, 1080)),
+            ((1080, 1920), (1080, 1920)),
+            ((2160, 3840), (1080, 1920)),
+            ((2560, 1080), (1920, 810)),
+            ((1080, 2560), (810, 1920)),
+            ((3440, 1440), (1920, 804)),
+            ((1440, 3440), (804, 1920)),
+            ((2532, 1170), (1920, 887)),
+            ((1170, 2532), (887, 1920)),
+            ((800, 600), (800, 600)),
+            ((600, 800), (600, 800)),
+            ((640, 360), (640, 360)),
+            ((360, 640), (360, 640)),
+        ] {
+            assert_eq!(select_surface_size(size, 8192, true), expected);
+        }
+    }
+
+    #[test]
+    fn browser_surface_respects_device_limits_and_preserves_aspect() {
+        for size in [(2532, 1170), (1170, 2532), (1919, 1079)] {
+            for device_limit in [128, 512, 8192] {
+                let (width, height) = select_surface_size(size, device_limit, true);
+                assert!(width >= 1 && height >= 1);
+                assert!(width.max(height) <= 1920.min(device_limit));
+                assert!(width.min(height) <= 1080.min(device_limit));
+                assert!(width <= size.0 && height <= size.1);
+                // Each edge rounds by at most half a pixel from the shared scale.
+                let aspect_error = (f64::from(width) * f64::from(size.1)
+                    - f64::from(height) * f64::from(size.0))
+                .abs();
+                assert!(aspect_error <= f64::from(size.0 + size.1) * 0.5);
+            }
+        }
+        assert_eq!(select_surface_size((0, 0), 8192, true), (1, 1));
+        assert_eq!(select_surface_size((u32::MAX, 1), 8192, true), (1920, 1));
+    }
+
+    #[test]
+    fn native_surface_retains_full_resolution_up_to_the_device_limit() {
+        assert_eq!(select_surface_size((3840, 2160), 8192, false), (3840, 2160));
+        assert_eq!(select_surface_size((9000, 2160), 8192, false), (8192, 2160));
+        assert_eq!(select_surface_size((0, 0), 8192, false), (1, 1));
     }
 
     #[test]

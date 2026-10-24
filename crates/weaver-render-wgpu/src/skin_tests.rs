@@ -133,7 +133,8 @@ fn headless_skin_palettes_survive_multiple_draws_and_reuse() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    for frame in 0..2 {
+    // Exercise both blend pipelines while reusing the same palette/instance slots.
+    for frame in 0..4 {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         for draw in 0..2 {
             let mut palette = vec![Mat4::IDENTITY; 74];
@@ -141,6 +142,11 @@ fn headless_skin_palettes_survive_multiple_draws_and_reuse() {
                 Mat4::from_translation(Vec3::new(if draw == 0 { -0.5 } else { 0.5 }, 0.0, 0.0));
             let mut instance = MeshInstance::new(MeshHandle::new(), RenderTransform::IDENTITY);
             instance.skin = Some(palette.into());
+            instance.render_mode = if frame < 2 {
+                MeshRenderMode::Surface
+            } else {
+                MeshRenderMode::Additive
+            };
             let red = (draw + frame) % 2 == 0;
             instance.color = if red {
                 [1.0, 0.0, 0.0, 1.0]
