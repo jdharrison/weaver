@@ -2,6 +2,8 @@
 
 #![warn(missing_docs)]
 
+mod performance;
+
 use glam::Vec2;
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,6 +32,9 @@ pub struct DesktopConfig {
     pub requested_sample_count: u32,
     /// Static-texture anisotropy, clamped to 1..=16 and capability-gated.
     pub requested_anisotropy: u16,
+    /// Emit bounded, once-per-second CPU wall-time and mesh summaries to stderr.
+    /// Timings include waits (including vsync), not GPU timestamps.
+    pub performance_logging: bool,
 }
 
 impl Default for DesktopConfig {
@@ -40,6 +45,7 @@ impl Default for DesktopConfig {
             present_mode: wgpu::PresentMode::AutoVsync,
             requested_sample_count: 4,
             requested_anisotropy: 8,
+            performance_logging: false,
         }
     }
 }
@@ -284,6 +290,7 @@ impl GameplayRouting {
         }
         let button = match key {
             PhysicalKey::Code(KeyCode::KeyB) => &mut input.menu_toggle,
+            PhysicalKey::Code(KeyCode::Tab) => &mut input.scoreboard,
             PhysicalKey::Code(KeyCode::Enter) => &mut input.menu_confirm,
             PhysicalKey::Code(KeyCode::Backspace) => &mut input.menu_secondary,
             _ => return,
@@ -351,6 +358,7 @@ fn reset_controls(input: &mut InputFrame) {
     input.interact = ButtonState::default();
     input.pause = ButtonState::default();
     input.menu_toggle = ButtonState::default();
+    input.scoreboard = ButtonState::default();
     input.menu_confirm = ButtonState::default();
     input.menu_cancel = ButtonState::default();
     input.menu_secondary = ButtonState::default();
@@ -386,6 +394,7 @@ struct DesktopShell {
     last_text_input_mode: TextInputMode,
     started_at: Instant,
     last_frame: Instant,
+    performance: performance::PerformanceLog,
 }
 
 impl DesktopShell {
@@ -421,6 +430,7 @@ impl DesktopShell {
             last_text_input_mode: TextInputMode::Disabled,
             started_at: now,
             last_frame: now,
+            performance: performance::PerformanceLog::new(config.performance_logging),
         }
     }
 
@@ -509,6 +519,17 @@ impl DesktopShell {
         self.input.clear_transient();
         self.sync_input_modes();
         self.app.exit_requested()
+    }
+
+    fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.app.pointer_mode() != PointerMode::None
+            && self.app.text_input_mode() != TextInputMode::Focused
+        {
+            self.input.zoom_delta += match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(position) => position.y as f32 * 0.02,
+            };
+        }
     }
 
     fn movement_key(&mut self, key: PhysicalKey, pressed: bool) {
@@ -727,15 +748,7 @@ impl ApplicationHandler for DesktopShell {
                 self.cursor_moved(Vec2::new(position.x as f32, position.y as f32));
             }
             WindowEvent::CursorLeft { .. } => self.cursor_left(),
-            WindowEvent::MouseWheel { delta, .. }
-                if self.app.pointer_mode() != PointerMode::None
-                    && self.app.text_input_mode() != TextInputMode::Focused =>
-            {
-                self.input.zoom_delta += match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(position) => position.y as f32 * 0.02,
-                };
-            }
+            WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
             WindowEvent::Ime(Ime::Commit(text))
                 if self.app.text_input_mode() == TextInputMode::Focused =>
             {
@@ -845,6 +858,7 @@ impl ApplicationHandler for DesktopShell {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
+                self.performance.begin_frame(now);
                 let viewport_size = self.window.as_ref().map_or(glam::UVec2::ZERO, |window| {
                     let size = window.inner_size();
                     glam::UVec2::new(size.width, size.height)
@@ -868,17 +882,31 @@ impl ApplicationHandler for DesktopShell {
                     self.realtime = None;
                 }
                 self.sync_input_modes();
+                let update_start = self.config.performance_logging.then(Instant::now);
                 if self.update_app(frame) {
                     event_loop.exit();
                     return;
                 }
+                let update_time = update_start.map(|start| start.elapsed());
                 if let (Some(window), Some(renderer)) =
                     (self.window.as_ref(), self.renderer.as_mut())
                 {
                     match renderer.render(self.app.scene()) {
                         Ok(render_frame) => {
                             window.pre_present_notify();
+                            let present_start = self.config.performance_logging.then(Instant::now);
                             renderer.present(render_frame);
+                            if let (Some(update), Some(start)) = (update_time, present_start) {
+                                let end = Instant::now();
+                                if let Some(summary) = self.performance.record(
+                                    end,
+                                    update,
+                                    end.duration_since(start),
+                                    renderer.last_frame_stats(),
+                                ) {
+                                    eprintln!("{summary}");
+                                }
+                            }
                         }
                         Err(error) => tracing::error!("render failed: {error}"),
                     }
@@ -922,6 +950,7 @@ mod tests {
     #[test]
     fn desktop_quality_defaults_match_renderer() {
         let desktop = DesktopConfig::default();
+        assert!(!desktop.performance_logging);
         let renderer = weaver_render_wgpu::WgpuContextConfig::default();
         assert_eq!(desktop.requested_sample_count, 4);
         assert_eq!(desktop.requested_anisotropy, 8);
@@ -1861,6 +1890,105 @@ mod tests {
         assert_eq!(input.interact, ButtonState::default());
         assert!(input.controls_reset);
         assert!(input.actions.is_empty() && input.text_events.is_empty());
+    }
+
+    #[test]
+    fn scoreboard_captured_tab_keeps_wheel_deltas_without_pause_or_capture_release() {
+        let mut shell = DesktopShell::new(
+            input_test_app((PointerMode::LockedLook, true, TextInputMode::Disabled)),
+            DesktopConfig::default(),
+            None,
+        );
+        shell.focused = true;
+        shell.cursor_captured = true;
+        let tab = PhysicalKey::Code(KeyCode::Tab);
+        shell
+            .gameplay_routing()
+            .menu_button(&mut shell.input, tab, true, false);
+        shell.mouse_wheel(MouseScrollDelta::LineDelta(0.0, -2.0));
+        shell.mouse_wheel(MouseScrollDelta::PixelDelta(
+            winit::dpi::PhysicalPosition::new(0.0, -50.0),
+        ));
+        assert_eq!(shell.input.zoom_delta, -3.0);
+        assert!(shell.input.scoreboard.held && shell.input.scoreboard.pressed);
+        assert!(shell.cursor_captured);
+        assert_eq!(shell.input.pause, ButtonState::default());
+        assert!(shell.input.actions.is_empty());
+        shell.input.clear_transient();
+        assert_eq!(shell.input.zoom_delta, 0.0);
+        assert!(shell.input.scoreboard.held && !shell.input.scoreboard.pressed);
+        shell.mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0));
+        assert_eq!(shell.input.zoom_delta, 1.0);
+        shell
+            .gameplay_routing()
+            .menu_button(&mut shell.input, tab, false, false);
+        assert!(shell.input.scoreboard.released && !shell.input.scoreboard.held);
+        reset_controls(&mut shell.input);
+        assert_eq!(shell.input.zoom_delta, 0.0);
+    }
+
+    #[test]
+    fn scoreboard_wheel_preserves_existing_free_pointer_and_text_suppression() {
+        for modes in [
+            (PointerMode::None, true, TextInputMode::Disabled),
+            (PointerMode::LockedLook, true, TextInputMode::Focused),
+        ] {
+            let mut shell =
+                DesktopShell::new(input_test_app(modes), DesktopConfig::default(), None);
+            shell.focused = true;
+            shell.mouse_wheel(MouseScrollDelta::LineDelta(0.0, -1.0));
+            assert_eq!(shell.input.zoom_delta, 0.0);
+        }
+    }
+
+    #[test]
+    fn scoreboard_tab_hold_release_reset_and_routing_gates() {
+        for pointer in [
+            PointerMode::None,
+            PointerMode::LockedLook,
+            PointerMode::OrbitDrag,
+        ] {
+            for captured in [false, true] {
+                for enabled in [false, true] {
+                    for focused in [false, true] {
+                        for text_focused in [false, true] {
+                            let routing = GameplayRouting {
+                                pointer,
+                                enabled,
+                                focused,
+                                text_focused,
+                                captured,
+                            };
+                            let allowed = enabled
+                                && focused
+                                && !text_focused
+                                && (pointer == PointerMode::None
+                                    || (pointer == PointerMode::LockedLook && captured));
+                            let mut input = InputFrame::default();
+                            let tab = PhysicalKey::Code(KeyCode::Tab);
+                            routing.menu_button(&mut input, tab, true, true);
+                            assert_eq!(input.scoreboard, ButtonState::default());
+                            routing.menu_button(&mut input, tab, true, false);
+                            assert_eq!(input.scoreboard.pressed, allowed);
+                            input.clear_transient();
+                            routing.menu_button(&mut input, tab, true, true);
+                            routing.menu_button(&mut input, tab, true, false);
+                            assert_eq!(input.scoreboard.held, allowed);
+                            assert!(!input.scoreboard.pressed);
+                            routing.menu_button(&mut input, tab, false, false);
+                            assert_eq!(input.scoreboard.released, allowed);
+                            assert!(!input.scoreboard.held);
+                            routing.menu_button(&mut input, tab, true, false);
+                            reset_controls(&mut input);
+                            assert_eq!(input.scoreboard, ButtonState::default());
+                            assert!(input.controls_reset);
+                            assert_eq!(input.pause, ButtonState::default());
+                            assert!(input.actions.is_empty() && input.text_events.is_empty());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

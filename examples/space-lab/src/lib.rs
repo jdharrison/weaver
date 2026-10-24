@@ -943,9 +943,11 @@ mod tests {
         let (vertices, indices) = build_sphere(1.0, 24, 24);
         assert_eq!(vertices.len(), 25 * 25);
         assert_eq!(indices.len(), 24 * 24 * 6);
-        assert!(indices
-            .iter()
-            .all(|&index| usize::from(index) < vertices.len()));
+        assert!(
+            indices
+                .iter()
+                .all(|&index| usize::from(index) < vertices.len())
+        );
         assert!(vertices.iter().all(|vertex| {
             (Vec3::from_array(vertex.normal).length() - 1.0).abs() < f32::EPSILON * 4.0
         }));

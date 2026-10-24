@@ -178,6 +178,9 @@ pub struct InputFrame {
     /// Desktop menu intents work in `None` or captured `LockedLook`, require window focus,
     /// and are suppressed by focused/pending text input. Repeated key presses are ignored.
     pub menu_toggle: ButtonState,
+    /// Held scoreboard intent (physical Tab on opted-in desktop); same gates as menu toggle.
+    /// Presentation, capture, pause, and game behavior remain application-owned.
+    pub scoreboard: ButtonState,
     /// Generic menu confirm intent (physical Enter on opted-in desktop); same gates as toggle.
     /// Text input takes priority: `Available` opens text input and `Focused` submits it.
     pub menu_confirm: ButtonState,
@@ -215,6 +218,7 @@ impl InputFrame {
         self.interact.clear_transient();
         self.pause.clear_transient();
         self.menu_toggle.clear_transient();
+        self.scoreboard.clear_transient();
         self.menu_confirm.clear_transient();
         self.menu_cancel.clear_transient();
         self.menu_secondary.clear_transient();
@@ -606,6 +610,21 @@ mod tests {
         );
         button.clear_transient();
         assert_eq!(button, ButtonState::default());
+    }
+
+    #[test]
+    fn scoreboard_retains_hold_but_clears_edges() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.scoreboard, ButtonState::default());
+        input.scoreboard.set(true);
+        assert!(input.scoreboard.pressed);
+        input.clear_transient();
+        assert!(input.scoreboard.held);
+        assert!(!input.scoreboard.pressed && !input.scoreboard.released);
+        input.scoreboard.set(false);
+        assert!(!input.scoreboard.held && input.scoreboard.released);
+        input.clear_transient();
+        assert_eq!(input.scoreboard, ButtonState::default());
     }
 
     #[test]

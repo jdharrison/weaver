@@ -963,11 +963,13 @@ mod tests {
             let cube = ObservedCube::new(&state(rate, 1), now, 100.0);
             let timeout = Duration::from_secs(seconds);
             assert_eq!(peer_timeout(rate), timeout);
-            assert!(!cube.is_stale(
-                (now + timeout)
-                    .checked_sub(Duration::from_nanos(1))
-                    .unwrap()
-            ));
+            assert!(
+                !cube.is_stale(
+                    (now + timeout)
+                        .checked_sub(Duration::from_nanos(1))
+                        .unwrap()
+                )
+            );
             assert!(cube.is_stale(now + timeout));
         }
         assert_eq!(peer_timeout(f64::MIN_POSITIVE), Duration::from_secs(30));

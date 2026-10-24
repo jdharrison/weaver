@@ -65,6 +65,8 @@ impl SkinVertex {
 /// A mesh stored on the GPU.
 #[derive(Clone)]
 pub struct GpuMesh {
+    /// Upload-time local bounds; never used to reject animated geometry.
+    pub bounds: Option<crate::culling::MeshBounds>,
     /// Vertex buffer.
     pub vertex_buffer: wgpu::Buffer,
     /// Index buffer.
@@ -138,6 +140,7 @@ impl GpuMesh {
             usage: wgpu::BufferUsages::INDEX,
         });
         Ok(Self {
+            bounds: crate::culling::MeshBounds::from_positions(vertices.iter().map(|v| v.position)),
             vertex_buffer,
             index_buffer,
             index_count: indices.len() as u32,

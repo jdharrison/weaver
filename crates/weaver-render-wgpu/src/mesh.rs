@@ -174,7 +174,9 @@ fn mesh_sampling_groups(
         .map(|group| (MeshSamplingMode::for_fit(group[0].texture_fit), group))
 }
 
-pub(crate) fn group_mesh_instances(instances: &[MeshInstance]) -> MeshGroups {
+pub(crate) fn group_mesh_instances<'a>(
+    instances: impl IntoIterator<Item = &'a MeshInstance>,
+) -> MeshGroups {
     let mut groups = MeshGroups::new();
     for instance in instances {
         groups
@@ -289,6 +291,7 @@ pub struct MeshPipeline {
     clamp_sampler: wgpu::Sampler,
     instance_slots: DrawSlots<InstanceSlot>,
     texture_bindings: TextureBindings<wgpu::TextureView, wgpu::BindGroup>,
+    pub(crate) draw_stats: crate::stats::MeshDrawStats,
 }
 
 impl MeshPipeline {
@@ -457,6 +460,7 @@ impl MeshPipeline {
             clamp_sampler,
             instance_slots: DrawSlots::default(),
             texture_bindings: TextureBindings::new(),
+            draw_stats: crate::stats::MeshDrawStats::default(),
         })
     }
 
@@ -495,6 +499,7 @@ impl MeshPipeline {
         camera_bind_group: &'pass wgpu::BindGroup,
         meshes: &[(GpuMesh, &GpuTexture, Vec<MeshInstance>)],
     ) -> Result<(), WgpuRenderError> {
+        self.draw_stats = crate::stats::MeshDrawStats::default();
         self.texture_bindings.age();
         pass.set_bind_group(0, camera_bind_group, &[]);
 
@@ -612,6 +617,7 @@ impl MeshPipeline {
                     queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&raw));
                     pass.set_bind_group(1, &slot.bind_group, &[]);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..chunk.len() as u32);
+                    self.draw_stats.record(mesh.index_count, chunk.len());
                 }
             }
         }

@@ -82,6 +82,7 @@ pub struct WgpuRenderer {
     video_staging: HashMap<weaver_render::SpriteHandle, crate::external_image::VideoCanvas>,
     default_texture: GpuTexture,
     default_mesh_texture: GpuTexture,
+    last_frame_stats: crate::FrameStats,
 }
 
 impl WgpuRenderer {
@@ -204,6 +205,7 @@ impl WgpuRenderer {
             video_staging: HashMap::new(),
             default_texture,
             default_mesh_texture,
+            last_frame_stats: crate::FrameStats::default(),
         })
     }
 
@@ -408,6 +410,8 @@ impl WgpuRenderer {
         &mut self,
         snapshot: &weaver_render::SceneSnapshot,
     ) -> Result<RenderFrame, WgpuRenderError> {
+        let render_timer = crate::stats::CpuTimer::start();
+        let mut stats = crate::FrameStats::default();
         let mesh_lease = self.frame_tracker.begin()?;
         snapshot
             .validate()
@@ -576,7 +580,22 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
             });
 
-            let mesh_groups = group_mesh_instances(&snapshot.meshes);
+            let prepare_timer = crate::stats::CpuTimer::start();
+            let frustum = crate::culling::Frustum::from_view_projection(view_proj);
+            stats.world_mesh_instances_submitted = snapshot.meshes.len() as u64;
+            let mesh_groups = group_mesh_instances(snapshot.meshes.iter().filter(|instance| {
+                let visible = instance.skin.is_some()
+                    || self.meshes.get(&instance.mesh).is_none_or(|mesh| {
+                        mesh.skin_buffer.is_some()
+                            || frustum.is_visible(mesh.bounds, instance.transform.model_matrix())
+                    });
+                if visible {
+                    stats.world_mesh_instances_visible += 1;
+                } else {
+                    stats.world_mesh_instances_culled += 1;
+                }
+                visible
+            }));
             let mut mesh_draws = Vec::new();
             for ((handle, texture_handle, _sampling_mode, _render_mode), instances) in mesh_groups {
                 if let Some(mesh) = self.meshes.get(&handle) {
@@ -590,6 +609,7 @@ impl WgpuRenderer {
                     mesh_draws.push((mesh.clone(), texture, instances));
                 }
             }
+            stats.cpu_mesh_prepare_time += prepare_timer.elapsed();
             // The mesh pipeline draws surfaces, then additive meshes in this
             // same pass before sprites, sharing the established scene depth.
             self.mesh_pipeline.render(
@@ -654,6 +674,7 @@ impl WgpuRenderer {
                 .foreground_pipeline
                 .as_mut()
                 .expect("foreground pipeline");
+            let prepare_timer = crate::stats::CpuTimer::start();
             let mut draws = Vec::new();
             for ((handle, texture_handle, _, _), instances) in
                 group_mesh_instances(&snapshot.foreground_meshes)
@@ -669,6 +690,7 @@ impl WgpuRenderer {
                     draws.push((mesh.clone(), texture, instances));
                 }
             }
+            stats.cpu_mesh_prepare_time += prepare_timer.elapsed();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sharp-foreground"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -788,12 +810,28 @@ impl WgpuRenderer {
         }
 
         let command_buffer = encoder.finish();
+        stats.world_mesh_draws = self.mesh_pipeline.draw_stats.draws;
+        stats.world_mesh_triangles = self.mesh_pipeline.draw_stats.triangles;
+        if !snapshot.foreground_meshes.is_empty()
+            && let Some(pipeline) = &self.foreground_pipeline
+        {
+            stats.foreground_mesh_draws = pipeline.draw_stats.draws;
+            stats.foreground_mesh_triangles = pipeline.draw_stats.triangles;
+        }
+        stats.cpu_render_time = render_timer.elapsed();
+        self.last_frame_stats = stats;
         Ok(RenderFrame {
             surface_texture,
             command_buffer,
             _mesh_lease: mesh_lease,
             motion_history: pending_history,
         })
+    }
+
+    /// Statistics for the last successfully encoded frame (zero before the first).
+    /// Failed renders preserve the previous stats; present/GPU time is not measured.
+    pub fn last_frame_stats(&self) -> &crate::FrameStats {
+        &self.last_frame_stats
     }
 
     /// Submit a rendered frame.

@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 pub mod context;
+pub mod culling;
 pub mod error;
 pub mod external_image;
 pub mod mesh;
@@ -16,6 +17,7 @@ pub mod pipeline;
 pub mod render;
 pub mod resource;
 pub mod sprite;
+pub mod stats;
 pub mod text;
 pub mod ui;
 
@@ -23,3 +25,4 @@ pub use context::{HeadlessContext, RenderSurface, WgpuContext, WgpuContextConfig
 pub use error::WgpuRenderError;
 pub use render::{RenderFrame, WgpuRenderer};
 pub use resource::{GpuMesh, GpuTexture, SkinVertex, Vertex};
+pub use stats::FrameStats;
