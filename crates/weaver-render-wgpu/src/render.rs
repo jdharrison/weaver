@@ -215,6 +215,19 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Register immutable geometry and an optional eight-influence skin stream.
+    pub fn upload_mesh_with_skin(
+        &mut self,
+        handle: weaver_render::MeshHandle,
+        vertices: &[Vertex],
+        indices: &[u16],
+        skin: Option<&[crate::SkinVertex]>,
+    ) -> Result<(), WgpuRenderError> {
+        let mesh = GpuMesh::with_skin(&self.context.device, vertices, indices, skin)?;
+        self.meshes.insert(handle, mesh);
+        Ok(())
+    }
+
     /// Register a static texture with mipmaps and effective anisotropic filtering.
     pub fn upload_texture_rgba(
         &mut self,

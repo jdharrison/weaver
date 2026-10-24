@@ -103,7 +103,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (dot(light_direction, light_direction) > 0.0) {
         to_light = normalize(light_direction);
     }
-    let diff = max(dot(in.normal, to_light), 0.0);
+    let diff = max(dot(normalize(in.normal), to_light), 0.0);
     var image_uv = in.uv;
     if (in.texture_fit.z > 0.5) {
         image_uv = (in.uv - vec2<f32>(0.5)) / in.texture_fit.xy + vec2<f32>(0.5);
@@ -120,6 +120,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(lit + glow, color.a);
 }
 ";
+
+/// Skinned variant shares fragment/material behavior with rigid meshes.
+/// Inverse-transpose of the blended linear transform supports nonuniform scale.
+pub fn skinned_mesh_shader() -> String {
+    MESH_SHADER.replace(
+        "struct VertexInput {",
+        "@group(3) @binding(0) var<uniform> joints: array<mat4x4<f32>, 128>;\nstruct VertexInput {\n    @location(4) joints0: vec4<u32>,\n    @location(5) joints1: vec4<u32>,\n    @location(6) weights0: vec4<f32>,\n    @location(7) weights1: vec4<f32>,"
+    ).replace(
+        "let model = mat4x4<f32>(inst.model_0, inst.model_1, inst.model_2, inst.model_3);",
+        "var skin = joints[input.joints0.x] * input.weights0.x;\n    for (var i = 1u; i < 4u; i += 1u) { skin += joints[input.joints0[i]] * input.weights0[i]; }\n    for (var i = 0u; i < 4u; i += 1u) { skin += joints[input.joints1[i]] * input.weights1[i]; }\n    let model = mat4x4<f32>(inst.model_0, inst.model_1, inst.model_2, inst.model_3) * skin;"
+    ).replace(
+        "out.normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);",
+        "let a = model[0].xyz; let b = model[1].xyz; let c = model[2].xyz;\n    let determinant = dot(a, cross(b, c));\n    let cofactor = mat3x3<f32>(cross(b, c), cross(c, a), cross(a, b));\n    var normal = cofactor * input.normal;\n    if (determinant < 0.0) { normal = -normal; }\n    if (dot(normal, normal) < 1e-20) { normal = input.normal; }\n    out.normal = normalize(normal);"
+    )
+}
 
 /// WGSL sprite shader.
 pub const SPRITE_SHADER: &str = r"

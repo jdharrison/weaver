@@ -22,4 +22,4 @@ pub mod ui;
 pub use context::{HeadlessContext, RenderSurface, WgpuContext, WgpuContextConfig};
 pub use error::WgpuRenderError;
 pub use render::{RenderFrame, WgpuRenderer};
-pub use resource::{GpuMesh, GpuTexture, Vertex};
+pub use resource::{GpuMesh, GpuTexture, SkinVertex, Vertex};

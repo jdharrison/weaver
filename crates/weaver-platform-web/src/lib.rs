@@ -591,8 +591,12 @@ mod browser {
                 }
             };
             for mesh in &self.app.assets().meshes {
-                if let Err(error) = renderer.upload_mesh(mesh.handle, &mesh.vertices, &mesh.indices)
-                {
+                if let Err(error) = renderer.upload_mesh_with_skin(
+                    mesh.handle,
+                    &mesh.vertices,
+                    &mesh.indices,
+                    mesh.skin.as_deref(),
+                ) {
                     report_error(&format!("mesh upload failed: {error}"));
                     event_loop.exit();
                     return;

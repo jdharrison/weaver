@@ -235,6 +235,7 @@ impl From<&MeshInstance> for MeshInstanceRaw {
 
 const _: () = assert!(MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>() <= 16 * 1024);
 
+#[cfg(test)]
 fn mesh_instance_batches(
     instances: &[MeshInstance],
 ) -> impl Iterator<Item = (&[MeshInstance], Vec<MeshInstanceRaw>)> {
@@ -248,6 +249,9 @@ fn mesh_instance_batches(
 /// Mesh rendering pipeline and resources.
 pub struct MeshPipeline {
     pipeline: wgpu::RenderPipeline,
+    skinned_pipeline: wgpu::RenderPipeline,
+    skin_layout: wgpu::BindGroupLayout,
+    skin_slots: DrawSlots<InstanceSlot>,
     _camera_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
@@ -306,48 +310,95 @@ impl MeshPipeline {
             bind_group_layouts: &[&camera_layout, &instance_layout, &texture_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::layout()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                front_face: wgpu::FrontFace::Ccw,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                ..Default::default()
-            },
-            multiview: None,
-            cache: None,
+        let skin_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("skin-palette-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(8192),
+                },
+                count: None,
+            }],
         });
+        let skinned_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("skinned-mesh-layout"),
+            bind_group_layouts: &[
+                &camera_layout,
+                &instance_layout,
+                &texture_layout,
+                &skin_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+        let skinned_shader = create_shader(
+            device,
+            "skinned-mesh-shader",
+            &crate::pipeline::skinned_mesh_shader(),
+        );
+        let make_pipeline = |layout: &wgpu::PipelineLayout,
+                             shader: &wgpu::ShaderModule,
+                             buffers: &[wgpu::VertexBufferLayout<'_>]| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mesh-pipeline"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    // Skinning may reflect geometry during animation. Keep rigid
+                    // culling unchanged; skinned geometry renders both windings.
+                    cull_mode: if buffers.len() > 1 {
+                        None
+                    } else {
+                        Some(wgpu::Face::Back)
+                    },
+                    front_face: wgpu::FrontFace::Ccw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: sample_count,
+                    ..Default::default()
+                },
+                multiview: None,
+                cache: None,
+            })
+        };
 
+        let pipeline = make_pipeline(&pipeline_layout, &shader, &[Vertex::layout()]);
+        let skinned_pipeline = make_pipeline(
+            &skinned_layout,
+            &skinned_shader,
+            &[Vertex::layout(), crate::SkinVertex::layout()],
+        );
         Ok(Self {
             pipeline,
+            skinned_pipeline,
+            skin_layout,
+            skin_slots: DrawSlots::default(),
             _camera_layout: camera_layout,
             instance_layout,
             texture_layout,
@@ -372,6 +423,7 @@ impl MeshPipeline {
     /// Surplus slots are released after 120 idle resets; active slots are retained.
     pub fn reset_instance_slots(&mut self) {
         self.instance_slots.reset();
+        self.skin_slots.reset();
     }
 
     /// Render mesh instances from a snapshot.
@@ -428,7 +480,61 @@ impl MeshPipeline {
             pass.set_bind_group(2, texture_bind_group, &[]);
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            for (chunk, raw) in mesh_instance_batches(instances) {
+            let skinned = mesh.skin_buffer.is_some();
+            pass.set_pipeline(if skinned {
+                &self.skinned_pipeline
+            } else {
+                &self.pipeline
+            });
+            if let Some(buffer) = &mesh.skin_buffer {
+                pass.set_vertex_buffer(1, buffer.slice(..));
+            }
+            let batch_size = if skinned { 1 } else { MAX_INSTANCES };
+            for chunk in instances.chunks(batch_size) {
+                let raw: Vec<_> = chunk.iter().map(MeshInstanceRaw::from).collect();
+                if skinned {
+                    let palette = chunk[0].skin.as_ref().ok_or_else(|| {
+                        WgpuRenderError::Buffer("skinned mesh has no palette".into())
+                    })?;
+                    if palette.len() < mesh.skin_joint_count
+                        || palette.len() > weaver_render::mesh::MAX_SKIN_JOINTS
+                        || palette.iter().any(|m| {
+                            !m.is_finite()
+                                || !m.inverse().is_finite()
+                                || m.x_axis.w != 0.0
+                                || m.y_axis.w != 0.0
+                                || m.z_axis.w != 0.0
+                                || m.w_axis.w != 1.0
+                        })
+                    {
+                        return Err(WgpuRenderError::Buffer("invalid skin palette".into()));
+                    }
+                    let slot = self.skin_slots.next(|| {
+                        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("skin-palette"),
+                            size: 8192,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("skin-palette"),
+                            layout: &self.skin_layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buffer.as_entire_binding(),
+                            }],
+                        });
+                        InstanceSlot { buffer, bind_group }
+                    });
+                    let matrices: Vec<_> =
+                        palette.iter().map(glam::Mat4::to_cols_array_2d).collect();
+                    queue.write_buffer(&slot.buffer, 0, bytemuck::cast_slice(&matrices));
+                    pass.set_bind_group(3, &slot.bind_group, &[]);
+                } else if chunk.iter().any(|instance| instance.skin.is_some()) {
+                    return Err(WgpuRenderError::Buffer(
+                        "palette supplied for rigid geometry".into(),
+                    ));
+                }
                 let slot = self.instance_slots.next(|| {
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("mesh-instances"),
@@ -454,6 +560,10 @@ impl MeshPipeline {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "skin_tests.rs"]
+mod skin_tests;
 
 #[cfg(test)]
 mod tests {

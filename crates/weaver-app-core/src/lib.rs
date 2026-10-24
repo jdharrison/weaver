@@ -3,6 +3,8 @@
 #![warn(missing_docs)]
 
 #[cfg(feature = "glb")]
+pub mod animated_glb;
+#[cfg(feature = "glb")]
 pub mod glb;
 
 use glam::{UVec2, Vec2, Vec3};
@@ -27,6 +29,8 @@ pub struct MeshAsset {
     pub vertices: Vec<Vertex>,
     /// Triangle-list indices.
     pub indices: Vec<u16>,
+    /// Optional eight-influence stream, one entry per vertex.
+    pub skin: Option<Vec<weaver_render_wgpu::SkinVertex>>,
 }
 
 impl MeshAsset {
@@ -37,6 +41,7 @@ impl MeshAsset {
             handle,
             vertices,
             indices,
+            skin: None,
         }
     }
 }
@@ -172,6 +177,9 @@ pub struct InputFrame {
     /// Generic menu confirm intent (physical Enter on opted-in desktop); same gates as toggle.
     /// Text input takes priority: `Available` opens text input and `Focused` submits it.
     pub menu_confirm: ButtonState,
+    /// Escape/back intent for applications opting into `WeaverApp::escape_menu_enabled`.
+    /// Independent of gameplay opt-in and capture; text editing takes priority.
+    pub menu_cancel: ButtonState,
     /// Generic secondary menu intent (physical Backspace on opted-in desktop); same gates as toggle.
     pub menu_secondary: ButtonState,
     /// Last weapon-slot press this frame: slots 1..=10 (desktop digits 1..9, then 0).
@@ -203,6 +211,7 @@ impl InputFrame {
         self.pause.clear_transient();
         self.menu_toggle.clear_transient();
         self.menu_confirm.clear_transient();
+        self.menu_cancel.clear_transient();
         self.menu_secondary.clear_transient();
         self.weapon_slot = None;
         self.controls_reset = false;
@@ -364,6 +373,16 @@ pub trait WeaverApp {
     /// in `LockedLook`, and outside text entry. Other adapters leave them neutral.
     /// Applications own gameplay rules and any fixed-tick edge buffering.
     fn gameplay_input_enabled(&self) -> bool {
+        false
+    }
+    /// Route desktop Escape to `InputFrame::menu_cancel` instead of the legacy
+    /// release-cursor/exit shortcut. Text editing retains priority.
+    fn escape_menu_enabled(&self) -> bool {
+        false
+    }
+    /// Request a graceful native event-loop exit after the next application update.
+    /// Platform shutdown drops the application and its resources normally.
+    fn exit_requested(&self) -> bool {
         false
     }
     /// Current text editing focus requested from the platform shell.

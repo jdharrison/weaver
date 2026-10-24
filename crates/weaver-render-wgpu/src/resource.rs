@@ -37,6 +37,30 @@ impl Vertex {
     }
 }
 
+/// Eight joint influences, in a separate immutable vertex stream.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SkinVertex {
+    /// Palette indices; zero-weight entries must also be valid indices.
+    pub joints: [u16; 8],
+    /// Nonnegative normalized weights.
+    pub weights: [f32; 8],
+}
+
+impl SkinVertex {
+    /// Layout consumed only by the skinned pipeline.
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+            4 => Uint16x4, 5 => Uint16x4, 6 => Float32x4, 7 => Float32x4
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ATTRIBUTES,
+        }
+    }
+}
+
 /// A mesh stored on the GPU.
 #[derive(Clone)]
 pub struct GpuMesh {
@@ -46,9 +70,52 @@ pub struct GpuMesh {
     pub index_buffer: wgpu::Buffer,
     /// Number of indices.
     pub index_count: u32,
+    /// Optional immutable eight-influence buffer.
+    pub skin_buffer: Option<wgpu::Buffer>,
+    /// Minimum palette length required by the uploaded stream.
+    pub skin_joint_count: usize,
 }
 
 impl GpuMesh {
+    /// Upload geometry with an optional skin stream. Invalid influences are rejected.
+    pub fn with_skin(
+        device: &wgpu::Device,
+        vertices: &[Vertex],
+        indices: &[u16],
+        skin: Option<&[SkinVertex]>,
+    ) -> Result<Self, WgpuRenderError> {
+        let mut joint_count = 0;
+        if let Some(skin) = skin {
+            if skin.len() != vertices.len() || skin.is_empty() {
+                return Err(WgpuRenderError::Buffer("skin/vertex count mismatch".into()));
+            }
+            for vertex in skin {
+                let sum: f32 = vertex.weights.iter().sum();
+                if vertex.weights.iter().any(|w| !w.is_finite() || *w < 0.0)
+                    || (sum - 1.0).abs() > 0.001
+                    || vertex
+                        .joints
+                        .iter()
+                        .any(|j| usize::from(*j) >= weaver_render::mesh::MAX_SKIN_JOINTS)
+                {
+                    return Err(WgpuRenderError::Buffer("invalid skin influences".into()));
+                }
+                joint_count =
+                    joint_count.max(usize::from(*vertex.joints.iter().max().unwrap()) + 1);
+            }
+        }
+        let mut mesh = Self::new(device, vertices, indices)?;
+        mesh.skin_joint_count = joint_count;
+        mesh.skin_buffer = skin.map(|skin| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh-skin-vertices"),
+                contents: bytemuck::cast_slice(skin),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+        Ok(mesh)
+    }
+
     /// Upload a mesh to the GPU.
     ///
     /// # Errors
@@ -73,6 +140,8 @@ impl GpuMesh {
             vertex_buffer,
             index_buffer,
             index_count: indices.len() as u32,
+            skin_buffer: None,
+            skin_joint_count: 0,
         })
     }
 }

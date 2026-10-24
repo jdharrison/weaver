@@ -5,6 +5,9 @@ use crate::{RenderResourceId, RenderTransform, SpriteHandle};
 /// Handle to a mesh resource owned by the renderer backend.
 pub type MeshHandle = RenderResourceId;
 
+/// Portable palette bound: 128 position matrices consume 8 KiB of uniform storage.
+pub const MAX_SKIN_JOINTS: usize = 128;
+
 /// Independent point lighting for a mesh instance, without distance attenuation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshLighting {
@@ -35,6 +38,9 @@ pub struct MeshTextureFit {
 pub struct MeshInstance {
     /// Mesh resource.
     pub mesh: MeshHandle,
+    /// Bind-space to actor-local joint matrices; shared by chunks, not mutable actor state.
+    /// At most `MAX_SKIN_JOINTS` finite, invertible affine matrices.
+    pub skin: Option<std::sync::Arc<[glam::Mat4]>>,
     /// Optional color texture. `None` uses solid white.
     pub texture: Option<SpriteHandle>,
     /// Optional centered contain fit with opaque black bars. `None` preserves
@@ -57,6 +63,7 @@ impl MeshInstance {
     pub const fn new(mesh: MeshHandle, transform: RenderTransform) -> Self {
         Self {
             mesh,
+            skin: None,
             texture: None,
             texture_fit: None,
             transform,

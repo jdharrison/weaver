@@ -122,11 +122,11 @@ impl fmt::Display for GlbError {
 
 impl std::error::Error for GlbError {}
 
-fn invalid(message: impl Into<String>) -> GlbError {
+pub(crate) fn invalid(message: impl Into<String>) -> GlbError {
     GlbError::Invalid(message.into())
 }
 
-fn limit(value: usize, maximum: usize, budget: &'static str) -> Result<(), GlbError> {
+pub(crate) fn limit(value: usize, maximum: usize, budget: &'static str) -> Result<(), GlbError> {
     if value > maximum {
         Err(GlbError::LimitExceeded(budget))
     } else {
@@ -277,6 +277,10 @@ pub fn load_glb_with_options(bytes: &[u8], options: &GlbOptions) -> Result<GlbMo
 }
 
 fn validate_root(root: &gltf::json::Root) -> Result<(), GlbError> {
+    validate_root_mode(root, false)
+}
+
+pub(crate) fn validate_root_mode(root: &gltf::json::Root, animated: bool) -> Result<(), GlbError> {
     // Check u64 quantities before gltf converts them to usize (also on WASM32).
     let bounded_bytes = |value: u64| -> Result<(), GlbError> {
         if value > MAX_INPUT_BYTES as u64 {
@@ -332,12 +336,12 @@ fn validate_root(root: &gltf::json::Root) -> Result<(), GlbError> {
             )));
         }
     }
-    if !root.animations.is_empty() {
+    if !animated && !root.animations.is_empty() {
         return Err(GlbError::Unsupported(
             "animations (static assets only)".into(),
         ));
     }
-    if !root.skins.is_empty() || root.nodes.iter().any(|node| node.skin.is_some()) {
+    if !animated && (!root.skins.is_empty() || root.nodes.iter().any(|node| node.skin.is_some())) {
         return Err(GlbError::Unsupported(
             "skinning (static assets only)".into(),
         ));
@@ -399,6 +403,14 @@ fn validate_root(root: &gltf::json::Root) -> Result<(), GlbError> {
 }
 
 fn validate_storage<'a>(document: &Document, blob: &'a [u8]) -> Result<&'a [u8], GlbError> {
+    validate_storage_mode(document, blob, false)
+}
+
+pub(crate) fn validate_storage_mode<'a>(
+    document: &Document,
+    blob: &'a [u8],
+    animated: bool,
+) -> Result<&'a [u8], GlbError> {
     let buffer = document
         .buffers()
         .next()
@@ -428,8 +440,14 @@ fn validate_storage<'a>(document: &Document, blob: &'a [u8]) -> Result<&'a [u8],
         if matches!(
             accessor.dimensions(),
             Dimensions::Mat2 | Dimensions::Mat3 | Dimensions::Mat4
-        ) {
-            return Err(GlbError::Unsupported("matrix accessors".into()));
+        ) && (!animated
+            || accessor.dimensions() != Dimensions::Mat4
+            || accessor.data_type() != DataType::F32
+            || accessor.normalized())
+        {
+            return Err(GlbError::Unsupported(
+                "matrix accessors other than float MAT4 inverse binds".into(),
+            ));
         }
         let view = accessor
             .view()
@@ -494,7 +512,7 @@ fn validate_static_content(document: &Document) -> Result<(), GlbError> {
     Ok(())
 }
 
-fn node_matrix(node: &gltf::Node<'_>) -> Result<DMat4, GlbError> {
+pub(crate) fn node_matrix(node: &gltf::Node<'_>) -> Result<DMat4, GlbError> {
     if let gltf::scene::Transform::Decomposed { rotation, .. } = node.transform() {
         let length_squared = rotation.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
         if !length_squared.is_finite() || (length_squared - 1.0).abs() > 0.001 {
@@ -513,7 +531,7 @@ fn node_matrix(node: &gltf::Node<'_>) -> Result<DMat4, GlbError> {
     Ok(matrix)
 }
 
-fn validate_primitive(primitive: &Primitive<'_>) -> Result<(usize, usize), GlbError> {
+pub(crate) fn validate_primitive(primitive: &Primitive<'_>) -> Result<(usize, usize), GlbError> {
     let positions = primitive
         .get(&Semantic::Positions)
         .ok_or_else(|| invalid("missing POSITION"))?;
@@ -582,10 +600,10 @@ struct Material {
     texture: Option<SpriteHandle>,
 }
 
-struct Loader<'a> {
+pub(crate) struct Loader<'a> {
     data: &'a [u8],
     options: GlbOptions,
-    model: GlbModel,
+    pub(crate) model: GlbModel,
     image_handles: Vec<Option<SpriteHandle>>,
     seen_materials: HashSet<Option<usize>>,
     output_bytes: usize,
@@ -594,7 +612,35 @@ struct Loader<'a> {
     work_values: usize,
 }
 
-impl Loader<'_> {
+impl<'a> Loader<'a> {
+    pub(crate) fn animated(data: &'a [u8], image_count: usize) -> Self {
+        Self {
+            data,
+            options: GlbOptions::default(),
+            model: GlbModel {
+                assets: AppAssets::default(),
+                instances: Vec::new(),
+                bounds_min: Vec3::splat(f32::INFINITY),
+                bounds_max: Vec3::splat(f32::NEG_INFINITY),
+                warnings: Vec::new(),
+            },
+            image_handles: vec![None; image_count],
+            seen_materials: HashSet::new(),
+            output_bytes: 0,
+            work_vertices: 0,
+            work_indices: 0,
+            work_values: 0,
+        }
+    }
+
+    pub(crate) fn animated_primitive(
+        &mut self,
+        primitive: &Primitive<'_>,
+        skin: Option<&[weaver_render_wgpu::SkinVertex]>,
+    ) -> Result<(), GlbError> {
+        self.primitive_inner(primitive, DMat4::IDENTITY, DMat3::IDENTITY, false, skin)
+    }
+
     fn charge_output(&mut self, bytes: usize) -> Result<(), GlbError> {
         self.output_bytes = self
             .output_bytes
@@ -603,12 +649,23 @@ impl Loader<'_> {
         limit(self.output_bytes, MAX_OUTPUT_BYTES, "output bytes")
     }
 
-    fn primitive(
+    pub(crate) fn primitive(
         &mut self,
         primitive: &Primitive<'_>,
         world: DMat4,
         normal_matrix: DMat3,
         mirrored: bool,
+    ) -> Result<(), GlbError> {
+        self.primitive_inner(primitive, world, normal_matrix, mirrored, None)
+    }
+
+    fn primitive_inner(
+        &mut self,
+        primitive: &Primitive<'_>,
+        world: DMat4,
+        normal_matrix: DMat3,
+        mirrored: bool,
+        skin: Option<&[weaver_render_wgpu::SkinVertex]>,
     ) -> Result<(), GlbError> {
         let (vertex_count, index_count) = validate_primitive(primitive)?;
         self.work_vertices += vertex_count;
@@ -711,6 +768,8 @@ impl Loader<'_> {
                     | Semantic::Normals
                     | Semantic::TexCoords(0)
                     | Semantic::Colors(0)
+                    | Semantic::Joints(0..=1)
+                    | Semantic::Weights(0..=1)
             ) {
                 // Validate ignored float attributes too, without hand-decoding data.
                 validate_finite_attribute(accessor, data)?;
@@ -753,7 +812,7 @@ impl Loader<'_> {
                 );
             }
         }
-        self.chunks(&vertices, &indices, material)
+        self.chunks(&vertices, &indices, material, skin)
     }
 
     fn material(&mut self, material: &gltf::Material<'_>) -> Result<Material, GlbError> {
@@ -877,7 +936,9 @@ impl Loader<'_> {
         source: &[Vertex],
         indices: &[u32],
         material: Material,
+        skin: Option<&[weaver_render_wgpu::SkinVertex]>,
     ) -> Result<(), GlbError> {
+        let mut skin_vertices = Vec::new();
         let mut remap = HashMap::<u32, u16>::new();
         let mut vertices = Vec::new();
         let mut output_indices = Vec::new();
@@ -894,6 +955,7 @@ impl Loader<'_> {
                     std::mem::take(&mut vertices),
                     std::mem::take(&mut output_indices),
                     material,
+                    skin.map(|_| std::mem::take(&mut skin_vertices)),
                 )?;
                 remap.clear();
                 needed = triangle
@@ -903,7 +965,12 @@ impl Loader<'_> {
                     .count();
             }
             // Charge before extending output vectors, including duplicated seam vertices.
-            self.charge_output(needed * size_of::<Vertex>() + 3 * size_of::<u16>())?;
+            self.charge_output(
+                needed
+                    * (size_of::<Vertex>()
+                        + skin.map_or(0, |_| size_of::<weaver_render_wgpu::SkinVertex>()))
+                    + 3 * size_of::<u16>(),
+            )?;
             for &source_index in triangle {
                 let index = if let Some(&index) = remap.get(&source_index) {
                     index
@@ -915,13 +982,21 @@ impl Loader<'_> {
                     self.model.bounds_min = self.model.bounds_min.min(position);
                     self.model.bounds_max = self.model.bounds_max.max(position);
                     vertices.push(vertex);
+                    if let Some(skin) = skin {
+                        skin_vertices.push(skin[source_index as usize]);
+                    }
                     remap.insert(source_index, index);
                     index
                 };
                 output_indices.push(index);
             }
         }
-        self.finish_chunk(vertices, output_indices, material)
+        self.finish_chunk(
+            vertices,
+            output_indices,
+            material,
+            skin.map(|_| skin_vertices),
+        )
     }
 
     fn finish_chunk(
@@ -929,6 +1004,7 @@ impl Loader<'_> {
         vertices: Vec<Vertex>,
         indices: Vec<u16>,
         material: Material,
+        skin: Option<Vec<weaver_render_wgpu::SkinVertex>>,
     ) -> Result<(), GlbError> {
         limit(
             self.model.assets.meshes.len() + 1,
@@ -936,10 +1012,9 @@ impl Loader<'_> {
             "mesh chunks",
         )?;
         let handle = MeshHandle::new();
-        self.model
-            .assets
-            .meshes
-            .push(MeshAsset::new(handle, vertices, indices));
+        let mut asset = MeshAsset::new(handle, vertices, indices);
+        asset.skin = skin;
+        self.model.assets.meshes.push(asset);
         let mut instance = MeshInstance::new(handle, RenderTransform::IDENTITY);
         instance.texture = material.texture;
         instance.color = material.color;
@@ -1052,7 +1127,7 @@ fn image_reader(data: &[u8], format: image::ImageFormat) -> image::ImageReader<C
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::borrow::Cow;
 
     use glam::{Quat, Vec2};
@@ -1061,14 +1136,14 @@ mod tests {
 
     use super::*;
 
-    struct Fixture {
-        json: Value,
-        bin: Vec<u8>,
-        vertex_count: usize,
+    pub(crate) struct Fixture {
+        pub(crate) json: Value,
+        pub(crate) bin: Vec<u8>,
+        pub(crate) vertex_count: usize,
     }
 
     impl Fixture {
-        fn new(positions: &[[f32; 3]], normal: Option<[f32; 3]>) -> Self {
+        pub(crate) fn new(positions: &[[f32; 3]], normal: Option<[f32; 3]>) -> Self {
             let mut fixture = Self {
                 json: json!({
                     "asset": { "version": "2.0" },
@@ -1101,7 +1176,7 @@ mod tests {
             fixture
         }
 
-        fn triangle() -> Self {
+        pub(crate) fn triangle() -> Self {
             Self::new(
                 &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 Some([0.0, 0.0, 1.0]),
@@ -1122,7 +1197,7 @@ mod tests {
             index
         }
 
-        fn accessor(
+        pub(crate) fn accessor(
             &mut self,
             data: &[u8],
             count: usize,
@@ -1136,7 +1211,11 @@ mod tests {
             index
         }
 
-        fn floats<const N: usize>(&mut self, values: &[[f32; N]], dimensions: &str) -> usize {
+        pub(crate) fn floats<const N: usize>(
+            &mut self,
+            values: &[[f32; N]],
+            dimensions: &str,
+        ) -> usize {
             let bytes: Vec<_> = values
                 .iter()
                 .flatten()
@@ -1145,11 +1224,11 @@ mod tests {
             self.accessor(&bytes, values.len(), 5126, dimensions)
         }
 
-        fn attribute(&mut self, name: &str, accessor: usize) {
+        pub(crate) fn attribute(&mut self, name: &str, accessor: usize) {
             self.json["meshes"][0]["primitives"][0]["attributes"][name] = json!(accessor);
         }
 
-        fn indices(&mut self, indices: &[u32], component: u32) {
+        pub(crate) fn indices(&mut self, indices: &[u32], component: u32) {
             let mut data = Vec::new();
             for &index in indices {
                 match component {
@@ -1163,7 +1242,7 @@ mod tests {
             self.json["meshes"][0]["primitives"][0]["indices"] = json!(accessor);
         }
 
-        fn texture(&mut self, format: ImageFormat) {
+        pub(crate) fn texture(&mut self, format: ImageFormat) {
             let uv = self.floats(&vec![[0.25, 0.75]; self.vertex_count], "VEC2");
             self.attribute("TEXCOORD_0", uv);
             let mut encoded = Vec::new();
@@ -1251,7 +1330,7 @@ mod tests {
             self.bin[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
 
-        fn bytes(&self) -> Vec<u8> {
+        pub(crate) fn bytes(&self) -> Vec<u8> {
             gltf::binary::Glb {
                 header: gltf::binary::Header {
                     magic: *b"glTF",

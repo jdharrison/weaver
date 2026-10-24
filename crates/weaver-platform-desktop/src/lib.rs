@@ -330,6 +330,7 @@ fn reset_controls(input: &mut InputFrame) {
     input.pause = ButtonState::default();
     input.menu_toggle = ButtonState::default();
     input.menu_confirm = ButtonState::default();
+    input.menu_cancel = ButtonState::default();
     input.menu_secondary = ButtonState::default();
     input.weapon_slot = None;
     input.controls_reset = true;
@@ -356,6 +357,7 @@ struct DesktopShell {
     cursor_captured: bool,
     blocked_until_left_release: bool,
     left_held: bool,
+    escape_held: bool,
     focused: bool,
     last_pointer_mode: PointerMode,
     last_gameplay_enabled: bool,
@@ -390,6 +392,7 @@ impl DesktopShell {
             cursor_captured: false,
             blocked_until_left_release: false,
             left_held: false,
+            escape_held: false,
             focused: false,
             last_pointer_mode,
             last_gameplay_enabled,
@@ -445,6 +448,45 @@ impl DesktopShell {
             self.last_cursor = self.cursor_position;
         }
         routing.left_button(&mut self.input, pressed)
+    }
+
+    /// Returns true only for the legacy uncaptured Escape-to-exit shortcut.
+    fn escape_key(&mut self, pressed: bool, repeat: bool) -> bool {
+        if !pressed {
+            self.escape_held = false;
+            self.input.menu_cancel.set(false);
+            return false;
+        }
+        if repeat || self.escape_held {
+            return false;
+        }
+        // Keep the physical hold separate from frame controls: changing pointer
+        // modes resets those controls but must not turn a held Escape into a press.
+        self.escape_held = true;
+        if !self.focused || self.gameplay_routing().text_focused {
+            return false;
+        }
+        if self.app.escape_menu_enabled() {
+            if self.cursor_captured {
+                self.release_cursor();
+            }
+            self.input.menu_cancel.set(true);
+            false
+        } else if self.cursor_captured {
+            self.release_cursor();
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Exit is checked before rendering another frame; no process termination is
+    /// used, so the window, realtime driver and application are dropped normally.
+    fn update_app(&mut self, frame: FrameContext) -> bool {
+        self.app.update(frame, &self.input);
+        self.input.clear_transient();
+        self.sync_input_modes();
+        self.app.exit_requested()
     }
 
     fn movement_key(&mut self, key: PhysicalKey, pressed: bool) {
@@ -585,7 +627,12 @@ impl ApplicationHandler for DesktopShell {
             }
         };
         for mesh in &self.app.assets().meshes {
-            if let Err(error) = renderer.upload_mesh(mesh.handle, &mesh.vertices, &mesh.indices) {
+            if let Err(error) = renderer.upload_mesh_with_skin(
+                mesh.handle,
+                &mesh.vertices,
+                &mesh.indices,
+                mesh.skin.as_deref(),
+            ) {
                 self.fail(event_loop, DesktopError::Renderer(error.to_string()));
                 return;
             }
@@ -623,6 +670,7 @@ impl ApplicationHandler for DesktopShell {
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 if !focused {
+                    self.escape_held = false;
                     self.input = InputFrame::default();
                     self.release_cursor();
                 }
@@ -682,6 +730,10 @@ impl ApplicationHandler for DesktopShell {
                 ..
             } => {
                 let pressed = state == ElementState::Pressed;
+                if !pressed && logical_key == Key::Named(NamedKey::Escape) {
+                    self.escape_key(false, repeat);
+                    return;
+                }
                 let text_mode = self.app.text_input_mode();
                 if pressed && !repeat && logical_key == Key::Named(NamedKey::Enter) {
                     match text_mode {
@@ -716,10 +768,8 @@ impl ApplicationHandler for DesktopShell {
                     }
                     return;
                 }
-                if pressed && logical_key == Key::Named(NamedKey::Escape) {
-                    if self.cursor_captured {
-                        self.release_cursor();
-                    } else {
+                if logical_key == Key::Named(NamedKey::Escape) {
+                    if self.escape_key(pressed, repeat) {
                         event_loop.exit();
                     }
                     return;
@@ -771,9 +821,10 @@ impl ApplicationHandler for DesktopShell {
                     self.realtime = None;
                 }
                 self.sync_input_modes();
-                self.app.update(frame, &self.input);
-                self.input.clear_transient();
-                self.sync_input_modes();
+                if self.update_app(frame) {
+                    event_loop.exit();
+                    return;
+                }
                 if let (Some(window), Some(renderer)) =
                     (self.window.as_ref(), self.renderer.as_mut())
                 {
@@ -792,6 +843,7 @@ impl ApplicationHandler for DesktopShell {
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
         self.focused = false;
+        self.escape_held = false;
         self.release_cursor();
     }
 
@@ -886,6 +938,148 @@ mod tests {
                 }
             }));
         }
+    }
+
+    struct MenuTestApp {
+        base: Box<dyn WeaverApp>,
+        exit: bool,
+    }
+
+    impl WeaverApp for MenuTestApp {
+        fn title(&self) -> &str {
+            self.base.title()
+        }
+        fn scene(&self) -> &SceneSnapshot {
+            self.base.scene()
+        }
+        fn scene_mut(&mut self) -> &mut SceneSnapshot {
+            self.base.scene_mut()
+        }
+        fn assets(&self) -> &AppAssets {
+            self.base.assets()
+        }
+        fn pointer_mode(&self) -> PointerMode {
+            self.base.pointer_mode()
+        }
+        fn text_input_mode(&self) -> TextInputMode {
+            self.base.text_input_mode()
+        }
+        fn escape_menu_enabled(&self) -> bool {
+            true
+        }
+        fn exit_requested(&self) -> bool {
+            self.exit
+        }
+        fn update(&mut self, _frame: FrameContext, input: &InputFrame) {
+            self.exit |= input.menu_confirm.pressed;
+        }
+    }
+
+    fn menu_test_app(pointer: PointerMode, text: TextInputMode) -> Box<dyn WeaverApp> {
+        Box::new(MenuTestApp {
+            base: input_test_app((pointer, false, text)),
+            exit: false,
+        })
+    }
+
+    #[test]
+    fn escape_menu_routes_without_gameplay_opt_in_and_consumes_capture() {
+        for (pointer, captured) in [
+            (PointerMode::None, false),
+            (PointerMode::LockedLook, false),
+            (PointerMode::LockedLook, true),
+        ] {
+            let mut shell = DesktopShell::new(
+                menu_test_app(pointer, TextInputMode::Disabled),
+                DesktopConfig::default(),
+                None,
+            );
+            shell.focused = true;
+            shell.cursor_captured = captured;
+            shell.input.fire.set(true);
+            assert!(!shell.escape_key(true, false));
+            assert!(shell.input.menu_cancel.pressed);
+            assert!(!shell.cursor_captured);
+            if captured {
+                assert_eq!(shell.input.fire, ButtonState::default());
+            }
+            shell.input.clear_transient();
+            assert!(shell.input.menu_cancel.held);
+            assert!(!shell.input.menu_cancel.pressed);
+            assert!(!shell.escape_key(false, false));
+            assert!(shell.input.menu_cancel.released);
+            reset_controls(&mut shell.input);
+            assert_eq!(shell.input.menu_cancel, ButtonState::default());
+        }
+    }
+
+    #[test]
+    fn escape_menu_held_key_does_not_repeat_across_pointer_transition() {
+        let mut shell = DesktopShell::new(
+            menu_test_app(PointerMode::LockedLook, TextInputMode::Disabled),
+            DesktopConfig::default(),
+            None,
+        );
+        shell.focused = true;
+        shell.cursor_captured = true;
+        assert!(!shell.escape_key(true, false));
+        shell.app = menu_test_app(PointerMode::None, TextInputMode::Disabled);
+        shell.sync_input_modes();
+        assert!(!shell.escape_key(true, true));
+        assert!(!shell.escape_key(true, false));
+        assert!(!shell.input.menu_cancel.pressed);
+        shell.escape_key(false, false);
+        shell.input.clear_transient();
+        assert!(!shell.escape_key(true, false));
+        assert!(shell.input.menu_cancel.pressed);
+    }
+
+    #[test]
+    fn escape_menu_respects_focus_and_pending_or_focused_text() {
+        for (focused, text, pending) in [
+            (false, TextInputMode::Disabled, false),
+            (true, TextInputMode::Focused, false),
+            (true, TextInputMode::Available, true),
+        ] {
+            let mut shell = DesktopShell::new(
+                menu_test_app(PointerMode::None, text),
+                DesktopConfig::default(),
+                None,
+            );
+            shell.focused = focused;
+            if pending {
+                shell.input.text_events.push(TextInputEvent::Open);
+            }
+            assert!(!shell.escape_key(true, false));
+            assert_eq!(shell.input.menu_cancel, ButtonState::default());
+        }
+    }
+
+    #[test]
+    fn escape_menu_is_opt_in_and_legacy_release_then_exit_is_preserved() {
+        let mut shell = capture_test_shell(false);
+        shell.cursor_captured = true;
+        assert!(!shell.escape_key(true, false));
+        assert!(!shell.cursor_captured);
+        assert_eq!(shell.input.menu_cancel, ButtonState::default());
+        assert!(!shell.escape_key(true, true));
+        shell.escape_key(false, false);
+        assert!(shell.escape_key(true, false));
+    }
+
+    #[test]
+    fn application_exit_request_is_observed_after_update_without_a_window() {
+        let mut shell = DesktopShell::new(
+            menu_test_app(PointerMode::None, TextInputMode::Disabled),
+            DesktopConfig::default(),
+            None,
+        );
+        assert!(!shell.update_app(FrameContext::default()));
+        shell.input.menu_confirm.set(true);
+        assert!(shell.update_app(FrameContext::default()));
+        assert!(!shell.input.menu_confirm.pressed);
+        assert!(shell.window.is_none());
+        assert!(shell.renderer.is_none());
     }
 
     struct RealtimeTestDriver {
