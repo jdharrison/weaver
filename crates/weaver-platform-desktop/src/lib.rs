@@ -256,8 +256,13 @@ impl GameplayRouting {
     }
 
     fn debug_action(self, physical_key: PhysicalKey, key: Key<&str>) -> Option<AppAction> {
-        // Reserve physical P even without capture and under alternate keyboard layouts.
-        if self.enabled && physical_key == PhysicalKey::Code(KeyCode::KeyP) {
+        // Reserve gameplay keys even without capture and under alternate layouts.
+        if self.enabled
+            && matches!(
+                physical_key,
+                PhysicalKey::Code(KeyCode::KeyP | KeyCode::Space)
+            )
+        {
             return None;
         }
         match key {
@@ -297,6 +302,21 @@ impl GameplayRouting {
         }
     }
 
+    fn ads(self, input: &mut InputFrame, pressed: bool) {
+        input.aiming_down_sights = self.available() && self.enabled && self.captured && pressed;
+    }
+
+    fn jump(self, input: &mut InputFrame, key: PhysicalKey, pressed: bool, repeat: bool) {
+        if self.available()
+            && self.enabled
+            && self.captured
+            && !repeat
+            && key == PhysicalKey::Code(KeyCode::Space)
+        {
+            input.jump.set(pressed);
+        }
+    }
+
     fn pause(self, input: &mut InputFrame, key: PhysicalKey, pressed: bool, repeat: bool) {
         if self.available()
             && self.enabled
@@ -319,11 +339,13 @@ fn reset_controls(input: &mut InputFrame) {
     input.movement = Vec2::ZERO;
     input.sprint = false;
     input.crouch = false;
+    input.aiming_down_sights = false;
     input.look_delta = Vec2::ZERO;
     input.zoom_delta = 0.0;
     input.toggle_perspective = false;
     input.pointer_position = None;
     input.pointer_primary = ButtonState::default();
+    input.jump = ButtonState::default();
     input.fire = ButtonState::default();
     input.reload = ButtonState::default();
     input.interact = ButtonState::default();
@@ -703,6 +725,14 @@ impl ApplicationHandler for DesktopShell {
                 self.input.toggle_perspective = !self.input.toggle_perspective;
             }
             WindowEvent::MouseInput {
+                button: MouseButton::Right,
+                state,
+                ..
+            } => {
+                self.gameplay_routing()
+                    .ads(&mut self.input, state == ElementState::Pressed);
+            }
+            WindowEvent::MouseInput {
                 button: MouseButton::Left,
                 state,
                 ..
@@ -786,6 +816,8 @@ impl ApplicationHandler for DesktopShell {
                     .interact(&mut self.input, physical_key, pressed, repeat);
                 self.gameplay_routing()
                     .pause(&mut self.input, physical_key, pressed, repeat);
+                self.gameplay_routing()
+                    .jump(&mut self.input, physical_key, pressed, repeat);
                 self.movement_key(physical_key, pressed);
                 if pressed {
                     let action = self
@@ -1572,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_physical_p_suppresses_debug_actions_even_without_capture() {
+    fn gameplay_physical_p_and_space_suppress_debug_actions() {
         for captured in [false, true] {
             for enabled in [false, true] {
                 let routing = GameplayRouting {
@@ -1599,10 +1631,78 @@ mod tests {
                         PhysicalKey::Code(KeyCode::Space),
                         Key::Named(NamedKey::Space)
                     ),
-                    Some(AppAction::TogglePause)
+                    (!enabled).then_some(AppAction::TogglePause)
                 );
             }
         }
+    }
+
+    #[test]
+    fn ads_maps_held_right_mouse_only_in_captured_gameplay_and_clears_on_reset() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        let mut input = InputFrame::default();
+        routing.ads(&mut input, true);
+        assert!(input.aiming_down_sights);
+        routing.ads(&mut input, false);
+        assert!(!input.aiming_down_sights);
+        reset_controls(&mut input);
+        assert!(!input.aiming_down_sights);
+
+        for routing in [
+            GameplayRouting {
+                captured: false,
+                ..routing
+            },
+            GameplayRouting {
+                enabled: false,
+                ..routing
+            },
+            GameplayRouting {
+                focused: false,
+                ..routing
+            },
+        ] {
+            routing.ads(&mut input, true);
+            assert!(!input.aiming_down_sights);
+        }
+    }
+
+    #[test]
+    fn jump_maps_space_only_in_captured_gameplay_and_clears_on_reset() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        let mut input = InputFrame::default();
+        let key = PhysicalKey::Code(KeyCode::Space);
+        routing.jump(&mut input, key, true, true);
+        assert_eq!(input.jump, ButtonState::default());
+        routing.jump(&mut input, PhysicalKey::Code(KeyCode::KeyW), true, false);
+        assert_eq!(input.jump, ButtonState::default());
+        routing.jump(&mut input, key, true, false);
+        assert!(input.jump.held && input.jump.pressed && !input.jump.released);
+        input.clear_transient();
+        assert_eq!(
+            input.jump,
+            ButtonState {
+                held: true,
+                ..ButtonState::default()
+            }
+        );
+        routing.jump(&mut input, key, false, false);
+        assert!(!input.jump.held && input.jump.released);
+        reset_controls(&mut input);
+        assert_eq!(input.jump, ButtonState::default());
+
+        let uncaptured = GameplayRouting {
+            captured: false,
+            ..routing
+        };
+        uncaptured.jump(&mut input, key, true, false);
+        assert_eq!(input.jump, ButtonState::default());
     }
 
     #[test]

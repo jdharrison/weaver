@@ -162,6 +162,10 @@ pub struct InputFrame {
     pub sprint: bool,
     /// Held crouch request; mapped to Left Ctrl on desktop, with behavior owned by the application.
     pub crouch: bool,
+    /// Held aim-down-sights request; mapped to right mouse for captured desktop gameplay.
+    pub aiming_down_sights: bool,
+    /// Jump button; mapped to Space for captured gameplay input.
+    pub jump: ButtonState,
     /// Primary fire button; currently mapped only by the opted-in desktop adapter.
     pub fire: ButtonState,
     /// Reload button; currently mapped only by the opted-in desktop adapter.
@@ -205,6 +209,7 @@ impl InputFrame {
         self.zoom_delta = 0.0;
         self.toggle_perspective = false;
         self.pointer_primary.clear_transient();
+        self.jump.clear_transient();
         self.fire.clear_transient();
         self.reload.clear_transient();
         self.interact.clear_transient();
