@@ -61,6 +61,14 @@ pub struct MeshInstance {
     pub render_mode: MeshRenderMode,
     /// Optional color texture. `None` uses solid white.
     pub texture: Option<SpriteHandle>,
+    /// Optional tangent-space normal map, sampled in linear space.
+    pub normal_texture: Option<SpriteHandle>,
+    /// Optional metallic/roughness map (metallic in blue, roughness in green).
+    pub metallic_roughness_texture: Option<SpriteHandle>,
+    /// Metallic factor from 0 to 1.
+    pub metallic: f32,
+    /// Roughness factor from 0 to 1.
+    pub roughness: f32,
     /// Optional centered contain fit with opaque black bars. `None` preserves
     /// repeating UV sampling; invalid aspect ratios also fall back to that path.
     pub texture_fit: Option<MeshTextureFit>,
@@ -84,6 +92,10 @@ impl MeshInstance {
             skin: None,
             render_mode: MeshRenderMode::Surface,
             texture: None,
+            normal_texture: None,
+            metallic_roughness_texture: None,
+            metallic: 0.0,
+            roughness: 1.0,
             texture_fit: None,
             transform,
             color: [1.0, 1.0, 1.0, 1.0],
@@ -107,6 +119,10 @@ mod tests {
         assert_eq!(instance.render_mode, MeshRenderMode::Surface);
         assert_eq!(instance.transform, transform);
         assert_eq!(instance.texture, None);
+        assert_eq!(instance.normal_texture, None);
+        assert_eq!(instance.metallic_roughness_texture, None);
+        assert_eq!(instance.metallic, 0.0);
+        assert_eq!(instance.roughness, 1.0);
         assert_eq!(instance.texture_fit, None);
         assert_eq!(instance.color, [1.0; 4]);
         assert_eq!(instance.emissive, 0.0);

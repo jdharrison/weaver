@@ -159,7 +159,7 @@ fn headless_skin_palettes_survive_multiple_draws_and_reuse() {
                 ambient: 0.0,
                 intensity: 0.0,
             });
-            let meshes = [(mesh.clone(), &texture, vec![instance])];
+            let meshes = [(mesh.clone(), &texture, &texture, &texture, vec![instance])];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

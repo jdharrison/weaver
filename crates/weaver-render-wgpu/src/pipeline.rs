@@ -41,8 +41,9 @@ struct Instance {
     lighting_enabled: f32,
     light_position: vec4<f32>,
     texture_fit: vec4<f32>,
+    material: vec4<f32>,
 };
-const MAX_INSTANCES: u32 = 128u;
+const MAX_INSTANCES: u32 = 112u;
 @group(1) @binding(0)
 var<uniform> instances: array<Instance, MAX_INSTANCES>;
 
@@ -50,6 +51,8 @@ var<uniform> instances: array<Instance, MAX_INSTANCES>;
 var mesh_texture: texture_2d<f32>;
 @group(2) @binding(1)
 var mesh_sampler: sampler;
+@group(2) @binding(2) var normal_map: texture_2d<f32>;
+@group(2) @binding(3) var metallic_roughness_map: texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -68,6 +71,7 @@ struct VertexOutput {
     @location(5) light_position: vec3<f32>,
     @location(6) lighting: vec3<f32>,
     @location(7) @interpolate(flat) texture_fit: vec3<f32>,
+    @location(8) @interpolate(flat) material: vec4<f32>,
 };
 
 @vertex
@@ -85,6 +89,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) instance_index: u32) -> 
     out.light_position = inst.light_position.xyz;
     out.lighting = vec3<f32>(inst.ambient, inst.intensity, inst.lighting_enabled);
     out.texture_fit = inst.texture_fit.xyz;
+    out.material = inst.material;
     return out;
 }
 
@@ -103,7 +108,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (dot(light_direction, light_direction) > 0.0) {
         to_light = normalize(light_direction);
     }
-    let diff = max(dot(normalize(in.normal), to_light), 0.0);
+    var surface_normal = normalize(in.normal);
     var image_uv = in.uv;
     if (in.texture_fit.z > 0.5) {
         image_uv = (in.uv - vec2<f32>(0.5)) / in.texture_fit.xy + vec2<f32>(0.5);
@@ -111,11 +116,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     // Sample before the per-fragment bar branch to keep implicit derivatives valid.
     let color = textureSample(mesh_texture, mesh_sampler, image_uv) * in.color;
+    let mapped_normal = textureSample(normal_map, mesh_sampler, in.uv).xyz * 2.0 - vec3<f32>(1.0);
+    let mapped_mr = textureSample(metallic_roughness_map, mesh_sampler, in.uv);
+    if (in.material.z > 0.5) {
+        let dp1 = dpdx(in.world_pos);
+        let dp2 = dpdy(in.world_pos);
+        let duv1 = dpdx(in.uv);
+        let duv2 = dpdy(in.uv);
+        let tangent = dp1 * duv2.y - dp2 * duv1.y;
+        let handedness = duv1.x * duv2.y - duv1.y * duv2.x;
+        if (dot(tangent, tangent) > 1e-12 && abs(handedness) > 1e-10) {
+            let t = normalize(tangent - surface_normal * dot(surface_normal, tangent));
+            let bitangent = cross(surface_normal, t) * sign(handedness);
+            surface_normal = normalize(mat3x3<f32>(t, bitangent, surface_normal) * mapped_normal);
+        }
+    }
+    let diff = max(dot(surface_normal, to_light), 0.0);
     if (in.texture_fit.z > 0.5 &&
         (any(image_uv < vec2<f32>(0.0)) || any(image_uv > vec2<f32>(1.0)))) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let lit = color.rgb * (ambient + diff * intensity);
+    let mr = select(vec2<f32>(1.0), mapped_mr.bg, in.material.w > 0.5);
+    let metallic = in.material.x * mr.x;
+    let roughness = max(0.04, in.material.y * mr.y);
+    var specular = 0.0;
+    let view_vector = camera.eye - in.world_pos;
+    if (dot(to_light, to_light) > 0.0 && dot(view_vector, view_vector) > 0.0) {
+        let half_vector = to_light + normalize(view_vector);
+        if (dot(half_vector, half_vector) > 0.0) {
+            specular = pow(max(dot(surface_normal, normalize(half_vector)), 0.0), mix(128.0, 2.0, roughness));
+        }
+    }
+    let f0 = mix(vec3<f32>(0.04), color.rgb, metallic);
+    let lit = color.rgb * (1.0 - metallic) * (ambient + diff * intensity) + f0 * specular * intensity * diff;
     let glow = color.rgb * in.emissive;
     return vec4<f32>(lit + glow, color.a);
 }
@@ -143,8 +176,9 @@ struct Instance {
     lighting_enabled: f32,
     light_position: vec4<f32>,
     texture_fit: vec4<f32>,
+    material: vec4<f32>,
 };
-const MAX_INSTANCES: u32 = 128u;
+const MAX_INSTANCES: u32 = 112u;
 @group(1) @binding(0)
 var<uniform> instances: array<Instance, MAX_INSTANCES>;
 

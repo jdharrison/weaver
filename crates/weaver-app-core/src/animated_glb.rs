@@ -1,7 +1,8 @@
 //! Bounded embedded GLB skeletal animation: immutable geometry, CPU local-TRS
 //! sampling, and GPU skinning. Coordinates remain glTF actor-local (Y-up).
 //! LINEAR and STEP clips are supported; cubic splines and morphs are explicit errors.
-//! Materials/textures use the static loader's opaque base-color subset and limits.
+//! Materials/textures use the static loader's opaque base-color, normal and
+//! metallic/roughness subset and limits.
 
 use crate::{
     AppAssets,

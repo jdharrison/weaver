@@ -597,7 +597,11 @@ impl WgpuRenderer {
                 visible
             }));
             let mut mesh_draws = Vec::new();
-            for ((handle, texture_handle, _sampling_mode, _render_mode), instances) in mesh_groups {
+            for (
+                (handle, texture_handle, _sampling_mode, _render_mode, normal_handle, mr_handle),
+                mut instances,
+            ) in mesh_groups
+            {
                 if let Some(mesh) = self.meshes.get(&handle) {
                     let texture = texture_handle
                         .and_then(|handle| {
@@ -606,7 +610,28 @@ impl WgpuRenderer {
                                 .or_else(|| self.textures.get(&handle))
                         })
                         .unwrap_or(&self.default_mesh_texture);
-                    mesh_draws.push((mesh.clone(), texture, instances));
+                    let resolve = |handle: Option<weaver_render::SpriteHandle>| {
+                        handle.and_then(|h| {
+                            self.texture_overrides
+                                .get(&h)
+                                .or_else(|| self.textures.get(&h))
+                        })
+                    };
+                    let normal_found = resolve(normal_handle).filter(|t| t.linear_view.is_some());
+                    let mr_found = resolve(mr_handle).filter(|t| t.linear_view.is_some());
+                    if normal_found.is_none() || mr_found.is_none() {
+                        for instance in &mut instances {
+                            if normal_found.is_none() {
+                                instance.normal_texture = None;
+                            }
+                            if mr_found.is_none() {
+                                instance.metallic_roughness_texture = None;
+                            }
+                        }
+                    }
+                    let normal = normal_found.unwrap_or(&self.default_mesh_texture);
+                    let mr = mr_found.unwrap_or(&self.default_mesh_texture);
+                    mesh_draws.push((mesh.clone(), texture, normal, mr, instances));
                 }
             }
             stats.cpu_mesh_prepare_time += prepare_timer.elapsed();
@@ -681,7 +706,7 @@ impl WgpuRenderer {
                 .expect("foreground pipeline");
             let prepare_timer = crate::stats::CpuTimer::start();
             let mut draws = Vec::new();
-            for ((handle, texture_handle, _, _), instances) in
+            for ((handle, texture_handle, _, _, normal_handle, mr_handle), mut instances) in
                 group_mesh_instances(&snapshot.foreground_meshes)
             {
                 if let Some(mesh) = self.meshes.get(&handle) {
@@ -692,7 +717,28 @@ impl WgpuRenderer {
                                 .or_else(|| self.textures.get(&handle))
                         })
                         .unwrap_or(&self.default_mesh_texture);
-                    draws.push((mesh.clone(), texture, instances));
+                    let resolve = |handle: Option<weaver_render::SpriteHandle>| {
+                        handle.and_then(|h| {
+                            self.texture_overrides
+                                .get(&h)
+                                .or_else(|| self.textures.get(&h))
+                        })
+                    };
+                    let normal_found = resolve(normal_handle).filter(|t| t.linear_view.is_some());
+                    let mr_found = resolve(mr_handle).filter(|t| t.linear_view.is_some());
+                    if normal_found.is_none() || mr_found.is_none() {
+                        for instance in &mut instances {
+                            if normal_found.is_none() {
+                                instance.normal_texture = None;
+                            }
+                            if mr_found.is_none() {
+                                instance.metallic_roughness_texture = None;
+                            }
+                        }
+                    }
+                    let normal = normal_found.unwrap_or(&self.default_mesh_texture);
+                    let mr = mr_found.unwrap_or(&self.default_mesh_texture);
+                    draws.push((mesh.clone(), texture, normal, mr, instances));
                 }
             }
             stats.cpu_mesh_prepare_time += prepare_timer.elapsed();

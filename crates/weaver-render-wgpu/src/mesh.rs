@@ -6,7 +6,7 @@ use crate::pipeline::{
 };
 
 // Keep the complete uniform binding within WebGL2's guaranteed 16 KiB limit.
-const MAX_INSTANCES: usize = 128;
+const MAX_INSTANCES: usize = 112;
 use crate::resource::{GpuMesh, GpuTexture, Vertex};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -68,7 +68,7 @@ impl<T> DrawSlots<T> {
 // Key by the actual resolved view, not the logical asset handle or its address.
 // Replacing an override/view (including fallback white) cannot hit an old entry.
 struct TextureBindings<K, V> {
-    entries: HashMap<(K, MeshSamplingMode), (V, u16)>,
+    entries: HashMap<(K, K, K, MeshSamplingMode), (V, u16)>,
 }
 
 impl<K: Eq + std::hash::Hash, V> TextureBindings<K, V> {
@@ -79,7 +79,8 @@ impl<K: Eq + std::hash::Hash, V> TextureBindings<K, V> {
     }
 
     fn invalidate(&mut self, view: &K) {
-        self.entries.retain(|(key, _), _| key != view);
+        self.entries
+            .retain(|(color, normal, mr, _), _| color != view && normal != view && mr != view);
     }
 
     fn age(&mut self) {
@@ -89,10 +90,15 @@ impl<K: Eq + std::hash::Hash, V> TextureBindings<K, V> {
         });
     }
 
-    fn get_or_insert(&mut self, view: K, mode: MeshSamplingMode, create: impl FnOnce() -> V) -> &V {
+    fn get_or_insert(
+        &mut self,
+        views: (K, K, K),
+        mode: MeshSamplingMode,
+        create: impl FnOnce() -> V,
+    ) -> &V {
         let (binding, idle) = self
             .entries
-            .entry((view, mode))
+            .entry((views.0, views.1, views.2, mode))
             .or_insert_with(|| (create(), 0));
         *idle = 0;
         binding
@@ -122,6 +128,8 @@ type MeshGroups = HashMap<
         Option<SpriteHandle>,
         MeshSamplingMode,
         MeshRenderMode,
+        Option<SpriteHandle>,
+        Option<SpriteHandle>,
     ),
     Vec<MeshInstance>,
 >;
@@ -173,6 +181,8 @@ fn mesh_sampling_groups(
     instances
         .chunk_by(|left, right| {
             left.render_mode == right.render_mode
+                && left.normal_texture == right.normal_texture
+                && left.metallic_roughness_texture == right.metallic_roughness_texture
                 && MeshSamplingMode::for_fit(left.texture_fit)
                     == MeshSamplingMode::for_fit(right.texture_fit)
         })
@@ -190,6 +200,8 @@ pub(crate) fn group_mesh_instances<'a>(
                 instance.texture,
                 MeshSamplingMode::for_fit(instance.texture_fit),
                 instance.render_mode,
+                instance.normal_texture,
+                instance.metallic_roughness_texture,
             ))
             .or_default()
             .push(instance.clone());
@@ -209,6 +221,8 @@ struct MeshInstanceRaw {
     light_position: [f32; 4],
     // Unit-UV content scale (xy), contain enabled (z), padding (w).
     texture_fit: [f32; 4],
+    // Metallic, roughness, normal enabled, MR enabled.
+    material: [f32; 4],
 }
 
 fn mesh_texture_fit_data(fit: Option<MeshTextureFit>) -> [f32; 4] {
@@ -264,6 +278,20 @@ impl From<&MeshInstance> for MeshInstanceRaw {
             lighting_enabled,
             light_position,
             texture_fit: mesh_texture_fit_data(instance.texture_fit),
+            material: [
+                if instance.metallic.is_finite() {
+                    instance.metallic.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+                if instance.roughness.is_finite() {
+                    instance.roughness.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                },
+                f32::from(instance.normal_texture.is_some()),
+                f32::from(instance.metallic_roughness_texture.is_some()),
+            ],
         }
     }
 }
@@ -348,6 +376,26 @@ impl MeshPipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -596,6 +644,9 @@ impl MeshPipeline {
     /// updates require no invalidation; new views cannot hit old cache entries.
     pub fn invalidate_texture(&mut self, texture: &GpuTexture) {
         self.texture_bindings.invalidate(&texture.view);
+        if let Some(view) = &texture.linear_view {
+            self.texture_bindings.invalidate(view);
+        }
     }
 
     /// Reclaim instance slots after ALL previously encoded mesh draws have been
@@ -624,7 +675,13 @@ impl MeshPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         camera_bind_group: &'pass wgpu::BindGroup,
-        meshes: &[(GpuMesh, &GpuTexture, Vec<MeshInstance>)],
+        meshes: &[(
+            GpuMesh,
+            &GpuTexture,
+            &GpuTexture,
+            &GpuTexture,
+            Vec<MeshInstance>,
+        )],
     ) -> Result<(), WgpuRenderError> {
         self.draw_stats = crate::stats::MeshDrawStats::default();
         self.texture_bindings.age();
@@ -636,21 +693,27 @@ impl MeshPipeline {
             MeshRenderMode::Water,
             MeshRenderMode::Additive,
         ] {
-            for (mesh, texture, sampling_mode, instances) in
-                meshes.iter().flat_map(|(mesh, texture, instances)| {
-                    mesh_sampling_groups(instances)
-                        .filter(move |(_, group)| group[0].render_mode == mode)
-                        .map(move |(sampling_mode, instances)| {
-                            (mesh, texture, sampling_mode, instances)
-                        })
-                })
+            for (mesh, texture, normal, mr, sampling_mode, instances) in
+                meshes
+                    .iter()
+                    .flat_map(|(mesh, texture, normal, mr, instances)| {
+                        mesh_sampling_groups(instances)
+                            .filter(move |(_, group)| group[0].render_mode == mode)
+                            .map(move |(sampling_mode, instances)| {
+                                (mesh, texture, normal, mr, sampling_mode, instances)
+                            })
+                    })
             {
                 let sampler = match sampling_mode {
                     MeshSamplingMode::Repeat => &self.repeat_sampler,
                     MeshSamplingMode::ClampToEdge => &self.clamp_sampler,
                 };
                 let texture_bind_group = self.texture_bindings.get_or_insert(
-                    texture.view.clone(),
+                    (
+                        texture.view.clone(),
+                        normal.linear_view.as_ref().unwrap_or(&normal.view).clone(),
+                        mr.linear_view.as_ref().unwrap_or(&mr.view).clone(),
+                    ),
                     sampling_mode,
                     || {
                         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -664,6 +727,18 @@ impl MeshPipeline {
                                 wgpu::BindGroupEntry {
                                     binding: 1,
                                     resource: wgpu::BindingResource::Sampler(sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        normal.linear_view.as_ref().unwrap_or(&normal.view),
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        mr.linear_view.as_ref().unwrap_or(&mr.view),
+                                    ),
                                 },
                             ],
                         })
@@ -784,7 +859,14 @@ mod tests {
         let groups = group_mesh_instances(&instances);
         assert_eq!(groups.len(), 2);
         for mode in [MeshRenderMode::Surface, MeshRenderMode::Additive] {
-            let group = &groups[&(surface.mesh, None, MeshSamplingMode::Repeat, mode)];
+            let group = &groups[&(
+                surface.mesh,
+                None,
+                MeshSamplingMode::Repeat,
+                mode,
+                None,
+                None,
+            )];
             assert!(group.iter().all(|instance| instance.render_mode == mode));
             assert_eq!(
                 group.len(),
@@ -855,46 +937,74 @@ mod tests {
         let clamp = MeshSamplingMode::ClampToEdge;
         // Synthetic view identities exercise the same cache as WGPU views.
         let (white, asset, replacement, video) = (0, 1, 2, 3);
-        assert_eq!(*cache.get_or_insert(white, repeat, || 10), 10);
-        assert_eq!(*cache.get_or_insert(white, clamp, || 11), 11);
-        assert_eq!(*cache.get_or_insert(asset, repeat, || 20), 20);
-        assert_eq!(*cache.get_or_insert(asset, clamp, || 21), 21);
+        assert_eq!(
+            *cache.get_or_insert((white, white, white), repeat, || 10),
+            10
+        );
+        assert_eq!(
+            *cache.get_or_insert((white, white, white), clamp, || 11),
+            11
+        );
+        assert_eq!(
+            *cache.get_or_insert((asset, asset, asset), repeat, || 20),
+            20
+        );
+        assert_eq!(
+            *cache.get_or_insert((asset, asset, asset), clamp, || 21),
+            21
+        );
         // In-place updates and cloned handles preserve binding identity.
         assert_eq!(
-            *cache.get_or_insert(asset, repeat, || panic!("cache miss")),
+            *cache.get_or_insert((asset, asset, asset), repeat, || panic!("cache miss")),
             20
         );
         // Even without explicit invalidation (direct callers), replacement views
         // must not reuse a binding for the old view at the same logical handle.
-        assert_eq!(*cache.get_or_insert(replacement, repeat, || 30), 30);
         assert_eq!(
-            *cache.get_or_insert(asset, repeat, || panic!("old view changed")),
+            *cache.get_or_insert((replacement, replacement, replacement), repeat, || 30),
+            30
+        );
+        assert_eq!(
+            *cache.get_or_insert((asset, asset, asset), repeat, || panic!("old view changed")),
             20
         );
         cache.invalidate(&asset);
-        assert!(!cache.entries.keys().any(|(view, _)| *view == asset));
-        assert_eq!(*cache.get_or_insert(replacement, repeat, || 30), 30);
-        assert_eq!(*cache.get_or_insert(video, repeat, || 40), 40);
+        assert!(!cache.entries.keys().any(|(view, _, _, _)| *view == asset));
+        assert_eq!(
+            *cache.get_or_insert((replacement, replacement, replacement), repeat, || 30),
+            30
+        );
+        assert_eq!(
+            *cache.get_or_insert((video, video, video), repeat, || 40),
+            40
+        );
         cache.invalidate(&video);
         assert_eq!(
-            *cache.get_or_insert(replacement, repeat, || panic!("restored asset miss")),
+            *cache.get_or_insert((replacement, replacement, replacement), repeat, || panic!(
+                "restored asset miss"
+            )),
             30
         );
         cache.invalidate(&replacement);
         assert_eq!(
-            *cache.get_or_insert(white, repeat, || panic!("fallback miss")),
+            *cache.get_or_insert((white, white, white), repeat, || panic!("fallback miss")),
             10
         );
         cache.invalidate(&white);
         assert!(cache.entries.is_empty());
-        cache.get_or_insert(white, repeat, || 50);
-        cache.get_or_insert(asset, clamp, || 60);
+        cache.get_or_insert((white, white, white), repeat, || 50);
+        cache.get_or_insert((asset, asset, asset), clamp, || 60);
         for _ in 0..RESOURCE_IDLE_FRAMES {
             cache.age();
-            cache.get_or_insert(white, repeat, || panic!("live binding expired"));
+            cache.get_or_insert((white, white, white), repeat, || {
+                panic!("live binding expired")
+            });
         }
         assert_eq!(cache.entries.len(), 1);
-        assert_eq!(*cache.get_or_insert(asset, clamp, || 61), 61);
+        assert_eq!(
+            *cache.get_or_insert((asset, asset, asset), clamp, || 61),
+            61
+        );
     }
 
     #[test]
@@ -904,14 +1014,17 @@ mod tests {
             RenderTransform::default(),
         )];
         let (_, raw) = mesh_instance_batches(&instances).next().unwrap();
-        assert_eq!(bytemuck::cast_slice::<_, u8>(&raw).len(), 128);
-        assert_eq!(INSTANCE_BUFFER_SIZE, 16 * 1024);
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&raw).len(), 144);
+        assert_eq!(INSTANCE_BUFFER_SIZE, 16_128);
     }
 
     #[test]
     fn uniform_batches_preserve_128_129_and_160_instances() {
-        for (count, expected_sizes) in [(128, vec![128]), (129, vec![128, 1]), (160, vec![128, 32])]
-        {
+        for (count, expected_sizes) in [
+            (128, vec![112, 16]),
+            (129, vec![112, 17]),
+            (160, vec![112, 48]),
+        ] {
             let mesh = MeshHandle::new();
             let instances: Vec<_> = (0..count)
                 .map(|index| {
@@ -985,7 +1098,9 @@ mod tests {
                             instance.mesh,
                             instance.texture,
                             MeshSamplingMode::Repeat,
-                            MeshRenderMode::Surface
+                            MeshRenderMode::Surface,
+                            None,
+                            None
                         ),
                         *key
                     );
@@ -1178,12 +1293,16 @@ mod tests {
             Some(texture),
             MeshSamplingMode::Repeat,
             MeshRenderMode::Surface,
+            None,
+            None,
         )];
         let fitted = &groups[&(
             mesh,
             Some(texture),
             MeshSamplingMode::ClampToEdge,
             MeshRenderMode::Surface,
+            None,
+            None,
         )];
         assert_eq!(repeating, &[plain, invalid]);
         assert_eq!(fitted, &[narrower, wider, exact]);
@@ -1276,8 +1395,58 @@ mod tests {
         assert!(MESH_SHADER.contains("if (in.lighting.z > 0.5)"));
         assert!(MESH_SHADER.contains("light_direction = in.light_position - in.world_pos;"));
         assert!(MESH_SHADER.contains("if (dot(light_direction, light_direction) > 0.0)"));
-        assert!(MESH_SHADER.contains("let lit = color.rgb * (ambient + diff * intensity);"));
+        assert!(MESH_SHADER.contains(
+            "let mapped_mr = textureSample(metallic_roughness_map, mesh_sampler, in.uv);"
+        ));
+        assert!(MESH_SHADER.contains("mapped_mr.bg"));
+        assert!(MESH_SHADER.contains("let handedness = duv1.x * duv2.y - duv1.y * duv2.x;"));
+        assert!(MESH_SHADER.contains(
+            "surface_normal = normalize(mat3x3<f32>(t, bitangent, surface_normal) * mapped_normal);"
+        ));
+        assert!(MESH_SHADER.contains("let metallic = in.material.x * mr.x;"));
+        assert!(MESH_SHADER.contains("let roughness = max(0.04, in.material.y * mr.y);"));
         assert!(MESH_SHADER.contains("let glow = color.rgb * in.emissive;"));
+    }
+
+    #[test]
+    fn material_maps_split_bindings_and_encode_factors() {
+        let mesh = MeshHandle::new();
+        let map = SpriteHandle::new();
+        let plain = MeshInstance::new(mesh, RenderTransform::default());
+        let mut mapped = plain.clone();
+        mapped.normal_texture = Some(map);
+        mapped.metallic_roughness_texture = Some(map);
+        mapped.metallic = 0.7;
+        mapped.roughness = 0.3;
+        let groups = group_mesh_instances(&[plain.clone(), mapped.clone()]);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[&(
+                mesh,
+                None,
+                MeshSamplingMode::Repeat,
+                MeshRenderMode::Surface,
+                Some(map),
+                Some(map)
+            )],
+            [mapped.clone()]
+        );
+        assert_eq!(MeshInstanceRaw::from(&plain).material, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(
+            MeshInstanceRaw::from(&mapped).material,
+            [0.7, 0.3, 1.0, 1.0]
+        );
+        let mut cache = TextureBindings::<u32, u32>::new();
+        assert_eq!(
+            *cache.get_or_insert((1, 2, 3), MeshSamplingMode::Repeat, || 5),
+            5
+        );
+        assert_eq!(
+            *cache.get_or_insert((1, 4, 3), MeshSamplingMode::Repeat, || 6),
+            6
+        );
+        cache.invalidate(&2);
+        assert_eq!(cache.entries.len(), 1);
     }
 
     #[test]
@@ -1313,7 +1482,9 @@ mod tests {
                 mesh,
                 None,
                 MeshSamplingMode::Repeat,
-                MeshRenderMode::Surface
+                MeshRenderMode::Surface,
+                None,
+                None
             )],
             vec![plain]
         );
@@ -1322,7 +1493,9 @@ mod tests {
                 mesh,
                 Some(texture),
                 MeshSamplingMode::Repeat,
-                MeshRenderMode::Surface
+                MeshRenderMode::Surface,
+                None,
+                None
             )],
             vec![textured, tinted]
         );
@@ -1331,7 +1504,9 @@ mod tests {
                 mesh,
                 Some(other_texture),
                 MeshSamplingMode::Repeat,
-                MeshRenderMode::Surface
+                MeshRenderMode::Surface,
+                None,
+                None
             )]
                 .len(),
             1
@@ -1341,7 +1516,9 @@ mod tests {
                 other_mesh,
                 Some(texture),
                 MeshSamplingMode::Repeat,
-                MeshRenderMode::Surface
+                MeshRenderMode::Surface,
+                None,
+                None
             )]
                 .len(),
             1
@@ -1383,7 +1560,7 @@ mod tests {
             "sample before divergent return for implicit derivatives"
         );
         assert!(bars < MESH_SHADER.find("let lit =").unwrap());
-        assert_eq!(MESH_SHADER.matches("textureSample(").count(), 1);
+        assert_eq!(MESH_SHADER.matches("textureSample(").count(), 3);
         assert!(!MESH_SHADER.contains("discard"));
     }
 
@@ -1407,12 +1584,12 @@ mod tests {
         else {
             panic!("instances must be an array");
         };
-        assert_eq!(std::mem::size_of::<MeshInstanceRaw>(), 128);
+        assert_eq!(std::mem::size_of::<MeshInstanceRaw>(), 144);
         assert_eq!(std::mem::align_of::<MeshInstanceRaw>(), 16);
-        assert_eq!(MAX_INSTANCES, 128);
+        assert_eq!(MAX_INSTANCES, 112);
         assert_eq!(
             MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>(),
-            16_384
+            16_128
         );
         assert_eq!(stride as usize, std::mem::size_of::<MeshInstanceRaw>());
         assert_eq!(
@@ -1454,6 +1631,11 @@ mod tests {
                 10,
                 "texture_fit",
                 std::mem::offset_of!(MeshInstanceRaw, texture_fit),
+            ),
+            (
+                11,
+                "material",
+                std::mem::offset_of!(MeshInstanceRaw, material),
             ),
         ] {
             assert_eq!(members[index].name.as_deref(), Some(name));
@@ -1502,6 +1684,25 @@ mod tests {
         assert_eq!(*span, WATER_UNIFORM_SIZE as u32);
         assert_eq!(members.len(), 8);
         assert_eq!(std::mem::size_of::<WaterUniformRaw>(), 128);
+        let instances = shader
+            .global_variables
+            .iter()
+            .map(|(_, variable)| variable)
+            .find(|variable| variable.name.as_deref() == Some("instances"))
+            .expect("mesh instance uniform");
+        let wgpu::naga::TypeInner::Array { base, size, stride } = shader.types[instances.ty].inner
+        else {
+            panic!("instances must be an array");
+        };
+        assert_eq!(stride as usize, std::mem::size_of::<MeshInstanceRaw>());
+        assert_eq!(
+            size,
+            wgpu::naga::ArraySize::Constant(std::num::NonZeroU32::new(112).unwrap())
+        );
+        let wgpu::naga::TypeInner::Struct { span, .. } = shader.types[base].inner else {
+            panic!("instance must be a struct");
+        };
+        assert_eq!(span as usize, std::mem::size_of::<MeshInstanceRaw>());
     }
 
     #[test]

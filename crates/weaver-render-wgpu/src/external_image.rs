@@ -75,6 +75,7 @@ pub(crate) fn ensure_texture<'a>(
             crate::resource::GpuTexture {
                 texture,
                 view,
+                linear_view: None,
                 sampler,
                 size: (width, height),
             },

@@ -302,6 +302,8 @@ pub struct GpuTexture {
     pub texture: wgpu::Texture,
     /// Texture view.
     pub view: wgpu::TextureView,
+    /// Raw-channel view of level zero for normal and metallic/roughness maps.
+    pub linear_view: Option<wgpu::TextureView>,
     /// Sampler.
     pub sampler: wgpu::Sampler,
     /// Original logical dimensions used for sprite sizing and aspect ratio.
@@ -367,7 +369,7 @@ impl GpuTexture {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
         for mip_level in 0..levels {
             let mut destination = texture.as_image_copy();
@@ -394,10 +396,16 @@ impl GpuTexture {
             (mip_width, mip_height) = next_mip_size(mip_width, mip_height);
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let linear_view = Some(texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            mip_level_count: Some(1),
+            ..Default::default()
+        }));
         let sampler = device.create_sampler(&static_sampler_descriptor(anisotropy));
         Ok(Self {
             texture,
             view,
+            linear_view,
             sampler,
             size: (width, height),
         })
