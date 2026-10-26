@@ -1409,7 +1409,14 @@ pub(crate) mod tests {
             (texture.width, texture.height, texture.rgba.len()),
             (2, 1, 8)
         );
-        assert!(texture.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            texture
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255)
+        );
     }
 
     #[test]
@@ -1485,8 +1492,10 @@ pub(crate) mod tests {
             assert!(
                 texture
                     .rgba
-                    .chunks_exact(4)
-                    .all(|pixel| pixel == [64, 128, 192, 255])
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [64, 128, 192, 255])
             );
             assert_eq!(
                 model
@@ -1516,7 +1525,14 @@ pub(crate) mod tests {
             let texture = &model.assets.textures[0];
             assert_eq!((texture.width, texture.height), (cap, 1));
             assert_eq!(texture.rgba.len(), cap as usize * 4);
-            assert!(texture.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+            assert!(
+                texture
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| pixel[3] == 255)
+            );
             assert!(model.warnings.iter().any(|w| w.contains("8192x1")));
         }
     }

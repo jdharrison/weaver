@@ -261,7 +261,7 @@ impl GameplayRouting {
         input.weapon_slot = Some(slot);
     }
 
-    fn debug_action(self, physical_key: PhysicalKey, key: Key<&str>) -> Option<AppAction> {
+    fn debug_action(self, physical_key: PhysicalKey, key: &Key<&str>) -> Option<AppAction> {
         // Reserve gameplay keys even without capture and under alternate layouts.
         if self.enabled
             && matches!(
@@ -975,7 +975,7 @@ impl ApplicationHandler for DesktopShell {
                 if pressed {
                     let action = self
                         .gameplay_routing()
-                        .debug_action(physical_key, logical_key.as_ref());
+                        .debug_action(physical_key, &logical_key.as_ref());
                     if let Some(action) = action {
                         self.input.actions.push(action);
                     }
@@ -1833,7 +1833,7 @@ mod tests {
         for _ in 0..2 {
             assert!(routing.left_button(&mut input, true));
             assert!(!routing.left_button(&mut input, false));
-            assert_eq!(input.fire, Default::default());
+            assert_eq!(input.fire, ButtonState::default());
         }
         let legacy = GameplayRouting {
             enabled: false,
@@ -1846,8 +1846,8 @@ mod tests {
         };
         assert!(!legacy.left_button(&mut input, true));
         legacy.reload(&mut input, true, false);
-        assert_eq!(input.fire, Default::default());
-        assert_eq!(input.reload, Default::default());
+        assert_eq!(input.fire, ButtonState::default());
+        assert_eq!(input.reload, ButtonState::default());
     }
 
     #[test]
@@ -1930,15 +1930,15 @@ mod tests {
         for captured in [false, true] {
             for enabled in [false, true] {
                 let routing = GameplayRouting {
-                    captured,
                     enabled,
+                    captured,
                     ..shooter_routing()
                 };
                 for (digit, multiplier) in [("1", 0.5), ("2", 1.0), ("3", 2.0)] {
                     assert_eq!(
                         routing.debug_action(
                             PhysicalKey::Code(KeyCode::Digit1),
-                            Key::Character(digit)
+                            &Key::Character(digit)
                         ),
                         (!enabled).then_some(AppAction::SetTimeMultiplier(multiplier)),
                     );
@@ -1947,7 +1947,7 @@ mod tests {
                     assert_eq!(
                         routing.debug_action(
                             PhysicalKey::Code(KeyCode::Digit4),
-                            Key::Character(digit)
+                            &Key::Character(digit)
                         ),
                         None
                     );
@@ -1961,13 +1961,13 @@ mod tests {
         for captured in [false, true] {
             for enabled in [false, true] {
                 let routing = GameplayRouting {
-                    captured,
                     enabled,
+                    captured,
                     ..shooter_routing()
                 };
                 let key = PhysicalKey::Code(KeyCode::KeyP);
                 for logical in [Key::Character("p"), Key::Character("P")] {
-                    assert_eq!(routing.debug_action(key, logical), None);
+                    assert_eq!(routing.debug_action(key, &logical), None);
                 }
                 for (logical, action) in [
                     (Key::Named(NamedKey::Space), AppAction::TogglePause),
@@ -1975,14 +1975,14 @@ mod tests {
                     (Key::Character("1"), AppAction::SetTimeMultiplier(0.5)),
                 ] {
                     assert_eq!(
-                        routing.debug_action(key, logical),
+                        routing.debug_action(key, &logical),
                         (!enabled).then_some(action)
                     );
                 }
                 assert_eq!(
                     routing.debug_action(
                         PhysicalKey::Code(KeyCode::Space),
-                        Key::Named(NamedKey::Space)
+                        &Key::Named(NamedKey::Space)
                     ),
                     (!enabled).then_some(AppAction::TogglePause)
                 );
@@ -2544,12 +2544,12 @@ mod tests {
             let mut input = InputFrame::default();
             assert!(!blocked.left_button(&mut input, true));
             blocked.reload(&mut input, true, false);
-            assert_eq!(input.fire, Default::default());
-            assert_eq!(input.reload, Default::default());
+            assert_eq!(input.fire, ButtonState::default());
+            assert_eq!(input.reload, ButtonState::default());
         }
         let mut input = InputFrame::default();
         routing.reload(&mut input, true, true);
-        assert_eq!(input.reload, Default::default());
+        assert_eq!(input.reload, ButtonState::default());
         routing.reload(&mut input, true, false);
         assert!(input.reload.held && input.reload.pressed);
         input.clear_transient();
@@ -2560,7 +2560,7 @@ mod tests {
         routing.reload(&mut input, true, false);
         reset_controls(&mut input);
         routing.reload(&mut input, true, true);
-        assert_eq!(input.reload, Default::default());
+        assert_eq!(input.reload, ButtonState::default());
         assert!(input.controls_reset);
     }
 
@@ -2581,8 +2581,8 @@ mod tests {
         input.fire.set(false);
         input.reload.set(true);
         reset_controls(&mut input);
-        assert_eq!(input.fire, Default::default());
-        assert_eq!(input.reload, Default::default());
+        assert_eq!(input.fire, ButtonState::default());
+        assert_eq!(input.reload, ButtonState::default());
         assert_eq!(input.weapon_slot, None);
         assert_eq!(input.movement, Vec2::ZERO);
         assert_eq!(input.look_delta, Vec2::ZERO);

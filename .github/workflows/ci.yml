@@ -11,7 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  WOVEN_REVISION: 2bc74d3298b2f317cc00a1508b09b54250c612d8
+  WOVEN_REVISION: 69db59e04ef2e1e8c0d3f5791c961bfd91e65db1
 
 jobs:
   validate:

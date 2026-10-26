@@ -677,7 +677,7 @@ impl MeshPipeline {
                     (false, MeshRenderMode::Surface) => &self.pipeline,
                     (false, MeshRenderMode::Additive) => &self.additive_pipeline,
                     (false, MeshRenderMode::Water) => &self.water_pipeline,
-                    (true, MeshRenderMode::Surface) | (true, MeshRenderMode::Water) => {
+                    (true, MeshRenderMode::Surface | MeshRenderMode::Water) => {
                         &self.skinned_pipeline
                     }
                     (true, MeshRenderMode::Additive) => &self.skinned_additive_pipeline,
