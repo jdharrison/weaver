@@ -121,6 +121,142 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ";
 
+/// WGSL stylized water shader.
+pub const WATER_SHADER: &str = r"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    eye: vec3<f32>,
+    _pad: f32,
+};
+@group(0) @binding(0)
+var<uniform> camera: CameraUniform;
+
+struct Instance {
+    model_0: vec4<f32>,
+    model_1: vec4<f32>,
+    model_2: vec4<f32>,
+    model_3: vec4<f32>,
+    color: vec4<f32>,
+    emissive: f32,
+    ambient: f32,
+    intensity: f32,
+    lighting_enabled: f32,
+    light_position: vec4<f32>,
+    texture_fit: vec4<f32>,
+};
+const MAX_INSTANCES: u32 = 128u;
+@group(1) @binding(0)
+var<uniform> instances: array<Instance, MAX_INSTANCES>;
+
+@group(2) @binding(0)
+var mesh_texture: texture_2d<f32>;
+@group(2) @binding(1)
+var mesh_sampler: sampler;
+
+struct WaterUniform {
+    deep_color: vec4<f32>,
+    shallow_color: vec4<f32>,
+    horizon: vec4<f32>,
+    zenith: vec4<f32>,
+    sun_direction: vec4<f32>,
+    sun_color: vec4<f32>,
+    // time, specular strength, wave scale, wave height
+    params: vec4<f32>,
+    // foam strength, detail strength, normal strength, reserved
+    params2: vec4<f32>,
+};
+@group(3) @binding(0)
+var<uniform> water: WaterUniform;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) uv: vec2<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) wave: f32,
+    @location(3) mask: f32,
+};
+
+fn wave_gradient(position: vec2<f32>, time: f32, scale: f32) -> vec2<f32> {
+    var gradient = vec2<f32>(0.0);
+    gradient += cos(dot(position, vec2<f32>(0.11, 0.07)) * scale + time * 1.05)
+        * 0.50 * vec2<f32>(0.11, 0.07) * scale;
+    gradient += cos(dot(position, vec2<f32>(-0.05, 0.13)) * scale + time * 1.45 + 1.7)
+        * 0.27 * vec2<f32>(-0.05, 0.13) * scale;
+    gradient += cos(dot(position, vec2<f32>(0.19, -0.11)) * scale + time * 1.85 + 3.1)
+        * 0.14 * vec2<f32>(0.19, -0.11) * scale;
+    gradient += cos(dot(position, vec2<f32>(0.31, 0.23)) * scale + time * 2.35 + 5.2)
+        * 0.06 * vec2<f32>(0.31, 0.23) * scale;
+    return gradient;
+}
+
+fn wave_height(position: vec2<f32>, time: f32, scale: f32) -> f32 {
+    var height = 0.0;
+    height += sin(dot(position, vec2<f32>(0.11, 0.07)) * scale + time * 1.05) * 0.50;
+    height += sin(dot(position, vec2<f32>(-0.05, 0.13)) * scale + time * 1.45 + 1.7) * 0.27;
+    height += sin(dot(position, vec2<f32>(0.19, -0.11)) * scale + time * 1.85 + 3.1) * 0.14;
+    height += sin(dot(position, vec2<f32>(0.31, 0.23)) * scale + time * 2.35 + 5.2) * 0.06;
+    return height;
+}
+
+@vertex
+fn vs_main(input: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let inst = instances[instance_index];
+    let model = mat4x4<f32>(inst.model_0, inst.model_1, inst.model_2, inst.model_3);
+    var world_pos = model * vec4<f32>(input.position, 1.0);
+    let mask = clamp(input.color.r, 0.0, 1.0);
+    let wave = wave_height(world_pos.xz, water.params.x, water.params.z) * mask;
+    world_pos.y += wave * water.params.w;
+    var out: VertexOutput;
+    out.clip_position = camera.view_proj * world_pos;
+    out.world_pos = world_pos.xyz;
+    out.uv = input.uv;
+    out.wave = wave;
+    out.mask = mask;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let gradient = wave_gradient(in.world_pos.xz, water.params.x, water.params.z);
+    let amplitude = water.params.w * in.mask * water.params2.z;
+    let normal = normalize(vec3<f32>(-gradient.x * amplitude, 1.0, -gradient.y * amplitude));
+
+    let scroll_a = vec2<f32>(water.params.x * 0.010, water.params.x * 0.014);
+    let scroll_b = vec2<f32>(water.params.x * -0.013, water.params.x * 0.008);
+    let detail_a = textureSample(mesh_texture, mesh_sampler, in.uv + scroll_a).rgb;
+    let detail_b = textureSample(mesh_texture, mesh_sampler, in.uv * 1.7 + scroll_b).rgb;
+    let detail = max(detail_a, detail_b);
+    let detail_luma = clamp(dot(detail, vec3<f32>(0.299, 0.587, 0.114)), 0.0, 1.0);
+
+    let view_dir = normalize(camera.eye - in.world_pos);
+    let fresnel = pow(clamp(1.0 - dot(normal, view_dir), 0.0, 1.0), 5.0);
+    let reflected = reflect(-view_dir, normal);
+    let sky = mix(water.horizon.rgb, water.zenith.rgb, pow(clamp(reflected.y, 0.0, 1.0), 0.5));
+
+    let depth_mix = clamp(0.42 + in.wave * 0.30 + detail_luma * 0.12, 0.0, 1.0);
+    var color = mix(water.deep_color.rgb, water.shallow_color.rgb, depth_mix);
+    color = mix(color, sky, clamp(fresnel * 0.90 + 0.05, 0.0, 1.0));
+
+    let half_dir = normalize(water.sun_direction.xyz + view_dir);
+    let ndoth = clamp(dot(normal, half_dir), 0.0, 1.0);
+    let glint = pow(ndoth, 220.0) * water.params.y * (0.45 + 1.1 * detail_luma);
+    let sheen = pow(ndoth, 24.0) * 0.06 * water.params.y;
+    color += water.sun_color.rgb * (glint + sheen);
+
+    let foam = smoothstep(0.42, 0.88, in.wave) * water.params2.x * (0.25 + 0.75 * detail_luma);
+    color = mix(color, vec3<f32>(0.86, 0.94, 1.0), clamp(foam, 0.0, 1.0));
+    color += detail_luma * water.params2.y * 0.10;
+    return vec4<f32>(color, 1.0);
+}
+";
+
 /// Skinned variant shares fragment/material behavior with rigid meshes.
 /// Inverse-transpose of the blended linear transform supports nonuniform scale.
 pub fn skinned_mesh_shader() -> String {

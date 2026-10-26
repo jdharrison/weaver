@@ -172,8 +172,15 @@ pub struct InputFrame {
     pub reload: ButtonState,
     /// Generic interact intent (physical F on opted-in desktop); application-owned behavior.
     pub interact: ButtonState,
+    /// Generic drop-item intent (physical G on opted-in desktop); application-owned behavior.
+    pub drop_item: ButtonState,
+    /// Ability slot buttons (desktop C/Q/E/X); application-owned behavior.
+    pub abilities: [ButtonState; 4],
     /// Generic pause intent (physical P on opted-in desktop); application-owned behavior.
     pub pause: ButtonState,
+    /// One-frame request to swap the local first-person viewmodel shoulder.
+    /// Presentation remains application-owned and must not affect game rules.
+    pub toggle_shoulder: ButtonState,
     /// Generic menu toggle intent (physical B on opted-in desktop); application-owned behavior.
     /// Desktop menu intents work in `None` or captured `LockedLook`, require window focus,
     /// and are suppressed by focused/pending text input. Repeated key presses are ignored.
@@ -189,6 +196,8 @@ pub struct InputFrame {
     pub menu_cancel: ButtonState,
     /// Generic secondary menu intent (physical Backspace on opted-in desktop); same gates as toggle.
     pub menu_secondary: ButtonState,
+    /// Generic alternate menu intent (physical M on opted-in desktop); same gates as toggle.
+    pub menu_alternate: ButtonState,
     /// Last weapon-slot press this frame: slots 1..=10 (desktop digits 1..9, then 0).
     /// Transient intent only; applications own slot availability and selection rules.
     pub weapon_slot: Option<u8>,
@@ -216,17 +225,33 @@ impl InputFrame {
         self.fire.clear_transient();
         self.reload.clear_transient();
         self.interact.clear_transient();
+        self.drop_item.clear_transient();
+        for ability in &mut self.abilities {
+            ability.clear_transient();
+        }
         self.pause.clear_transient();
+        self.toggle_shoulder.clear_transient();
         self.menu_toggle.clear_transient();
         self.scoreboard.clear_transient();
         self.menu_confirm.clear_transient();
         self.menu_cancel.clear_transient();
         self.menu_secondary.clear_transient();
+        self.menu_alternate.clear_transient();
         self.weapon_slot = None;
         self.controls_reset = false;
         self.actions.clear();
         self.text_events.clear();
     }
+}
+
+/// Native window presentation requested by an application.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WindowMode {
+    /// Ordinary resizable desktop window.
+    #[default]
+    Windowed,
+    /// Borderless fullscreen on the current display.
+    Fullscreen,
 }
 
 /// Pointer behavior requested by an application.
@@ -373,9 +398,24 @@ pub trait WeaverApp {
     fn external_image_texture(&self) -> Option<SpriteHandle> {
         None
     }
+    /// Requested native window presentation. Desktop applies changes after the
+    /// next application update; other adapters may ignore this (default: windowed).
+    fn window_mode(&self) -> WindowMode {
+        WindowMode::Windowed
+    }
+
     /// Requested pointer behavior.
     fn pointer_mode(&self) -> PointerMode {
         PointerMode::None
+    }
+
+    /// Opt into desktop cursor capture on an app-requested `None` -> `LockedLook`
+    /// transition (default: disabled). Requires window focus, disabled text input,
+    /// and no external controls reset. Focus gain and Escape release do not capture;
+    /// a failed native grab retains the usual click-to-capture fallback.
+    /// Other platform adapters do not currently implement this policy.
+    fn recapture_pointer_on_mode_change(&self) -> bool {
+        false
     }
 
     /// Opt into gameplay buttons (default: disabled).
@@ -634,6 +674,7 @@ mod tests {
             &mut input.menu_toggle,
             &mut input.menu_confirm,
             &mut input.menu_secondary,
+            &mut input.menu_alternate,
         ] {
             assert_eq!(*button, ButtonState::default());
             button.set(true);
@@ -642,7 +683,12 @@ mod tests {
             assert!(button.held && button.pressed && button.released);
         }
         input.clear_transient();
-        for button in [input.menu_toggle, input.menu_confirm, input.menu_secondary] {
+        for button in [
+            input.menu_toggle,
+            input.menu_confirm,
+            input.menu_secondary,
+            input.menu_alternate,
+        ] {
             assert!(button.held && !button.pressed && !button.released);
         }
     }
@@ -664,6 +710,29 @@ mod tests {
                 released: false
             }
         );
+    }
+
+    #[test]
+    fn drop_item_defaults_neutral_and_retains_only_held_between_frames() {
+        let mut input = InputFrame::default();
+        assert_eq!(input.drop_item, ButtonState::default());
+        input.drop_item.set(true);
+        input.drop_item.set(false);
+        assert!(input.drop_item.pressed && input.drop_item.released);
+        input.drop_item.set(true);
+        input.clear_transient();
+        assert_eq!(
+            input.drop_item,
+            ButtonState {
+                held: true,
+                pressed: false,
+                released: false
+            }
+        );
+        input.drop_item.set(false);
+        assert!(input.drop_item.released && !input.drop_item.held);
+        input.clear_transient();
+        assert_eq!(input.drop_item, ButtonState::default());
     }
 
     #[test]

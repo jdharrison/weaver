@@ -610,8 +610,13 @@ impl WgpuRenderer {
                 }
             }
             stats.cpu_mesh_prepare_time += prepare_timer.elapsed();
-            // The mesh pipeline draws surfaces, then additive meshes in this
-            // same pass before sprites, sharing the established scene depth.
+            self.mesh_pipeline.set_water(
+                &self.context.queue,
+                snapshot.water,
+                snapshot.presentation_time,
+            );
+            // The mesh pipeline draws surfaces, water, then additive meshes in
+            // this same pass before sprites, sharing the established scene depth.
             self.mesh_pipeline.render(
                 &mut pass,
                 &self.context.device,

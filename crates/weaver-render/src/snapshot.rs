@@ -2,7 +2,7 @@
 
 use crate::{
     Camera, MeshInstance, Particle, ParticleEmitter, RenderError, SpriteInstance, TextRun,
-    UiElement,
+    UiElement, WaterSettings,
 };
 use weaver_core::snapshot::TransformSample;
 use weaver_core::{EntityId, FrameId, RenderSnapshot, Revision};
@@ -22,6 +22,10 @@ pub struct SceneSnapshot {
     pub background_color: [f32; 4],
     /// Mesh instances.
     pub meshes: Vec<MeshInstance>,
+    /// Optional stylized water appearance for `MeshRenderMode::Water`.
+    pub water: Option<WaterSettings>,
+    /// Monotonic presentation time in seconds for shader animation.
+    pub presentation_time: f32,
     /// Optional camera-motion blur; `None` retains the direct rendering path.
     pub motion_blur: Option<crate::CameraMotionBlur>,
     /// Sharp foreground meshes drawn after scene effects, before UI/text.
@@ -67,6 +71,8 @@ impl SceneSnapshot {
             },
             background_color: [0.0, 0.0, 0.0, 1.0],
             meshes: Vec::new(),
+            water: None,
+            presentation_time: 0.0,
             motion_blur: None,
             foreground_meshes: Vec::new(),
             sprites: Vec::new(),
@@ -99,6 +105,11 @@ impl SceneSnapshot {
     pub fn validate(&self) -> Result<(), RenderError> {
         if let Some(settings) = self.motion_blur {
             settings.validate()?;
+        }
+        if self.water.is_some_and(|water| !water.is_valid()) {
+            return Err(RenderError::Internal(
+                "water settings contain invalid values".into(),
+            ));
         }
         for sample in &self.transforms {
             if sample.scale <= 0.0 {

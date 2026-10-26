@@ -2,19 +2,23 @@
 
 use crate::error::WgpuRenderError;
 use crate::pipeline::{
-    MESH_SHADER, camera_bind_group_layout, create_shader, instance_uniform_layout,
+    MESH_SHADER, WATER_SHADER, camera_bind_group_layout, create_shader, instance_uniform_layout,
 };
 
 // Keep the complete uniform binding within WebGL2's guaranteed 16 KiB limit.
 const MAX_INSTANCES: usize = 128;
 use crate::resource::{GpuMesh, GpuTexture, Vertex};
 use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
 use std::collections::HashMap;
-use weaver_render::{MeshHandle, MeshInstance, MeshRenderMode, MeshTextureFit, SpriteHandle};
+use weaver_render::{
+    MeshHandle, MeshInstance, MeshRenderMode, MeshTextureFit, SpriteHandle, WaterSettings,
+};
 
 // Retain transient peaks briefly, not for the lifetime of the renderer.
 const RESOURCE_IDLE_FRAMES: u16 = 120;
 const INSTANCE_BUFFER_SIZE: u64 = (MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>()) as u64;
+const WATER_UNIFORM_SIZE: u64 = 128;
 
 struct InstanceSlot {
     buffer: wgpu::Buffer,
@@ -137,6 +141,7 @@ fn mesh_blend_state(mode: MeshRenderMode) -> wgpu::BlendState {
                 operation: wgpu::BlendOperation::Add,
             },
         },
+        MeshRenderMode::Water => wgpu::BlendState::REPLACE,
     }
 }
 
@@ -263,6 +268,21 @@ impl From<&MeshInstance> for MeshInstanceRaw {
     }
 }
 
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WaterUniformRaw {
+    deep_color: [f32; 4],
+    shallow_color: [f32; 4],
+    horizon: [f32; 4],
+    zenith: [f32; 4],
+    sun_direction: [f32; 4],
+    sun_color: [f32; 4],
+    params: [f32; 4],
+    params2: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<WaterUniformRaw>() as u64 <= WATER_UNIFORM_SIZE);
+
 const _: () = assert!(MAX_INSTANCES * std::mem::size_of::<MeshInstanceRaw>() <= 16 * 1024);
 
 #[cfg(test)]
@@ -284,6 +304,9 @@ pub struct MeshPipeline {
     skin_slots: DrawSlots<InstanceSlot>,
     additive_pipeline: wgpu::RenderPipeline,
     skinned_additive_pipeline: wgpu::RenderPipeline,
+    water_pipeline: wgpu::RenderPipeline,
+    water_bind_group: wgpu::BindGroup,
+    water_buffer: wgpu::Buffer,
     _camera_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
@@ -366,6 +389,45 @@ impl MeshPipeline {
             ],
             push_constant_ranges: &[],
         });
+        let water_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("water-uniform-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(WATER_UNIFORM_SIZE),
+                },
+                count: None,
+            }],
+        });
+        let water_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("water-mesh-layout"),
+                bind_group_layouts: &[
+                    &camera_layout,
+                    &instance_layout,
+                    &texture_layout,
+                    &water_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+        let water_shader = create_shader(device, "water-shader", WATER_SHADER);
+        let water_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water-uniform"),
+            size: WATER_UNIFORM_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let water_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water-uniform-bind-group"),
+            layout: &water_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: water_buffer.as_entire_binding(),
+            }],
+        });
         let skinned_shader = create_shader(
             device,
             "skinned-mesh-shader",
@@ -398,7 +460,10 @@ impl MeshPipeline {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     // Skinning may reflect geometry during animation. Keep rigid
                     // culling unchanged; skinned geometry renders both windings.
-                    cull_mode: if buffers.len() > 1 || mode == MeshRenderMode::Additive {
+                    cull_mode: if buffers.len() > 1
+                        || mode == MeshRenderMode::Additive
+                        || mode == MeshRenderMode::Water
+                    {
                         None
                     } else {
                         Some(wgpu::Face::Back)
@@ -408,7 +473,8 @@ impl MeshPipeline {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: mode == MeshRenderMode::Surface,
+                    depth_write_enabled: mode == MeshRenderMode::Surface
+                        || mode == MeshRenderMode::Water,
                     depth_compare: wgpu::CompareFunction::Less,
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -446,11 +512,20 @@ impl MeshPipeline {
             &[Vertex::layout(), crate::SkinVertex::layout()],
             MeshRenderMode::Surface,
         );
+        let water_pipeline = make_pipeline(
+            &water_pipeline_layout,
+            &water_shader,
+            &[Vertex::layout()],
+            MeshRenderMode::Water,
+        );
         Ok(Self {
             pipeline,
             skinned_pipeline,
             additive_pipeline,
             skinned_additive_pipeline,
+            water_pipeline,
+            water_bind_group,
+            water_buffer,
             skin_layout,
             skin_slots: DrawSlots::default(),
             _camera_layout: camera_layout,
@@ -462,6 +537,58 @@ impl MeshPipeline {
             texture_bindings: TextureBindings::new(),
             draw_stats: crate::stats::MeshDrawStats::default(),
         })
+    }
+
+    /// Update the stylized water uniform. Invalid inputs fall back to defaults.
+    pub fn set_water(
+        &mut self,
+        queue: &wgpu::Queue,
+        settings: Option<WaterSettings>,
+        presentation_time: f32,
+    ) {
+        let settings = settings.filter(WaterSettings::is_valid).unwrap_or_default();
+        let finite = |value: Vec3, fallback: Vec3| {
+            if value.is_finite() { value } else { fallback }
+        };
+        let sun = finite(settings.sun_direction, Vec3::Y);
+        let sun = if sun.length_squared() > 1.0e-6 {
+            sun.normalize()
+        } else {
+            Vec3::Y
+        };
+        let finite_scalar = |value: f32, fallback: f32| {
+            if value.is_finite() { value } else { fallback }
+        };
+        let time = finite_scalar(presentation_time, 0.0);
+        let raw = WaterUniformRaw {
+            deep_color: finite(settings.deep_color, Vec3::ZERO)
+                .extend(0.0)
+                .to_array(),
+            shallow_color: finite(settings.shallow_color, Vec3::ZERO)
+                .extend(0.0)
+                .to_array(),
+            horizon: finite(settings.sky_horizon, Vec3::ZERO)
+                .extend(0.0)
+                .to_array(),
+            zenith: finite(settings.sky_zenith, Vec3::ZERO)
+                .extend(0.0)
+                .to_array(),
+            sun_direction: sun.extend(0.0).to_array(),
+            sun_color: finite(settings.sun_color, Vec3::ONE).extend(0.0).to_array(),
+            params: [
+                time,
+                finite_scalar(settings.specular_strength, 1.0).clamp(0.0, 8.0),
+                finite_scalar(settings.wave_scale, 1.0).clamp(0.01, 16.0),
+                finite_scalar(settings.wave_height, 0.5).clamp(0.0, 4.0),
+            ],
+            params2: [
+                finite_scalar(settings.foam_strength, 0.3).clamp(0.0, 2.0),
+                finite_scalar(settings.detail_strength, 0.3).clamp(0.0, 2.0),
+                finite_scalar(settings.normal_strength, 2.5).clamp(0.0, 12.0),
+                0.0,
+            ],
+        };
+        queue.write_buffer(&self.water_buffer, 0, bytemuck::bytes_of(&raw));
     }
 
     /// Immediately release cached bindings for a removed/replaced texture view.
@@ -503,8 +630,12 @@ impl MeshPipeline {
         self.texture_bindings.age();
         pass.set_bind_group(0, camera_bind_group, &[]);
 
-        // Finish depth-writing surfaces before additive draws, even for mixed-mode input.
-        for mode in [MeshRenderMode::Surface, MeshRenderMode::Additive] {
+        // Finish opaque/water surfaces before additive draws, even for mixed-mode input.
+        for mode in [
+            MeshRenderMode::Surface,
+            MeshRenderMode::Water,
+            MeshRenderMode::Additive,
+        ] {
             for (mesh, texture, sampling_mode, instances) in
                 meshes.iter().flat_map(|(mesh, texture, instances)| {
                     mesh_sampling_groups(instances)
@@ -545,9 +676,15 @@ impl MeshPipeline {
                 pass.set_pipeline(match (skinned, mode) {
                     (false, MeshRenderMode::Surface) => &self.pipeline,
                     (false, MeshRenderMode::Additive) => &self.additive_pipeline,
-                    (true, MeshRenderMode::Surface) => &self.skinned_pipeline,
+                    (false, MeshRenderMode::Water) => &self.water_pipeline,
+                    (true, MeshRenderMode::Surface) | (true, MeshRenderMode::Water) => {
+                        &self.skinned_pipeline
+                    }
                     (true, MeshRenderMode::Additive) => &self.skinned_additive_pipeline,
                 });
+                if !skinned && mode == MeshRenderMode::Water {
+                    pass.set_bind_group(3, &self.water_bind_group, &[]);
+                }
                 if let Some(buffer) = &mesh.skin_buffer {
                     pass.set_vertex_buffer(1, buffer.slice(..));
                 }
@@ -1335,5 +1472,47 @@ mod tests {
                 Some(wgpu::naga::ResourceBinding { group: 2, binding })
             );
         }
+    }
+
+    #[test]
+    fn water_shader_parses_and_binds_a_128_byte_uniform() {
+        let shader = wgpu::naga::front::wgsl::parse_str(WATER_SHADER).unwrap();
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
+        )
+        .validate(&shader)
+        .unwrap();
+        let water = shader
+            .global_variables
+            .iter()
+            .map(|(_, variable)| variable)
+            .find(|variable| variable.name.as_deref() == Some("water"))
+            .expect("water uniform");
+        assert_eq!(
+            water.binding,
+            Some(wgpu::naga::ResourceBinding {
+                group: 3,
+                binding: 0
+            })
+        );
+        let wgpu::naga::TypeInner::Struct { members, span } = &shader.types[water.ty].inner else {
+            panic!("water uniform must be a struct");
+        };
+        assert_eq!(*span, WATER_UNIFORM_SIZE as u32);
+        assert_eq!(members.len(), 8);
+        assert_eq!(std::mem::size_of::<WaterUniformRaw>(), 128);
+    }
+
+    #[test]
+    #[ignore = "opt-in local headless GPU; no window or network"]
+    fn headless_water_pipeline_and_uniform_create() {
+        let context = pollster::block_on(crate::WgpuContext::headless(
+            crate::WgpuContextConfig::default(),
+        ))
+        .expect("headless GPU required");
+        let mut pipeline =
+            MeshPipeline::new(&context.device, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 8).unwrap();
+        pipeline.set_water(&context.queue, Some(WaterSettings::default()), 1.0);
     }
 }

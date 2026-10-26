@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use weaver_app_core::{
     AppAction, ButtonState, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeDriver,
-    RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp,
+    RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp, WindowMode,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -17,7 +17,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 /// Desktop shell configuration.
 #[derive(Clone, Copy, Debug)]
@@ -293,6 +293,7 @@ impl GameplayRouting {
             PhysicalKey::Code(KeyCode::Tab) => &mut input.scoreboard,
             PhysicalKey::Code(KeyCode::Enter) => &mut input.menu_confirm,
             PhysicalKey::Code(KeyCode::Backspace) => &mut input.menu_secondary,
+            PhysicalKey::Code(KeyCode::KeyM) => &mut input.menu_alternate,
             _ => return,
         };
         button.set(pressed);
@@ -307,6 +308,32 @@ impl GameplayRouting {
         {
             input.interact.set(pressed);
         }
+    }
+
+    fn drop_item(self, input: &mut InputFrame, key: PhysicalKey, pressed: bool, repeat: bool) {
+        if self.available()
+            && self.enabled
+            && self.captured
+            && !repeat
+            && key == PhysicalKey::Code(KeyCode::KeyG)
+        {
+            input.drop_item.set(pressed);
+        }
+    }
+
+    /// Routes C/Q/E/X into the four application-owned ability slots.
+    fn ability(self, input: &mut InputFrame, key: PhysicalKey, pressed: bool, repeat: bool) {
+        if !self.available() || !self.enabled || !self.captured || repeat {
+            return;
+        }
+        let slot = match key {
+            PhysicalKey::Code(KeyCode::KeyC) => 0,
+            PhysicalKey::Code(KeyCode::KeyQ) => 1,
+            PhysicalKey::Code(KeyCode::KeyE) => 2,
+            PhysicalKey::Code(KeyCode::KeyX) => 3,
+            _ => return,
+        };
+        input.abilities[slot].set(pressed);
     }
 
     fn ads(self, input: &mut InputFrame, pressed: bool) {
@@ -335,11 +362,44 @@ impl GameplayRouting {
         }
     }
 
+    fn toggle_shoulder(
+        self,
+        input: &mut InputFrame,
+        key: PhysicalKey,
+        pressed: bool,
+        repeat: bool,
+    ) {
+        if self.available()
+            && self.enabled
+            && self.captured
+            && !repeat
+            && key == PhysicalKey::Code(KeyCode::KeyV)
+        {
+            input.toggle_shoulder.set(pressed);
+        }
+    }
+
     fn reload(self, input: &mut InputFrame, pressed: bool, repeat: bool) {
         if self.available() && self.enabled && self.captured && !repeat {
             input.reload.set(pressed);
         }
     }
+}
+
+fn should_recapture_pointer(
+    previous: PointerMode,
+    next: PointerMode,
+    opted_in: bool,
+    focused: bool,
+    externally_cancelled: bool,
+    text_mode: TextInputMode,
+) -> bool {
+    opted_in
+        && previous == PointerMode::None
+        && next == PointerMode::LockedLook
+        && focused
+        && !externally_cancelled
+        && text_mode == TextInputMode::Disabled
 }
 
 fn reset_controls(input: &mut InputFrame) {
@@ -356,12 +416,16 @@ fn reset_controls(input: &mut InputFrame) {
     input.fire = ButtonState::default();
     input.reload = ButtonState::default();
     input.interact = ButtonState::default();
+    input.drop_item = ButtonState::default();
+    input.abilities = [ButtonState::default(); 4];
     input.pause = ButtonState::default();
+    input.toggle_shoulder = ButtonState::default();
     input.menu_toggle = ButtonState::default();
     input.scoreboard = ButtonState::default();
     input.menu_confirm = ButtonState::default();
     input.menu_cancel = ButtonState::default();
     input.menu_secondary = ButtonState::default();
+    input.menu_alternate = ButtonState::default();
     input.weapon_slot = None;
     input.controls_reset = true;
 }
@@ -392,6 +456,7 @@ struct DesktopShell {
     last_pointer_mode: PointerMode,
     last_gameplay_enabled: bool,
     last_text_input_mode: TextInputMode,
+    last_window_mode: WindowMode,
     started_at: Instant,
     last_frame: Instant,
     performance: performance::PerformanceLog,
@@ -406,6 +471,7 @@ impl DesktopShell {
         let now = Instant::now();
         let last_pointer_mode = app.pointer_mode();
         let last_gameplay_enabled = app.gameplay_input_enabled();
+        let last_window_mode = app.window_mode();
         Self {
             app,
             config,
@@ -428,6 +494,7 @@ impl DesktopShell {
             last_pointer_mode,
             last_gameplay_enabled,
             last_text_input_mode: TextInputMode::Disabled,
+            last_window_mode,
             started_at: now,
             last_frame: now,
             performance: performance::PerformanceLog::new(config.performance_logging),
@@ -516,9 +583,30 @@ impl DesktopShell {
     /// used, so the window, realtime driver and application are dropped normally.
     fn update_app(&mut self, frame: FrameContext) -> bool {
         self.app.update(frame, &self.input);
+        // Apply presentation requests only after the app has observed this frame.
+        self.sync_window_mode();
+        // Consuming this frame must not erase cancellation/text-open evidence before
+        // deciding whether an app-driven pointer transition may capture the cursor.
+        let capture_blocked =
+            self.input.controls_reset || self.input.text_events.contains(&TextInputEvent::Open);
         self.input.clear_transient();
-        self.sync_input_modes();
+        self.sync_input_modes_with_capture_blocked(capture_blocked);
         self.app.exit_requested()
+    }
+
+    fn sync_window_mode(&mut self) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let mode = self.app.window_mode();
+        if mode == self.last_window_mode {
+            return;
+        }
+        window.set_fullscreen(match mode {
+            WindowMode::Windowed => None,
+            WindowMode::Fullscreen => Some(Fullscreen::Borderless(None)),
+        });
+        self.last_window_mode = mode;
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
@@ -575,8 +663,22 @@ impl DesktopShell {
     }
 
     fn sync_input_modes(&mut self) {
+        self.sync_input_modes_with_capture_blocked(false);
+    }
+
+    fn sync_input_modes_with_capture_blocked(&mut self, capture_blocked: bool) {
         let pointer = self.app.pointer_mode();
         let enabled = self.app.gameplay_input_enabled();
+        let recapture = should_recapture_pointer(
+            self.last_pointer_mode,
+            pointer,
+            self.app.recapture_pointer_on_mode_change(),
+            self.focused,
+            capture_blocked
+                || self.input.controls_reset
+                || self.input.text_events.contains(&TextInputEvent::Open),
+            self.app.text_input_mode(),
+        );
         if pointer != self.last_pointer_mode {
             // App-requested routing transitions are not external cancellation. Preserve
             // a real reset already pending, but do not close UI by inventing one here.
@@ -589,6 +691,23 @@ impl DesktopShell {
         self.last_pointer_mode = pointer;
         self.last_gameplay_enabled = enabled;
         self.sync_text_input();
+        if recapture {
+            self.capture_cursor();
+        }
+    }
+
+    fn capture_cursor(&mut self) {
+        if let Some(window) = self.window.as_ref()
+            && window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                .is_ok()
+        {
+            window.set_cursor_visible(false);
+            self.capture_succeeded();
+            // Unlike a capture click, a mode change may occur with no button held.
+            self.blocked_until_left_release = self.left_held;
+        }
     }
 
     fn handle_left_mouse_input(&mut self, state: ElementState) {
@@ -602,15 +721,8 @@ impl DesktopShell {
             && !routing.enabled
             && !self.blocked_until_left_release
             && !self.left_held;
-        if self.left_button(pressed)
-            && let Some(window) = self.window.as_ref()
-            && window
-                .set_cursor_grab(CursorGrabMode::Locked)
-                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                .is_ok()
-        {
-            window.set_cursor_visible(false);
-            self.capture_succeeded();
+        if self.left_button(pressed) {
+            self.capture_cursor();
         }
         if activate {
             self.app.primary_activation(Vec2::ZERO);
@@ -718,6 +830,9 @@ impl ApplicationHandler for DesktopShell {
             }
         }
         self.focused = window.has_focus();
+        if self.app.window_mode() == WindowMode::Fullscreen {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
         self.window = Some(window);
         self.renderer = Some(renderer);
     }
@@ -843,7 +958,17 @@ impl ApplicationHandler for DesktopShell {
                 self.gameplay_routing()
                     .interact(&mut self.input, physical_key, pressed, repeat);
                 self.gameplay_routing()
+                    .drop_item(&mut self.input, physical_key, pressed, repeat);
+                self.gameplay_routing()
+                    .ability(&mut self.input, physical_key, pressed, repeat);
+                self.gameplay_routing()
                     .pause(&mut self.input, physical_key, pressed, repeat);
+                self.gameplay_routing().toggle_shoulder(
+                    &mut self.input,
+                    physical_key,
+                    pressed,
+                    repeat,
+                );
                 self.gameplay_routing()
                     .jump(&mut self.input, physical_key, pressed, repeat);
                 self.movement_key(physical_key, pressed);
@@ -972,6 +1097,7 @@ mod tests {
         command_count: usize,
         events: Vec<RealtimeEvent>,
         input_modes: (PointerMode, bool, TextInputMode),
+        recapture_pointer: bool,
         activations: Rc<RefCell<Vec<Vec2>>>,
     }
 
@@ -994,6 +1120,10 @@ mod tests {
 
         fn pointer_mode(&self) -> PointerMode {
             self.input_modes.0
+        }
+
+        fn recapture_pointer_on_mode_change(&self) -> bool {
+            self.recapture_pointer
         }
 
         fn gameplay_input_enabled(&self) -> bool {
@@ -1378,6 +1508,7 @@ mod tests {
             shell.input.fire.set(true);
             shell.input.reload.set(true);
             shell.input.pause.set(true);
+            shell.input.drop_item.set(true);
             shell.movement.set(PhysicalKey::Code(KeyCode::KeyW), true);
             shell
                 .movement
@@ -1394,6 +1525,7 @@ mod tests {
             assert_eq!(shell.input.fire, ButtonState::default());
             assert_eq!(shell.input.reload, ButtonState::default());
             assert_eq!(shell.input.pause, ButtonState::default());
+            assert_eq!(shell.input.drop_item, ButtonState::default());
             assert_eq!(shell.movement.axis(), Vec2::ZERO);
             assert!(!shell.cursor_captured);
             assert!(!shell.input.crouch);
@@ -1408,11 +1540,13 @@ mod tests {
         shell.input.fire.set(true);
         shell.input.reload.set(true);
         shell.input.pause.set(true);
+        shell.input.drop_item.set(true);
         shell.release_cursor();
         assert!(shell.input.controls_reset);
         assert_eq!(shell.input.fire, ButtonState::default());
         assert_eq!(shell.input.reload, ButtonState::default());
         assert_eq!(shell.input.pause, ButtonState::default());
+        assert_eq!(shell.input.drop_item, ButtonState::default());
         shell.input.text_events.push(TextInputEvent::Open);
         shell.cursor_captured = true;
         let routing = shell.gameplay_routing();
@@ -1424,6 +1558,13 @@ mod tests {
             true,
             false,
         );
+        routing.drop_item(
+            &mut shell.input,
+            PhysicalKey::Code(KeyCode::KeyG),
+            true,
+            false,
+        );
+        assert_eq!(shell.input.drop_item, ButtonState::default());
         assert_eq!(shell.input.pause, ButtonState::default());
         assert_eq!(shell.input.fire, ButtonState::default());
         assert_eq!(shell.input.reload, ButtonState::default());
@@ -1465,6 +1606,88 @@ mod tests {
     }
 
     #[test]
+    fn pointer_mode_recapture_requires_explicit_safe_transition() {
+        for previous in [
+            PointerMode::None,
+            PointerMode::LockedLook,
+            PointerMode::OrbitDrag,
+        ] {
+            for next in [
+                PointerMode::None,
+                PointerMode::LockedLook,
+                PointerMode::OrbitDrag,
+            ] {
+                for opted_in in [false, true] {
+                    for focused in [false, true] {
+                        for externally_cancelled in [false, true] {
+                            for text in [
+                                TextInputMode::Disabled,
+                                TextInputMode::Available,
+                                TextInputMode::Focused,
+                            ] {
+                                assert_eq!(
+                                    should_recapture_pointer(
+                                        previous,
+                                        next,
+                                        opted_in,
+                                        focused,
+                                        externally_cancelled,
+                                        text
+                                    ),
+                                    previous == PointerMode::None
+                                        && next == PointerMode::LockedLook
+                                        && opted_in
+                                        && focused
+                                        && !externally_cancelled
+                                        && text == TextInputMode::Disabled,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // This app does not override the trait's default policy.
+        assert!(
+            !menu_test_app(PointerMode::None, TextInputMode::Disabled)
+                .recapture_pointer_on_mode_change()
+        );
+    }
+
+    #[test]
+    fn opted_in_transition_without_window_keeps_click_capture_fallback() {
+        let mut shell = DesktopShell::new(
+            input_test_app((PointerMode::None, true, TextInputMode::Disabled)),
+            DesktopConfig::default(),
+            None,
+        );
+        shell.focused = true;
+        shell.app = Box::new(RealtimeTestApp {
+            input_modes: (PointerMode::LockedLook, true, TextInputMode::Disabled),
+            recapture_pointer: true,
+            ..RealtimeTestApp::default()
+        });
+        shell.sync_input_modes();
+        assert!(!shell.cursor_captured);
+        assert!(!shell.input.controls_reset);
+        assert!(!shell.blocked_until_left_release);
+        assert!(shell.left_button(true));
+        assert_eq!(shell.input.fire, ButtonState::default());
+        shell.left_button(false);
+        shell.handle_left_mouse_input(ElementState::Pressed);
+        assert!(!shell.cursor_captured);
+        assert_eq!(shell.input.fire, ButtonState::default());
+        assert!(!should_recapture_pointer(
+            shell.last_pointer_mode,
+            shell.app.pointer_mode(),
+            true,
+            true,
+            false,
+            TextInputMode::Disabled,
+        ));
+    }
+
+    #[test]
     fn pointer_transitions_cancel_without_reset_or_click_through_in_either_direction() {
         for enabled in [false, true] {
             let mut shell = capture_test_shell(enabled);
@@ -1484,6 +1707,7 @@ mod tests {
             shell.app = input_test_app((PointerMode::LockedLook, enabled, TextInputMode::Disabled));
             shell.sync_input_modes();
             assert!(!shell.input.controls_reset);
+            assert!(!shell.cursor_captured);
             assert_eq!(shell.input.pointer_primary, ButtonState::default());
             assert!(!shell.left_button(true));
             shell.left_button(false);
@@ -1865,6 +2089,35 @@ mod tests {
     }
 
     #[test]
+    fn shoulder_toggle_maps_v_ignores_repeat_and_cancels_on_reset() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        let mut input = InputFrame::default();
+        let key = PhysicalKey::Code(KeyCode::KeyV);
+        routing.toggle_shoulder(&mut input, PhysicalKey::Code(KeyCode::KeyF), true, false);
+        routing.toggle_shoulder(&mut input, key, true, true);
+        assert_eq!(input.toggle_shoulder, ButtonState::default());
+        routing.toggle_shoulder(&mut input, key, true, false);
+        assert!(input.toggle_shoulder.held && input.toggle_shoulder.pressed);
+        input.clear_transient();
+        routing.toggle_shoulder(&mut input, key, false, false);
+        assert!(input.toggle_shoulder.released && !input.toggle_shoulder.held);
+        reset_controls(&mut input);
+        routing.toggle_shoulder(&mut input, key, true, true);
+        assert_eq!(input.toggle_shoulder, ButtonState::default());
+        assert!(input.controls_reset);
+
+        let uncaptured = GameplayRouting {
+            captured: false,
+            ..routing
+        };
+        uncaptured.toggle_shoulder(&mut input, key, true, false);
+        assert_eq!(input.toggle_shoulder, ButtonState::default());
+    }
+
+    #[test]
     fn interact_maps_f_ignores_repeat_and_cancels_on_reset() {
         let routing = GameplayRouting {
             captured: true,
@@ -1890,6 +2143,69 @@ mod tests {
         assert_eq!(input.interact, ButtonState::default());
         assert!(input.controls_reset);
         assert!(input.actions.is_empty() && input.text_events.is_empty());
+    }
+
+    #[test]
+    fn drop_item_maps_g_ignores_repeat_and_cancels_on_reset() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        let mut input = InputFrame::default();
+        let key = PhysicalKey::Code(KeyCode::KeyG);
+        for other in [KeyCode::KeyF, KeyCode::KeyR, KeyCode::KeyB] {
+            routing.drop_item(&mut input, PhysicalKey::Code(other), true, false);
+        }
+        routing.drop_item(&mut input, key, true, true);
+        assert_eq!(input.drop_item, ButtonState::default());
+        routing.drop_item(&mut input, key, true, false);
+        assert!(input.drop_item.held && input.drop_item.pressed);
+        input.clear_transient();
+        routing.drop_item(&mut input, key, true, true);
+        routing.drop_item(&mut input, key, true, false);
+        routing.drop_item(&mut input, key, false, true);
+        assert!(input.drop_item.held && !input.drop_item.pressed && !input.drop_item.released);
+        routing.drop_item(&mut input, key, false, false);
+        assert!(input.drop_item.released && !input.drop_item.held);
+        routing.drop_item(&mut input, key, true, false);
+        assert!(input.drop_item.pressed && input.drop_item.released);
+        reset_controls(&mut input);
+        routing.drop_item(&mut input, key, true, true);
+        assert_eq!(input.drop_item, ButtonState::default());
+        assert!(input.controls_reset);
+        assert_eq!(input.interact, ButtonState::default());
+        assert!(input.actions.is_empty() && input.text_events.is_empty());
+    }
+
+    #[test]
+    fn ability_buttons_map_cqex_ignore_repeat_and_cancel_on_reset() {
+        let routing = GameplayRouting {
+            captured: true,
+            ..shooter_routing()
+        };
+        let mut input = InputFrame::default();
+        for (key, slot) in [
+            (KeyCode::KeyC, 0),
+            (KeyCode::KeyQ, 1),
+            (KeyCode::KeyE, 2),
+            (KeyCode::KeyX, 3),
+        ] {
+            let key = PhysicalKey::Code(key);
+            for other in [KeyCode::KeyF, KeyCode::KeyR, KeyCode::KeyB] {
+                routing.ability(&mut input, PhysicalKey::Code(other), true, false);
+            }
+            routing.ability(&mut input, key, true, true);
+            assert_eq!(input.abilities[slot], ButtonState::default());
+            routing.ability(&mut input, key, true, false);
+            assert!(input.abilities[slot].held && input.abilities[slot].pressed);
+            input.clear_transient();
+            routing.ability(&mut input, key, false, false);
+            assert!(input.abilities[slot].released && !input.abilities[slot].held);
+            reset_controls(&mut input);
+            routing.ability(&mut input, key, true, true);
+            assert_eq!(input.abilities[slot], ButtonState::default());
+            assert!(input.controls_reset);
+        }
     }
 
     #[test]
@@ -1997,17 +2313,28 @@ mod tests {
             captured: true,
             ..shooter_routing()
         };
-        for (index, key) in [KeyCode::KeyB, KeyCode::Enter, KeyCode::Backspace]
-            .into_iter()
-            .enumerate()
+        for (index, key) in [
+            KeyCode::KeyB,
+            KeyCode::Enter,
+            KeyCode::Backspace,
+            KeyCode::KeyM,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let mut input = InputFrame::default();
-            let buttons =
-                |input: &InputFrame| [input.menu_toggle, input.menu_confirm, input.menu_secondary];
+            let buttons = |input: &InputFrame| {
+                [
+                    input.menu_toggle,
+                    input.menu_confirm,
+                    input.menu_secondary,
+                    input.menu_alternate,
+                ]
+            };
             routing.menu_button(&mut input, PhysicalKey::Code(key), true, true);
-            assert_eq!(buttons(&input), [ButtonState::default(); 3]);
+            assert_eq!(buttons(&input), [ButtonState::default(); 4]);
             routing.menu_button(&mut input, PhysicalKey::Code(key), true, false);
-            let mut expected = [ButtonState::default(); 3];
+            let mut expected = [ButtonState::default(); 4];
             expected[index].set(true);
             assert_eq!(buttons(&input), expected);
             input.clear_transient();
@@ -2021,7 +2348,7 @@ mod tests {
             routing.menu_button(&mut input, PhysicalKey::Code(key), true, false);
             reset_controls(&mut input);
             routing.menu_button(&mut input, PhysicalKey::Code(key), true, true);
-            assert_eq!(buttons(&input), [ButtonState::default(); 3]);
+            assert_eq!(buttons(&input), [ButtonState::default(); 4]);
             assert!(input.controls_reset);
             assert!(input.actions.is_empty() && input.text_events.is_empty());
         }
@@ -2030,8 +2357,13 @@ mod tests {
             routing.menu_button(&mut input, PhysicalKey::Code(key), true, false);
         }
         assert_eq!(
-            [input.menu_toggle, input.menu_confirm, input.menu_secondary],
-            [ButtonState::default(); 3]
+            [
+                input.menu_toggle,
+                input.menu_confirm,
+                input.menu_secondary,
+                input.menu_alternate
+            ],
+            [ButtonState::default(); 4]
         );
     }
 
@@ -2073,6 +2405,12 @@ mod tests {
                                 true,
                                 false,
                             );
+                            routing.drop_item(
+                                &mut input,
+                                PhysicalKey::Code(KeyCode::KeyG),
+                                true,
+                                false,
+                            );
                             routing.pause(
                                 &mut input,
                                 PhysicalKey::Code(KeyCode::KeyP),
@@ -2090,6 +2428,7 @@ mod tests {
                                 (input.menu_confirm, menu_allowed),
                                 (input.menu_secondary, menu_allowed),
                                 (input.interact, allowed),
+                                (input.drop_item, allowed),
                             ] {
                                 assert_eq!(
                                     button,

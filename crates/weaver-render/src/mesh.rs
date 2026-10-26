@@ -43,6 +43,10 @@ pub enum MeshRenderMode {
     /// Tests against scene depth without writing it; drawn after surfaces and
     /// before sprites. Lighting and emission still use the ordinary mesh shader.
     Additive,
+    /// Opaque, depth-writing stylized water driven by a fixed GPU shader.
+    /// The instance texture is scrolled as high-frequency detail. Wave
+    /// displacement is masked by the vertex color red channel.
+    Water,
 }
 
 /// One instanced draw of a mesh.

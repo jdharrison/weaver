@@ -16,6 +16,7 @@ pub mod sprite;
 pub mod text;
 pub mod transform;
 pub mod ui;
+pub mod water;
 
 pub use camera::{Camera, Projection, Viewport};
 pub use error::RenderError;
@@ -28,3 +29,4 @@ pub use sprite::{SpriteHandle, SpriteInstance, SpriteSpace};
 pub use text::{TextAnchor, TextRun, TextWeight};
 pub use transform::RenderTransform;
 pub use ui::{UiElement, UiImage, UiRect, UiText};
+pub use water::WaterSettings;

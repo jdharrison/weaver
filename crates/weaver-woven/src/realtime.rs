@@ -3,6 +3,7 @@
 use crate::{
     DeliveryClass, PayloadEnvelope, PersistenceClass, WovenAdapter, WovenAdapterError, WovenConfig,
 };
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -65,6 +66,77 @@ enum WorkerCommand {
     Stop,
 }
 
+/// Worker-owned backlog; no timer sleeps or accumulated publication credits.
+struct PublishPacing {
+    interval: Duration,
+    last_completed: Option<Instant>,
+    reliable: VecDeque<WorkerCommand>,
+    // Number of queued reliable predecessors preserves legacy channel-1 ordering.
+    pose: Option<(usize, WorkerCommand)>,
+    prefer_pose: bool,
+}
+
+impl PublishPacing {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_completed: None,
+            reliable: VecDeque::new(),
+            pose: None,
+            prefer_pose: false,
+        }
+    }
+
+    fn enqueue(&mut self, command: WorkerCommand) -> Result<(), &'static str> {
+        match command {
+            WorkerCommand::PublishReliable { .. } => {
+                if self.reliable.len() == CHANNEL_CAPACITY {
+                    return Err("Woven realtime paced reliable queue overflow");
+                }
+                self.reliable.push_back(command);
+            }
+            WorkerCommand::PublishLatest { .. }
+            | WorkerCommand::PublishUnreliable { .. }
+            | WorkerCommand::PublishPositionedUnreliable { .. } => {
+                self.pose = Some((self.reliable.len(), command));
+            }
+            WorkerCommand::LogInfo { .. } | WorkerCommand::Stop => {
+                unreachable!("only application publications enter the pacing queue");
+            }
+        }
+        Ok(())
+    }
+
+    fn take_ready(&mut self, now: Instant) -> Option<WorkerCommand> {
+        if self
+            .last_completed
+            .is_some_and(|last| now.saturating_duration_since(last) < self.interval)
+        {
+            return None;
+        }
+        let take_pose = match self.pose.as_ref() {
+            Some((predecessors, WorkerCommand::PublishLatest { .. })) => *predecessors == 0,
+            Some(_) => self.prefer_pose || self.reliable.is_empty(),
+            None => false,
+        };
+        if take_pose {
+            self.prefer_pose = false;
+            self.pose.take().map(|(_, command)| command)
+        } else {
+            let command = self.reliable.pop_front()?;
+            if let Some((predecessors, _)) = self.pose.as_mut() {
+                *predecessors = predecessors.saturating_sub(1);
+            }
+            self.prefer_pose = true;
+            Some(command)
+        }
+    }
+
+    fn completed(&mut self, now: Instant) {
+        self.last_completed = Some(now);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ForwardError {
     Full,
@@ -101,6 +173,30 @@ impl WovenRealtimeDriver {
     /// Returns an error if the adapter cannot be constructed, connected, assigned
     /// an entity, or moved to its worker thread.
     pub fn connect(config: WovenConfig) -> Result<Self, WovenAdapterError> {
+        Self::connect_with_publish_interval(config, Duration::ZERO)
+    }
+
+    /// Connect with an aggregate minimum interval between application publications.
+    ///
+    /// All reliable and replaceable publications share this worker-side limit. Zero
+    /// retains the unpaced behavior of [`Self::connect`]. The first send is immediate;
+    /// subsequent sends wait at least `interval` after the previous call completes,
+    /// without catch-up credit after stalls. This is not a network arrival-rate guarantee.
+    ///
+    /// Pending reliable commands remain FIFO (up to 128 worker-side entries, in
+    /// addition to the bounded command channel); overflow disconnects explicitly.
+    /// Replaceable state coalesces to the newest command. Binary poses and reliable
+    /// commands alternate when both are pending. Legacy `PublishLatest` instead
+    /// respects enqueue order relative to reliable commands on their shared channel.
+    /// Inbound events continue to be pumped while publications wait; logs are not paced.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same connection and worker-start errors as [`Self::connect`].
+    pub fn connect_with_publish_interval(
+        config: WovenConfig,
+        interval: Duration,
+    ) -> Result<Self, WovenAdapterError> {
         let mut adapter = WovenAdapter::new(config)?;
         adapter.start()?;
         if !adapter.supports_positioned_state() {
@@ -133,6 +229,7 @@ impl WovenRealtimeDriver {
                     &terminal_tx,
                     worker_stop.as_ref(),
                     worker_latency.as_ref(),
+                    interval,
                 );
             })
             .map_err(|error| WovenAdapterError::InitializationFailed(error.to_string()))?;
@@ -389,6 +486,7 @@ impl Drop for WovenRealtimeDriver {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_worker(
     mut adapter: WovenAdapter,
     entity_id: u64,
@@ -397,11 +495,22 @@ fn run_worker(
     terminal_tx: &SyncSender<RealtimeEvent>,
     stop: &AtomicBool,
     latency: &LatencyTelemetry,
+    interval: Duration,
 ) {
-    let failure = worker_loop(&mut adapter, entity_id, command_rx, event_tx, stop, latency);
+    let started = Instant::now();
+    let failure = worker_loop(
+        &mut adapter,
+        entity_id,
+        command_rx,
+        event_tx,
+        stop,
+        latency,
+        interval,
+    );
     latency.sample(None);
     stop.store(true, Ordering::Release);
     if let Some(reason) = failure {
+        let reason = format!("after {:.1}s: {reason}", started.elapsed().as_secs_f64());
         let _ = terminal_tx.try_send(RealtimeEvent::Disconnected { reason });
     }
     adapter.stop();
@@ -414,8 +523,10 @@ fn worker_loop(
     event_tx: &SyncSender<RealtimeEvent>,
     stop: &AtomicBool,
     latency: &LatencyTelemetry,
+    interval: Duration,
 ) -> Option<String> {
     let mut last_sample = None;
+    let mut pacing = (!interval.is_zero()).then(|| PublishPacing::new(interval));
     loop {
         if stop.load(Ordering::Acquire) {
             return None;
@@ -439,6 +550,21 @@ fn worker_loop(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return None,
             };
+            if let Some(pacing) = pacing.as_mut()
+                && matches!(
+                    command,
+                    WorkerCommand::PublishLatest { .. }
+                        | WorkerCommand::PublishReliable { .. }
+                        | WorkerCommand::PublishUnreliable { .. }
+                        | WorkerCommand::PublishPositionedUnreliable { .. }
+                )
+            {
+                if let Err(reason) = pacing.enqueue(command) {
+                    return Some(reason.to_owned());
+                }
+                work += 1;
+                continue;
+            }
             match command {
                 command @ (WorkerCommand::PublishLatest { .. }
                 | WorkerCommand::PublishUnreliable { .. }
@@ -473,6 +599,17 @@ fn worker_loop(
             && let Err(error) = publish_command(adapter, entity_id, pose)
         {
             return Some(error.to_string());
+        }
+
+        if let Some(pacing) = pacing.as_mut()
+            && let Some(command) = pacing.take_ready(Instant::now())
+        {
+            if let Err(error) = publish_command(adapter, entity_id, command) {
+                return Some(error.to_string());
+            }
+            // Use completion time, not the iteration start or a periodic deadline:
+            // a slow send must not allow the next queued publication to burst.
+            pacing.completed(Instant::now());
         }
 
         let inbound_budget = MAX_ITERATION_WORK - work;
@@ -596,6 +733,10 @@ fn forward_event(
 }
 
 #[cfg(test)]
+#[path = "realtime_pacing_tests.rs"]
+mod pacing_tests;
+
+#[cfg(test)]
 #[path = "logging_tests.rs"]
 mod logging_tests;
 
@@ -683,6 +824,51 @@ mod tests {
             }],
             &mut events,
         );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn oversized_datagram_reports_operation_budget_and_elapsed_time_without_payload() {
+        let mut driver = WovenRealtimeDriver::connect(WovenConfig::default()).unwrap();
+        let mut events = Vec::new();
+        driver.poll(
+            &[RealtimeCommand::PublishPositionedUnreliable {
+                sequence: 1,
+                position: [1.0, 0.0, 1.0],
+                payload: b"PRIVATE-PAYLOAD".repeat(4_000),
+            }],
+            &mut events,
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !events
+            .iter()
+            .any(|event| matches!(event, RealtimeEvent::Disconnected { .. }))
+        {
+            assert!(Instant::now() < deadline, "missing terminal diagnostic");
+            std::thread::sleep(Duration::from_millis(2));
+            driver.poll(&[], &mut events);
+        }
+        let reason = events
+            .iter()
+            .find_map(|event| match event {
+                RealtimeEvent::Disconnected { reason } => Some(reason),
+                _ => None,
+            })
+            .unwrap();
+        assert!(reason.starts_with("after "));
+        assert!(reason.contains("publish positioned datagram"));
+        assert!(reason.contains("datagram frame too large"));
+        assert!(reason.contains("datagram frame budget"));
+        assert!(!reason.contains("PRIVATE-PAYLOAD"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RealtimeEvent::Disconnected { .. }))
+                .count(),
+            1
+        );
+        events.clear();
+        driver.poll(&[], &mut events);
         assert!(events.is_empty());
     }
 
@@ -951,6 +1137,7 @@ mod tests {
                 &event_tx,
                 &stop,
                 &LatencyTelemetry::default(),
+                Duration::ZERO,
             ),
             None
         );
@@ -1149,6 +1336,7 @@ mod tests {
                 &terminal_tx,
                 worker_stop.as_ref(),
                 &LatencyTelemetry::default(),
+                Duration::ZERO,
             );
         });
         let received = [

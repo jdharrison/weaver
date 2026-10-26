@@ -75,11 +75,14 @@ fn embedded_binary_datagrams_and_reliable_json_coexist_and_restart() {
         Err(WovenAdapterError::StalePayload)
     ));
     // A failed MTU check must not consume the sequence or fall back to the stream.
-    assert!(
-        adapter
-            .publish_unreliable_payload(None, 102, vec![0; 65_536])
-            .is_err()
-    );
+    let error = adapter
+        .publish_unreliable_payload(None, 102, vec![0; 65_536])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("publish datagram"));
+    assert!(error.contains("datagram frame too large"));
+    assert!(error.contains("transport limit"));
+    assert!(error.contains("datagram frame budget"));
     assert_eq!(adapter.next_sequence.get(&UNRELIABLE_CHANNEL), Some(&101));
     assert_byte_and_json_roundtrip(&mut adapter, 2, 102);
     adapter.stop();

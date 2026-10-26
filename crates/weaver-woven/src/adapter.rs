@@ -1,5 +1,9 @@
 //! Woven network adapter using local development or verified remote QUIC.
 
+#[path = "client_diagnostics.rs"]
+mod client_diagnostics;
+use client_diagnostics::{client_error, connected_client_error};
+
 use crate::config::WovenConfig;
 use crate::error::WovenAdapterError;
 use crate::mode::ConnectivityMode;
@@ -302,7 +306,9 @@ impl WovenAdapter {
                 })
         }));
         match result {
-            Ok(result) => result.map_err(client_error),
+            Ok(result) => result.map_err(|error| {
+                connected_client_error(error, "send client log", client.quic_diagnostics())
+            }),
             Err(error) => {
                 // A cancelled control write may be partial; its stream is no longer safe to reuse.
                 self.stop();
@@ -405,7 +411,9 @@ impl WovenAdapter {
                 }
                 _ => unreachable!("channel policy is validated before sending"),
             };
-            result.map_err(client_error)
+            result.map_err(|error| {
+                connected_client_error(error, "publish reliable payload", client.quic_diagnostics())
+            })
         }));
         if let Err(error) = &result
             && self.config.mode.uses_verified_tls()
@@ -464,7 +472,9 @@ impl WovenAdapter {
                     APPLICATION_PAYLOAD_TYPE_ID,
                     payload,
                 )
-                .map_err(client_error)
+                .map_err(|error| {
+                    connected_client_error(error, "publish datagram", client.quic_diagnostics())
+                })
         }))?;
         self.next_sequence.insert(UNRELIABLE_CHANNEL, sequence);
         Ok(())
@@ -518,7 +528,13 @@ impl WovenAdapter {
                     },
                     payload,
                 )
-                .map_err(client_error)
+                .map_err(|error| {
+                    connected_client_error(
+                        error,
+                        "publish positioned datagram",
+                        client.quic_diagnostics(),
+                    )
+                })
         }))?;
         self.next_sequence.insert(UNRELIABLE_CHANNEL, sequence);
         Ok(())
@@ -543,6 +559,7 @@ impl WovenAdapter {
         &mut self,
         max_messages: usize,
     ) -> Result<Vec<UnreliablePayloadEnvelope>, WovenAdapterError> {
+        let client = self.client.as_ref().ok_or(WovenAdapterError::NotRunning)?;
         let receiver = self
             .datagram_receiver
             .as_mut()
@@ -555,10 +572,9 @@ impl WovenAdapter {
                 break;
             }
             let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
-                receiver
-                    .recv_timeout(DRAIN_TIMEOUT)
-                    .await
-                    .map_err(client_error)
+                receiver.recv_timeout(DRAIN_TIMEOUT).await.map_err(|error| {
+                    connected_client_error(error, "receive datagram", client.quic_diagnostics())
+                })
             }))?
             else {
                 break;
@@ -593,10 +609,13 @@ impl WovenAdapter {
                 break;
             }
             let Some(envelope) = runtime.block_on(remote_operation(&self.config, async {
-                client
-                    .recv_timeout(DRAIN_TIMEOUT)
-                    .await
-                    .map_err(client_error)
+                client.recv_timeout(DRAIN_TIMEOUT).await.map_err(|error| {
+                    connected_client_error(
+                        error,
+                        "receive reliable control",
+                        client.quic_diagnostics(),
+                    )
+                })
             }))?
             else {
                 break;
@@ -947,25 +966,6 @@ async fn expect_entity_entered(client: &mut Client) -> Result<u64, WovenAdapterE
             other.message_kind()
         ))),
     }
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "used point-free as map_err(client_error), which requires FnOnce(E)"
-)]
-fn client_error(error: woven_client::ClientError) -> WovenAdapterError {
-    // Transport close reasons and handshake diagnostics can contain peer-supplied text.
-    let message = match error {
-        woven_client::ClientError::Transport(_) => {
-            "transport/TLS failure (details redacted)".to_owned()
-        }
-        woven_client::ClientError::HandshakeFailed(_) => {
-            "handshake failed (details redacted)".to_owned()
-        }
-        woven_client::ClientError::UnsupportedScheme(_) => "unsupported URL scheme".to_owned(),
-        other => other.to_string(),
-    };
-    WovenAdapterError::ClientFailed(message)
 }
 
 #[cfg(test)]
