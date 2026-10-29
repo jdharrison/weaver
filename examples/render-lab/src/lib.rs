@@ -90,6 +90,7 @@ impl RenderLab {
                 MeshAsset::new(small_mesh, cube_vertices, cube_indices),
             ],
             textures: vec![TextureAsset {
+                mipmaps: Vec::new(),
                 handle: sprite,
                 width: 64,
                 height: 64,

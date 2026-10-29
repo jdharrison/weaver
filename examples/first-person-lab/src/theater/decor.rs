@@ -136,6 +136,7 @@ fn resources() -> &'static [Resource] {
             Resource {
                 art,
                 texture: TextureAsset {
+                    mipmaps: Vec::new(),
                     handle: SpriteHandle::new(),
                     width: image.width(),
                     height: image.height(),
@@ -855,6 +856,7 @@ mod tests {
         let sentinel = SpriteHandle::new();
         let mut unrelated_assets = AppAssets {
             textures: vec![TextureAsset {
+                mipmaps: Vec::new(),
                 handle: sentinel,
                 width: 1,
                 height: 1,

@@ -8,8 +8,9 @@ use glam::Vec2;
 use std::sync::Arc;
 use std::time::Instant;
 use weaver_app_core::{
-    AppAction, ButtonState, FrameContext, InputFrame, PointerMode, RealtimeCommand, RealtimeDriver,
-    RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp, WindowMode,
+    AppAction, AssetUpload, AssetUploadResult, ButtonState, FrameContext, InputFrame, PointerMode,
+    RealtimeCommand, RealtimeDriver, RealtimeEvent, TextInputEvent, TextInputMode, WeaverApp,
+    WindowMode,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -95,6 +96,80 @@ fn run_optional_realtime(
         .run_app(&mut shell)
         .map_err(|error| DesktopError::EventLoop(error.to_string()))?;
     shell.startup_error.map_or(Ok(()), Err)
+}
+
+// A single resource (even a rejected one) consumes this redraw's upload slot.
+// Keep dispatch independent of the GPU so ordering, limits and recovery are testable.
+fn service_asset_upload(
+    app: &mut dyn WeaverApp,
+    upload: impl FnOnce(&AssetUpload) -> Result<(), String>,
+) {
+    if let Some(request) = app.take_asset_upload() {
+        let result = request
+            .asset
+            .validate()
+            .and_then(|()| upload(&request.asset));
+        app.asset_upload_finished(AssetUploadResult {
+            id: request.id,
+            result,
+        });
+    }
+}
+
+fn upload_runtime_asset(
+    renderer: &mut weaver_render_wgpu::WgpuRenderer,
+    asset: &AssetUpload,
+) -> Result<(), String> {
+    let limits = renderer.context().device.limits();
+    match asset {
+        AssetUpload::Mesh(mesh) => {
+            // Payload validation already checked all arithmetic and stream counts.
+            let buffer_sizes = [
+                std::mem::size_of_val(mesh.vertices.as_slice()),
+                std::mem::size_of_val(mesh.indices.as_slice()),
+                mesh.skin.as_deref().map_or(0, std::mem::size_of_val),
+            ];
+            if buffer_sizes
+                .iter()
+                .any(|&bytes| bytes as u64 > limits.max_buffer_size)
+            {
+                return Err("mesh buffer exceeds device limit".into());
+            }
+            renderer.upload_mesh_with_skin(
+                mesh.handle,
+                &mesh.vertices,
+                &mesh.indices,
+                mesh.skin.as_deref(),
+            )
+        }
+        AssetUpload::Texture(texture) => {
+            if texture.mipmaps.is_empty()
+                && (texture.width > limits.max_texture_dimension_2d
+                    || texture.height > limits.max_texture_dimension_2d)
+            {
+                return Err("texture dimensions exceed device limit".into());
+            }
+            upload_texture_asset(renderer, texture)
+        }
+    }
+    .map_err(|error| error.to_string())
+}
+
+fn upload_texture_asset(
+    renderer: &mut weaver_render_wgpu::WgpuRenderer,
+    texture: &weaver_app_core::TextureAsset,
+) -> Result<(), weaver_render_wgpu::WgpuRenderError> {
+    if texture.mipmaps.is_empty() {
+        renderer.upload_texture_rgba(texture.handle, texture.width, texture.height, &texture.rgba)
+    } else {
+        renderer.upload_texture_rgba_mips(
+            texture.handle,
+            texture.width,
+            texture.height,
+            &texture.rgba,
+            &texture.mipmaps,
+        )
+    }
 }
 
 const MAX_REALTIME_EVENTS_PER_REDRAW: usize = 256;
@@ -819,12 +894,7 @@ impl ApplicationHandler for DesktopShell {
             }
         }
         for texture in &self.app.assets().textures {
-            if let Err(error) = renderer.upload_texture_rgba(
-                texture.handle,
-                texture.width,
-                texture.height,
-                &texture.rgba,
-            ) {
+            if let Err(error) = upload_texture_asset(&mut renderer, texture) {
                 self.fail(event_loop, DesktopError::Renderer(error.to_string()));
                 return;
             }
@@ -1016,6 +1086,9 @@ impl ApplicationHandler for DesktopShell {
                 if let (Some(window), Some(renderer)) =
                     (self.window.as_ref(), self.renderer.as_mut())
                 {
+                    service_asset_upload(self.app.as_mut(), |asset| {
+                        upload_runtime_asset(renderer, asset)
+                    });
                     match renderer.render(self.app.scene()) {
                         Ok(render_frame) => {
                             window.pre_present_notify();
@@ -1071,6 +1144,127 @@ impl ApplicationHandler for DesktopShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct UploadTestApp {
+        base: RealtimeTestApp,
+        pending: std::collections::VecDeque<weaver_app_core::AssetUploadRequest>,
+        results: Vec<AssetUploadResult>,
+        takes: usize,
+        enqueue_on_finish: bool,
+    }
+
+    fn texture_upload(id: u64) -> weaver_app_core::AssetUploadRequest {
+        weaver_app_core::AssetUploadRequest {
+            id,
+            asset: AssetUpload::Texture(weaver_app_core::TextureAsset {
+                mipmaps: Vec::new(),
+                handle: weaver_render::SpriteHandle::default(),
+                width: 1,
+                height: 1,
+                rgba: vec![255; 4],
+            }),
+        }
+    }
+
+    impl WeaverApp for UploadTestApp {
+        fn title(&self) -> &'static str {
+            "upload test"
+        }
+        fn scene(&self) -> &SceneSnapshot {
+            &self.base.scene
+        }
+        fn scene_mut(&mut self) -> &mut SceneSnapshot {
+            &mut self.base.scene
+        }
+        fn assets(&self) -> &AppAssets {
+            &self.base.assets
+        }
+        fn take_asset_upload(&mut self) -> Option<weaver_app_core::AssetUploadRequest> {
+            self.takes += 1;
+            self.pending.pop_front()
+        }
+        fn asset_upload_finished(&mut self, result: AssetUploadResult) {
+            self.results.push(result);
+            if self.enqueue_on_finish {
+                self.pending.push_back(texture_upload(99));
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_upload_defaults_do_not_dispatch() {
+        let mut app = RealtimeTestApp::default();
+        service_asset_upload(&mut app, |_| panic!("default app has no runtime uploads"));
+        app.asset_upload_finished(AssetUploadResult {
+            id: 1,
+            result: Err("ignored".into()),
+        });
+    }
+
+    #[test]
+    fn runtime_upload_dispatches_one_resource_and_preserves_ids_and_errors() {
+        let mut app = UploadTestApp::default();
+        app.pending.push_back(texture_upload(u64::MAX));
+        app.pending.push_back(weaver_app_core::AssetUploadRequest {
+            id: 7,
+            asset: AssetUpload::Mesh(weaver_app_core::MeshAsset::new(
+                weaver_render::MeshHandle::default(),
+                vec![
+                    weaver_render_wgpu::Vertex {
+                        position: [0.0; 3],
+                        normal: [0.0; 3],
+                        color: [1.0; 4],
+                        uv: [0.0; 2]
+                    };
+                    3
+                ],
+                vec![0, 1, 2],
+            )),
+        });
+        service_asset_upload(&mut app, |asset| {
+            assert!(matches!(asset, AssetUpload::Texture(_)));
+            Ok(())
+        });
+        assert_eq!(app.takes, 1);
+        assert_eq!(app.pending.len(), 1);
+        assert_eq!(app.results[0].id, u64::MAX);
+        assert_eq!(app.results[0].result, Ok(()));
+        service_asset_upload(&mut app, |asset| {
+            assert!(matches!(asset, AssetUpload::Mesh(_)));
+            Err("backend failure".into())
+        });
+        assert_eq!(app.results[1].id, 7);
+        assert_eq!(app.results[1].result, Err("backend failure".into()));
+        app.pending.push_back(texture_upload(8));
+        service_asset_upload(&mut app, |_| Ok(()));
+        assert_eq!(app.results[2].result, Ok(()));
+        service_asset_upload(&mut app, |_| panic!("empty queue"));
+        assert_eq!(app.results.len(), 3);
+    }
+
+    #[test]
+    fn runtime_upload_rejection_skips_backend_and_callback_cannot_drain_queue() {
+        let mut app = UploadTestApp {
+            enqueue_on_finish: true,
+            ..UploadTestApp::default()
+        };
+        let mut invalid = texture_upload(5);
+        if let AssetUpload::Texture(texture) = &mut invalid.asset {
+            texture.rgba.clear();
+        }
+        app.pending.push_back(invalid);
+        service_asset_upload(&mut app, |_| panic!("invalid upload reached backend"));
+        assert_eq!(app.takes, 1);
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(app.results[0].id, 5);
+        assert!(app.results[0].result.is_err());
+        assert_eq!(app.pending.len(), 1);
+        app.enqueue_on_finish = false;
+        service_asset_upload(&mut app, |_| Ok(()));
+        assert_eq!(app.results[1].id, 99);
+        assert!(app.results[1].result.is_ok());
+    }
 
     #[test]
     fn desktop_quality_defaults_match_renderer() {

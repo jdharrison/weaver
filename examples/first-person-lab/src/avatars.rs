@@ -92,6 +92,7 @@ pub(crate) fn texture_assets() -> Vec<TextureAsset> {
                         .expect("bundled avatar PNG must decode")
                         .into_rgba8();
                     TextureAsset {
+                        mipmaps: Vec::new(),
                         handle: SpriteHandle::new(),
                         width: image.width(),
                         height: image.height(),

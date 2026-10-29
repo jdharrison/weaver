@@ -180,6 +180,67 @@ fn validate_rgba(
     Ok(())
 }
 
+/// Prepare all additional mip levels (excluding the base) for straight-alpha sRGB RGBA8.
+///
+/// Uses the static uploader's alpha-aware, linear-light area filter. Source
+/// dimensions are bounded to 16,384, base pixels to 64 MiB, and base plus output
+/// pixels to 128 MiB. No GPU or source-sized copy is required.
+///
+/// # Errors
+/// Returns an error for invalid dimensions/lengths, exceeded bounds, or allocation failure.
+pub fn prepare_rgba_mipmaps(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let prepare = || -> Result<Vec<Vec<u8>>, WgpuRenderError> {
+        validate_rgba(width, height, rgba.len(), 16_384)?;
+        let mut total = rgba.len();
+        if total > 64 * 1024 * 1024 {
+            return Err(WgpuRenderError::Texture("mip source exceeds 64 MiB".into()));
+        }
+        let (mut w, mut h) = (width, height);
+        while (w, h) != (1, 1) {
+            (w, h) = next_mip_size(w, h);
+            total = total
+                .checked_add(rgba_byte_len(w, h)?)
+                .ok_or_else(|| WgpuRenderError::Texture("mip byte length overflows".into()))?;
+        }
+        if total > 128 * 1024 * 1024 {
+            return Err(WgpuRenderError::Texture("mip chain exceeds 128 MiB".into()));
+        }
+        let mut mipmaps: Vec<Vec<u8>> = Vec::new();
+        mipmaps
+            .try_reserve_exact((mip_level_count(width, height) - 1) as usize)
+            .map_err(|error| WgpuRenderError::Texture(format!("mip allocation failed: {error}")))?;
+        let linear = srgb_decode_table();
+        let (mut w, mut h) = (width, height);
+        while (w, h) != (1, 1) {
+            let source = mipmaps.last().map_or(rgba, Vec::as_slice);
+            mipmaps.push(downsample_rgba(w, h, source, &linear)?);
+            (w, h) = next_mip_size(w, h);
+        }
+        Ok(mipmaps)
+    };
+    prepare().map_err(|error| error.to_string())
+}
+
+fn validate_rgba_mips(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    mipmaps: &[Vec<u8>],
+) -> Result<(), WgpuRenderError> {
+    validate_rgba(width, height, rgba.len(), u32::MAX)?;
+    if mipmaps.len() != (mip_level_count(width, height) - 1) as usize {
+        return Err(WgpuRenderError::Texture(
+            "incomplete or excessive mip chain".into(),
+        ));
+    }
+    let (mut w, mut h) = (width, height);
+    for level in mipmaps {
+        (w, h) = next_mip_size(w, h);
+        validate_rgba(w, h, level.len(), u32::MAX)?;
+    }
+    Ok(())
+}
+
 fn mip_level_count(width: u32, height: u32) -> u32 {
     u32::BITS - width.max(height).leading_zeros()
 }
@@ -346,15 +407,76 @@ impl GpuTexture {
         data: &[u8],
         anisotropy: u16,
     ) -> Result<Self, WgpuRenderError> {
-        validate_rgba(
-            width,
-            height,
-            data.len(),
-            device.limits().max_texture_dimension_2d,
-        )?;
-        let linear = srgb_decode_table();
-        let (mut mip_width, mut mip_height, mut pixels) =
-            prepare_static_rgba(width, height, data, STATIC_TEXTURE_DIMENSION_LIMIT, &linear)?;
+        Self::from_rgba_levels(device, queue, (width, height), data, None, anisotropy)
+    }
+
+    /// Upload a complete precomputed chain without filtering or regenerating pixels.
+    /// Additional levels exclude the base. Oversized levels are skipped to fit
+    /// the device/platform cap, while logical size retains the original dimensions.
+    /// Invalid chains are rejected before creating GPU resources.
+    pub fn from_rgba_mips(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        mipmaps: &[Vec<u8>],
+        anisotropy: u16,
+    ) -> Result<Self, WgpuRenderError> {
+        Self::from_rgba_levels(
+            device,
+            queue,
+            (width, height),
+            data,
+            Some(mipmaps),
+            anisotropy,
+        )
+    }
+
+    fn from_rgba_levels(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (width, height): (u32, u32),
+        data: &[u8],
+        mipmaps: Option<&[Vec<u8>]>,
+        anisotropy: u16,
+    ) -> Result<Self, WgpuRenderError> {
+        let linear;
+        let mut source_level = 0;
+        let (mut mip_width, mut mip_height, mut pixels) = if let Some(mipmaps) = mipmaps {
+            validate_rgba_mips(width, height, data, mipmaps)?;
+            let cap = device.limits().max_texture_dimension_2d;
+            #[cfg(target_arch = "wasm32")]
+            let cap = cap.min(STATIC_TEXTURE_DIMENSION_LIMIT);
+            let size = capped_mip_size(width, height, cap);
+            let (mut w, mut h) = (width, height);
+            while (w, h) != size {
+                (w, h) = next_mip_size(w, h);
+                source_level += 1;
+            }
+            linear = None;
+            let source = if source_level == 0 {
+                data
+            } else {
+                &mipmaps[source_level - 1]
+            };
+            (w, h, Cow::Borrowed(source))
+        } else {
+            validate_rgba(
+                width,
+                height,
+                data.len(),
+                device.limits().max_texture_dimension_2d,
+            )?;
+            linear = Some(srgb_decode_table());
+            prepare_static_rgba(
+                width,
+                height,
+                data,
+                STATIC_TEXTURE_DIMENSION_LIMIT,
+                linear.as_ref().unwrap(),
+            )?
+        };
         let levels = mip_level_count(mip_width, mip_height);
         let size = wgpu::Extent3d {
             width: mip_width,
@@ -391,8 +513,17 @@ impl GpuTexture {
             if mip_width == 1 && mip_height == 1 {
                 break;
             }
-            let next = downsample_rgba(mip_width, mip_height, &pixels, &linear)?;
-            pixels = Cow::Owned(next);
+            if let Some(mipmaps) = mipmaps {
+                pixels = Cow::Borrowed(&mipmaps[source_level]);
+                source_level += 1;
+            } else {
+                pixels = Cow::Owned(downsample_rgba(
+                    mip_width,
+                    mip_height,
+                    &pixels,
+                    linear.as_ref().unwrap(),
+                )?);
+            }
             (mip_width, mip_height) = next_mip_size(mip_width, mip_height);
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -425,6 +556,74 @@ fn static_sampler_descriptor(anisotropy: u16) -> wgpu::SamplerDescriptor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_mips_exactly_match_runtime_filter_and_capped_uploads() {
+        for (width, height) in [(1, 1), (2, 2), (7, 5), (13, 9), (1, 17), (19, 1)] {
+            let rgba: Vec<u8> = (0..width * height * 4)
+                .map(|i| ((i * 73 + i / 7) % 256) as u8)
+                .collect();
+            let mips = prepare_rgba_mipmaps(width, height, &rgba).unwrap();
+            assert_eq!(mips, prepare_rgba_mipmaps(width, height, &rgba).unwrap());
+            validate_rgba_mips(width, height, &rgba, &mips).unwrap();
+            assert_eq!(mips.len(), (mip_level_count(width, height) - 1) as usize);
+            let linear = srgb_decode_table();
+            let (mut w, mut h) = (width, height);
+            let mut source = rgba.as_slice();
+            for mip in &mips {
+                assert_eq!(*mip, downsample_rgba(w, h, source, &linear).unwrap());
+                (w, h) = next_mip_size(w, h);
+                assert_eq!(mip.len(), rgba_byte_len(w, h).unwrap());
+                source = mip;
+            }
+            assert_eq!((w, h), (1, 1));
+            for cap in [1, 2, 4, 8, 16, 32] {
+                let (w, h, pixels) =
+                    prepare_static_rgba(width, height, &rgba, cap, &linear).unwrap();
+                let skipped = mip_level_count(width, height) - mip_level_count(w, h);
+                let expected = if skipped == 0 {
+                    &rgba
+                } else {
+                    &mips[skipped as usize - 1]
+                };
+                assert_eq!(pixels.as_ref(), expected.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn precomputed_chain_validation_rejects_malformed_levels() {
+        let rgba = vec![255; 7 * 5 * 4];
+        let mips = prepare_rgba_mipmaps(7, 5, &rgba).unwrap();
+        assert!(validate_rgba_mips(7, 5, &rgba, &[]).is_err());
+        assert!(validate_rgba_mips(7, 5, &rgba, &mips[..1]).is_err());
+        let mut malformed = mips.clone();
+        malformed.push(vec![255; 4]);
+        assert!(validate_rgba_mips(7, 5, &rgba, &malformed).is_err());
+        for index in 0..mips.len() {
+            let mut malformed = mips.clone();
+            malformed[index].pop();
+            assert!(validate_rgba_mips(7, 5, &rgba, &malformed).is_err());
+        }
+        assert!(validate_rgba_mips(7, 5, &rgba[..rgba.len() - 1], &mips).is_err());
+        assert!(validate_rgba_mips(0, 1, &[], &[]).is_err());
+        assert!(validate_rgba_mips(u32::MAX, u32::MAX, &[], &[]).is_err());
+        assert!(validate_rgba_mips(1, 1, &[0; 4], &[]).is_ok());
+        assert!(validate_rgba_mips(1, 1, &[0; 4], &[vec![0; 4]]).is_err());
+    }
+
+    #[test]
+    fn mip_preparation_rejects_invalid_and_unbounded_sources() {
+        for (width, height, pixels) in [
+            (0, 1, &[][..]),
+            (1, 0, &[][..]),
+            (1, 1, &[0; 3][..]),
+            (16_385, 1, &[][..]),
+            (u32::MAX, u32::MAX, &[][..]),
+        ] {
+            assert!(prepare_rgba_mipmaps(width, height, pixels).is_err());
+        }
+    }
 
     #[test]
     fn static_sampler_preserves_high_quality_and_bounds_requests() {

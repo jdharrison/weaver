@@ -331,6 +331,7 @@ fn texture_assets() -> Vec<TextureAsset> {
                         .expect("bundled theater PNG must decode")
                         .into_rgba8();
                     TextureAsset {
+                        mipmaps: Vec::new(),
                         handle: SpriteHandle::new(),
                         width: image.width(),
                         height: image.height(),
@@ -338,6 +339,7 @@ fn texture_assets() -> Vec<TextureAsset> {
                     }
                 })
                 .chain(std::iter::once(TextureAsset {
+                    mipmaps: Vec::new(),
                     handle: SpriteHandle::new(),
                     width: 1,
                     height: 1,
@@ -348,6 +350,7 @@ fn texture_assets() -> Vec<TextureAsset> {
                         .expect("bundled poster or material must decode")
                         .into_rgba8();
                     TextureAsset {
+                        mipmaps: Vec::new(),
                         handle: SpriteHandle::new(),
                         width: image.width(),
                         height: image.height(),

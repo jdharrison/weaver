@@ -24,6 +24,9 @@ use weaver_render_wgpu::SkinVertex;
 #[path = "animated_glb_tests.rs"]
 mod tests;
 
+#[path = "cooked_animation.rs"]
+pub(crate) mod cooked_animation;
+
 /// Loader and sampling failures share the static GLB error vocabulary.
 pub type AnimatedGlbError = GlbError;
 

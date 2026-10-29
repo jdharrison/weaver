@@ -971,6 +971,7 @@ impl<'a> Loader<'a> {
         }
         let handle = SpriteHandle::new();
         self.model.assets.textures.push(TextureAsset {
+            mipmaps: Vec::new(),
             handle,
             width,
             height,

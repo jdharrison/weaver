@@ -259,6 +259,34 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Register a static texture using a complete precomputed chain, excluding base.
+    /// Validates every level before upload; no mip pixels are regenerated.
+    pub fn upload_texture_rgba_mips(
+        &mut self,
+        handle: weaver_render::SpriteHandle,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        mipmaps: &[Vec<u8>],
+    ) -> Result<(), WgpuRenderError> {
+        let texture = GpuTexture::from_rgba_mips(
+            &self.context.device,
+            &self.context.queue,
+            width,
+            height,
+            rgba,
+            mipmaps,
+            self.context.anisotropy,
+        )?;
+        if let Some(old) = self.textures.insert(handle, texture) {
+            self.mesh_pipeline.invalidate_texture(&old);
+            if let Some(pipeline) = &mut self.foreground_pipeline {
+                pipeline.invalidate_texture(&old);
+            }
+        }
+        Ok(())
+    }
+
     /// Remove a dynamic override, releasing its GPU resource and restoring the asset.
     pub fn remove_texture_override(&mut self, handle: weaver_render::SpriteHandle) {
         if let Some(old) = self.texture_overrides.remove(&handle) {

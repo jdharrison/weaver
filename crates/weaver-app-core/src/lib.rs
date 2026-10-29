@@ -5,6 +5,8 @@
 #[cfg(feature = "glb")]
 pub mod animated_glb;
 #[cfg(feature = "glb")]
+pub mod cooked;
+#[cfg(feature = "glb")]
 pub mod glb;
 
 use glam::{UVec2, Vec2, Vec3};
@@ -57,6 +59,180 @@ pub struct TextureAsset {
     pub height: u32,
     /// Row-major RGBA8 pixels.
     pub rgba: Vec<u8>,
+    /// Complete additional mip levels, excluding the base; empty generates at upload.
+    pub mipmaps: Vec<Vec<u8>>,
+}
+
+/// One prepared CPU resource for a runtime upload.
+///
+/// Currently serviced only by the desktop shell. This does not perform file I/O,
+/// decoding, scheduling, or game loading. Existing handles use backend replacement
+/// semantics; successful completion means registered, not GPU-idle or presented.
+#[derive(Debug)]
+pub enum AssetUpload {
+    /// One indexed mesh, including its optional skin stream.
+    Mesh(MeshAsset),
+    /// One prepared, straight-alpha sRGB RGBA8 texture.
+    Texture(TextureAsset),
+}
+
+impl AssetUpload {
+    /// Validate a runtime payload without a GPU or payload-sized allocation.
+    ///
+    /// Runtime meshes are nonempty triangle lists with at most 65,536 vertices,
+    /// valid indices, finite vertex data, and valid normalized skin influences.
+    /// Combined vertex/index/skin bytes must not exceed 64 MiB. Prepared texture
+    /// base pixels must not exceed 16 MiB, and base plus supplied mip levels must
+    /// not exceed 64 MiB. Nonempty mip chains must be complete through 1×1.
+    /// These are payload/work limits, not a
+    /// bound on total application memory, GPU residency, or driver overhead.
+    /// Device-specific limits are checked separately by the desktop shell.
+    /// Startup [`AppAssets`] are unaffected by these runtime-only limits.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Mesh(mesh) => {
+                validate_mesh_upload_sizes(
+                    mesh.vertices.len(),
+                    mesh.indices.len(),
+                    mesh.skin.as_ref().map(Vec::len),
+                )?;
+                if mesh
+                    .indices
+                    .iter()
+                    .any(|&i| usize::from(i) >= mesh.vertices.len())
+                {
+                    return Err("mesh index is out of bounds".into());
+                }
+                if mesh.vertices.iter().any(|v| {
+                    v.position
+                        .iter()
+                        .chain(&v.normal)
+                        .chain(&v.color)
+                        .chain(&v.uv)
+                        .any(|value| !value.is_finite())
+                }) {
+                    return Err("mesh vertex contains non-finite data".into());
+                }
+                if let Some(skin) = &mesh.skin {
+                    for vertex in skin {
+                        let sum: f32 = vertex.weights.iter().sum();
+                        if !sum.is_finite()
+                            || (sum - 1.0).abs() > 0.001
+                            || vertex.weights.iter().any(|w| !w.is_finite() || *w < 0.0)
+                            || vertex
+                                .joints
+                                .iter()
+                                .any(|&j| usize::from(j) >= weaver_render::mesh::MAX_SKIN_JOINTS)
+                        {
+                            return Err("invalid skin influences".into());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Self::Texture(texture) => {
+                validate_texture_upload_size(texture.width, texture.height, texture.rgba.len())?;
+                let mut bytes = texture.rgba.len();
+                if !texture.mipmaps.is_empty() {
+                    let expected = (u32::BITS
+                        - texture.width.max(texture.height).leading_zeros()
+                        - 1) as usize;
+                    if texture.mipmaps.len() != expected {
+                        return Err("incomplete or excessive texture mip chain".into());
+                    }
+                    let (mut width, mut height) = (texture.width, texture.height);
+                    for mip in &texture.mipmaps {
+                        width = (width / 2).max(1);
+                        height = (height / 2).max(1);
+                        validate_texture_upload_size(width, height, mip.len())?;
+                        bytes = bytes
+                            .checked_add(mip.len())
+                            .ok_or_else(|| "texture mip byte length overflows".to_string())?;
+                    }
+                }
+                if bytes > MAX_RUNTIME_UPLOAD_BYTES {
+                    return Err("texture upload exceeds 64 MiB including mips".into());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+const MAX_RUNTIME_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PREPARED_TEXTURE_BYTES: usize = 16 * 1024 * 1024;
+
+fn validate_mesh_upload_sizes(
+    vertices: usize,
+    indices: usize,
+    skin: Option<usize>,
+) -> Result<(), String> {
+    let bytes = vertices
+        .checked_mul(size_of::<Vertex>())
+        .and_then(|bytes| {
+            indices
+                .checked_mul(size_of::<u16>())
+                .and_then(|n| bytes.checked_add(n))
+        })
+        .and_then(|bytes| {
+            skin.unwrap_or(0)
+                .checked_mul(size_of::<weaver_render_wgpu::SkinVertex>())
+                .and_then(|n| bytes.checked_add(n))
+        })
+        .ok_or_else(|| "mesh upload byte length overflows".to_string())?;
+    if bytes > MAX_RUNTIME_UPLOAD_BYTES {
+        return Err("mesh upload exceeds 64 MiB".into());
+    }
+    if vertices == 0
+        || vertices > usize::from(u16::MAX) + 1
+        || indices == 0
+        || !indices.is_multiple_of(3)
+        || u32::try_from(indices).is_err()
+    {
+        return Err("invalid mesh vertex or triangle index count".into());
+    }
+    if skin.is_some_and(|count| count != vertices) {
+        return Err("skin/vertex count mismatch".into());
+    }
+    Ok(())
+}
+
+fn validate_texture_upload_size(width: u32, height: u32, length: usize) -> Result<(), String> {
+    let expected = width
+        .checked_mul(4)
+        .and_then(|row| usize::try_from(row).ok())
+        .and_then(|row| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| row.checked_mul(height))
+        })
+        .filter(|&bytes| isize::try_from(bytes).is_ok())
+        .ok_or_else(|| "texture upload byte length overflows".to_string())?;
+    if width == 0 || height == 0 || length != expected {
+        return Err("invalid texture dimensions or RGBA8 byte length".into());
+    }
+    if expected > MAX_PREPARED_TEXTURE_BYTES {
+        return Err("prepared texture exceeds 16 MiB".into());
+    }
+    Ok(())
+}
+
+/// One owned runtime upload, correlated with an application-chosen identifier.
+#[derive(Debug)]
+pub struct AssetUploadRequest {
+    /// Opaque identifier returned unchanged in the completion callback.
+    pub id: u64,
+    /// Exactly one prepared resource; the shell drops it after dispatch.
+    pub asset: AssetUpload,
+}
+
+/// Completion of a runtime upload, including recoverable validation/backend errors.
+#[derive(Debug)]
+pub struct AssetUploadResult {
+    /// Identifier from the consumed request.
+    pub id: u64,
+    /// Registration success or an error for the application to handle.
+    pub result: Result<(), String>,
 }
 
 /// Timing information for one rendered application frame.
@@ -393,6 +569,22 @@ pub trait WeaverApp {
     fn scene_mut(&mut self) -> &mut SceneSnapshot;
     /// CPU-side resources referenced by the scene.
     fn assets(&self) -> &AppAssets;
+    /// Take at most one prepared runtime resource (default: none).
+    ///
+    /// Desktop calls this at most once per redraw after `update`, before rendering,
+    /// when a renderer is available. Other shells currently do not service it.
+    /// Applications own pending work, cancellation, IDs, and retry policy; this
+    /// method must not block on I/O or decoding. See [`AssetUpload::validate`] for
+    /// runtime limits. No requests are consumed during startup asset registration.
+    fn take_asset_upload(&mut self) -> Option<AssetUploadRequest> {
+        None
+    }
+    /// Report the one consumed runtime request before rendering (default: no-op).
+    ///
+    /// Validation and backend errors are returned here, not treated as fatal shell
+    /// errors. The app may publish scene references on success or choose recovery.
+    /// Requests queued here are not consumed until a later redraw.
+    fn asset_upload_finished(&mut self, _result: AssetUploadResult) {}
     /// Optional texture accepting a platform-owned external image override.
     /// The original uploaded asset remains the idle/unsupported placeholder.
     fn external_image_texture(&self) -> Option<SpriteHandle> {
@@ -578,6 +770,159 @@ impl OrbitController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn upload_test_mesh() -> MeshAsset {
+        MeshAsset::new(
+            MeshHandle::default(),
+            vec![
+                Vertex {
+                    position: [0.0; 3],
+                    normal: [0.0, 1.0, 0.0],
+                    color: [1.0; 4],
+                    uv: [0.0; 2]
+                };
+                3
+            ],
+            vec![0, 1, 2],
+        )
+    }
+
+    #[test]
+    fn runtime_upload_validates_complete_mip_chains() {
+        for (width, height) in [(7, 5), (1, 17), (19, 1)] {
+            let rgba = vec![127; (width * height * 4) as usize];
+            let mipmaps = weaver_render_wgpu::prepare_rgba_mipmaps(width, height, &rgba).unwrap();
+            let mut texture = TextureAsset {
+                handle: SpriteHandle::default(),
+                width,
+                height,
+                rgba,
+                mipmaps,
+            };
+            assert!(AssetUpload::Texture(texture.clone()).validate().is_ok());
+            for level in 0..texture.mipmaps.len() {
+                let mut invalid = texture.clone();
+                invalid.mipmaps[level].pop();
+                assert!(AssetUpload::Texture(invalid).validate().is_err());
+            }
+            let mut incomplete = texture.clone();
+            incomplete.mipmaps.pop();
+            assert!(AssetUpload::Texture(incomplete).validate().is_err());
+            texture.mipmaps.push(vec![0; 4]);
+            assert!(AssetUpload::Texture(texture).validate().is_err());
+        }
+        let texture = TextureAsset {
+            handle: SpriteHandle::default(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+            mipmaps: vec![vec![0; 4]],
+        };
+        assert!(AssetUpload::Texture(texture).validate().is_err());
+    }
+
+    #[test]
+    fn runtime_upload_texture_sizes_and_overflow() {
+        assert!(validate_texture_upload_size(1, 1, 4).is_ok());
+        assert!(validate_texture_upload_size(2048, 2048, MAX_PREPARED_TEXTURE_BYTES).is_ok());
+        for (width, height, length) in [
+            (0, 1, 0),
+            (1, 0, 0),
+            (1, 1, 3),
+            (1, 1, 5),
+            (u32::MAX, u32::MAX, 0),
+        ] {
+            assert!(validate_texture_upload_size(width, height, length).is_err());
+        }
+        assert!(
+            validate_texture_upload_size(2048, 2049, 2048 * 2049 * 4)
+                .unwrap_err()
+                .contains("16 MiB")
+        );
+        let texture = AssetUpload::Texture(TextureAsset {
+            mipmaps: Vec::new(),
+            handle: SpriteHandle::default(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+        });
+        assert!(texture.validate().is_ok());
+    }
+
+    #[test]
+    fn runtime_upload_mesh_counts_limits_and_overflow_without_allocations() {
+        assert!(validate_mesh_upload_sizes(65_536, 3, Some(65_536)).is_ok());
+        for counts in [
+            (0, 3, None),
+            (3, 0, None),
+            (3, 4, None),
+            (65_537, 3, None),
+            (3, 3, Some(2)),
+            (3, 3, Some(0)),
+        ] {
+            assert!(validate_mesh_upload_sizes(counts.0, counts.1, counts.2).is_err());
+        }
+        // Largest triangle-list index payload fitting exactly under the combined cap.
+        let indices =
+            ((MAX_RUNTIME_UPLOAD_BYTES - 3 * size_of::<Vertex>()) / size_of::<u16>() / 3) * 3;
+        assert!(validate_mesh_upload_sizes(3, indices, None).is_ok());
+        assert!(
+            validate_mesh_upload_sizes(3, indices + 3, None)
+                .unwrap_err()
+                .contains("64 MiB")
+        );
+        assert!(
+            validate_mesh_upload_sizes(3, indices, Some(3))
+                .unwrap_err()
+                .contains("64 MiB")
+        );
+        for counts in [
+            (usize::MAX, 3, None),
+            (3, usize::MAX, None),
+            (3, 3, Some(usize::MAX)),
+        ] {
+            assert!(
+                validate_mesh_upload_sizes(counts.0, counts.1, counts.2)
+                    .unwrap_err()
+                    .contains("overflows")
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_upload_mesh_rejects_invalid_indices_and_nonfinite_vertices() {
+        let mesh = upload_test_mesh();
+        assert!(AssetUpload::Mesh(mesh.clone()).validate().is_ok());
+        let mut invalid = mesh.clone();
+        invalid.indices[0] = 3;
+        assert!(AssetUpload::Mesh(invalid).validate().is_err());
+        let mut invalid = mesh;
+        invalid.vertices[0].uv[0] = f32::NAN;
+        assert!(AssetUpload::Mesh(invalid).validate().is_err());
+    }
+
+    #[test]
+    fn runtime_upload_skin_lengths_weights_and_joints() {
+        let mut mesh = upload_test_mesh();
+        let valid = weaver_render_wgpu::SkinVertex {
+            joints: [0; 8],
+            weights: [0.125; 8],
+        };
+        mesh.skin = Some(vec![valid; 3]);
+        assert!(AssetUpload::Mesh(mesh.clone()).validate().is_ok());
+        mesh.skin = Some(vec![valid; 2]);
+        assert!(AssetUpload::Mesh(mesh.clone()).validate().is_err());
+        for weight in [f32::NAN, f32::INFINITY, -0.1, 0.0, f32::MAX] {
+            let mut invalid = valid;
+            invalid.weights[0] = weight;
+            mesh.skin = Some(vec![invalid; 3]);
+            assert!(AssetUpload::Mesh(mesh.clone()).validate().is_err());
+        }
+        let mut invalid = valid;
+        invalid.joints[7] = u16::try_from(weaver_render::mesh::MAX_SKIN_JOINTS).unwrap();
+        mesh.skin = Some(vec![invalid; 3]);
+        assert!(AssetUpload::Mesh(mesh).validate().is_err());
+    }
 
     #[test]
     fn crouch_defaults_to_released_and_persists_between_frames() {

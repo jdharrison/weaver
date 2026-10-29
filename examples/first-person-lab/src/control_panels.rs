@@ -585,6 +585,7 @@ fn label_texture(panel: usize, state: usize) -> TextureAsset {
         }
     }
     TextureAsset {
+        mipmaps: Vec::new(),
         handle: SpriteHandle::new(),
         width: W as u32,
         height: H as u32,
